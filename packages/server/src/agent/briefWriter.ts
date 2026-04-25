@@ -1,0 +1,205 @@
+import { createAIClient, getAIConfig, resolveModel } from '../config/vertexConfig.js';
+import { getBriefPrompt } from './prompts/brief.js';
+import type {
+  ICPConfigParsed,
+  PainHypothesis,
+  TechStackIntel,
+  CompetitiveDisplacement,
+  SourceCitation,
+  FunnelStepConfig,
+} from '../types/index.js';
+import type { ResearchCandidate } from './researcher.js';
+import type { ScoringResult } from './scorer.js';
+import type { TokenTracker } from './tokenTracker.js';
+
+export interface PersonaBrief {
+  role_type: 'champion' | 'economic_buyer' | 'executive_sponsor';
+  name: string | null;
+  title: string | null;
+  linkedin_url: string | null;
+  department: string | null;
+  tenure: string | null;
+  outreach_angle: string | null;
+  talking_points: string | null;
+  outreach_message: string | null;
+  social_signals: string | null;
+  buying_signals: string | null;
+}
+
+export interface BriefResult {
+  company_snapshot: string;
+  pain_hypotheses: PainHypothesis[];
+  personas: PersonaBrief[];
+  tech_stack: TechStackIntel;
+  competitive_displacement: CompetitiveDisplacement;
+  outreach_strategy: string;
+  source_citations: SourceCitation[];
+  why_now: string[];
+  brief_markdown: string;
+}
+
+function extractJson(text: string): string {
+  const codeBlockMatch = text.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/);
+  if (codeBlockMatch) {
+    return codeBlockMatch[1].trim();
+  }
+  const jsonMatch = text.match(/(\{[\s\S]*\})/);
+  if (jsonMatch) {
+    return jsonMatch[1].trim();
+  }
+  return text.trim();
+}
+
+export async function generateBrief(
+  candidate: ResearchCandidate,
+  score: ScoringResult,
+  icpConfig: ICPConfigParsed,
+  model?: string,
+  tracker?: TokenTracker,
+  promptInstructions?: string,
+  outreachTone?: string,
+  stepConfig?: FunnelStepConfig
+): Promise<BriefResult> {
+  const aiConfig = getAIConfig();
+  const client = await createAIClient();
+
+  const enrichmentSourceCount = candidate.enrichment_source_count ?? 0;
+  const signalCount = candidate.signals.length;
+  const systemPrompt = getBriefPrompt(enrichmentSourceCount, signalCount);
+
+  const userMessage = `Generate a comprehensive lead brief for the following prospect.
+
+## Company Information
+- **Company:** ${candidate.company_name}
+- **Domain:** ${candidate.domain}
+- **Segment:** ${candidate.segment}
+- **Employee Count (est.):** ${candidate.employee_count_estimate ?? 'Unknown'}
+- **HQ:** ${candidate.hq_location ?? 'Unknown'}
+- **Founded:** ${candidate.founded_year ?? 'Unknown'}
+- **Funding Stage:** ${candidate.funding_stage ?? 'Unknown'}
+- **Total Funding:** ${candidate.total_funding ?? 'Unknown'}
+- **Investors:** ${candidate.investors ?? 'Unknown'}
+
+## Evidence Summary
+- **${signalCount} buying signal(s)** from **${candidate.sources.length} source(s)**, enriched by **${enrichmentSourceCount} external data source(s)**
+- ${candidate.domain_validated ? 'Domain validated via DNS + HTTP' : 'Domain not externally validated'}
+
+## Signals (${signalCount})
+${candidate.signals.map((s) => `- ${s}`).join('\n') || '- None identified'}
+
+## Sources (${candidate.sources.length})
+${candidate.sources.map((s) => `- ${s}`).join('\n') || '- None'}
+
+## Research Notes
+${candidate.notes}
+
+## Scoring Result
+- **Fit Score:** ${score.fit_score}/100 (${score.fit_score_label})
+- **Confidence:** ${score.confidence}
+- **Key Score Drivers:**
+  - Segment/Scale Fit: ${score.score_breakdown.segment_scale_fit.points}/20
+  - Why Now Triggers: ${score.score_breakdown.why_now_triggers.points}/15
+  - Remote Access Pain: ${score.score_breakdown.remote_access_pain.points}/20
+  - Displacement Wedge: ${score.score_breakdown.displacement_wedge.points}/20
+  - Vertical/Playbook: ${score.score_breakdown.vertical_playbook.points}/15
+  - Buyer Access: ${score.score_breakdown.buyer_access_readiness.points}/10
+
+## ICP Context
+- **Target Verticals:** ${icpConfig.verticals.join(', ')}
+- **Competitors:** ${icpConfig.competitors.join(', ')}
+${icpConfig.success_stories ? `- **Success Stories:** ${JSON.stringify(icpConfig.success_stories)}` : ''}
+
+Generate the full lead brief as a JSON object.${outreachTone ? `\n\n## Outreach Tone\nWrite all outreach messaging in a ${outreachTone} tone.` : ''}${stepConfig?.persona_types?.length ? `\n\n## Persona Types\nOnly generate personas for these roles: ${stepConfig.persona_types.join(', ')}. Do not include other role types.` : ''}${stepConfig?.brief_depth === 'quick' ? `\n\n## Brief Depth: Quick\nGenerate a snapshot: company overview, 2 pain hypotheses, 1 persona. Skip extended analysis.` : stepConfig?.brief_depth === 'comprehensive' ? `\n\n## Brief Depth: Comprehensive\nGenerate an exhaustive brief with extended analysis, multiple outreach variants per persona, detailed competitive positioning, and thorough why-now analysis.` : ''}${promptInstructions ? `\n\n## Additional Instructions\n${promptInstructions}` : ''}`;
+
+  const response = await client.messages.create({
+    model: resolveModel(model || aiConfig.defaultModel, aiConfig.provider),
+    max_tokens: stepConfig?.max_tokens || 16384,
+    system: systemPrompt,
+    messages: [{ role: 'user', content: userMessage }],
+  });
+
+  if (tracker) tracker.addUsage(response);
+
+  const rawText = response.content[0].type === 'text' ? response.content[0].text : '';
+  const jsonStr = extractJson(rawText);
+
+  try {
+    const result = JSON.parse(jsonStr);
+
+    // Normalize personas
+    let personas: PersonaBrief[] = (result.personas || []).map((p: Record<string, unknown>) => ({
+      role_type: validateRoleType(p.role_type),
+      name: p.name ?? null,
+      title: p.title ?? null,
+      linkedin_url: p.linkedin_url ?? null,
+      department: p.department ?? null,
+      tenure: p.tenure ?? null,
+      outreach_angle: p.outreach_angle ?? null,
+      talking_points: typeof p.talking_points === 'string'
+        ? p.talking_points
+        : JSON.stringify(p.talking_points ?? []),
+      outreach_message: p.outreach_message ?? null,
+      social_signals: p.social_signals ?? null,
+      buying_signals: typeof p.buying_signals === 'string'
+        ? p.buying_signals
+        : JSON.stringify(p.buying_signals ?? null),
+    }));
+
+    // Filter to requested persona types
+    if (stepConfig?.persona_types?.length) {
+      personas = personas.filter(p => stepConfig.persona_types!.includes(p.role_type));
+    }
+
+    return {
+      company_snapshot: result.company_snapshot || '',
+      pain_hypotheses: result.pain_hypotheses || [],
+      personas,
+      tech_stack: result.tech_stack || {
+        vpn_product: null,
+        pam_product: null,
+        recent_purchases: [],
+        cloud_infra: [],
+        dev_tools: [],
+        notes: '',
+      },
+      competitive_displacement: result.competitive_displacement || {
+        likely_current: [],
+        evidence_sources: [],
+        twingate_wedge: [],
+        proof_points_to_use: [],
+      },
+      outreach_strategy: result.outreach_strategy || '',
+      source_citations: result.source_citations || [],
+      why_now: result.why_now || [],
+      brief_markdown: result.brief_markdown || '',
+    };
+  } catch (err) {
+    console.error(`[briefWriter] Failed to parse JSON for ${candidate.company_name}:`, err);
+    console.error(`[briefWriter] Raw response:`, rawText.substring(0, 500));
+    // Return a minimal brief instead of crashing the entire run
+    return {
+      company_snapshot: rawText.substring(0, 500),
+      pain_hypotheses: [],
+      personas: [],
+      tech_stack: { vpn_product: null, pam_product: null, recent_purchases: [], cloud_infra: [], dev_tools: [], notes: 'Brief generation failed — JSON parse error' },
+      competitive_displacement: { likely_current: [], evidence_sources: [], twingate_wedge: [], proof_points_to_use: [] },
+      outreach_strategy: '',
+      source_citations: [],
+      why_now: [],
+      brief_markdown: `# ${candidate.company_name}\n\n*Brief generation encountered a parsing error. Raw response available in activity logs.*`,
+    };
+  }
+}
+
+function validateRoleType(
+  value: unknown
+): 'champion' | 'economic_buyer' | 'executive_sponsor' {
+  if (
+    value === 'champion' ||
+    value === 'economic_buyer' ||
+    value === 'executive_sponsor'
+  ) {
+    return value;
+  }
+  return 'champion';
+}

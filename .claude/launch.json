@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "server",
+      "runtimeExecutable": "/Users/gbern/Downloads/pipeline-gen-app/.claude/run-npm.sh",
+      "runtimeArgs": ["run", "dev", "-w", "packages/server"],
+      "port": 3001
+    },
+    {
+      "name": "web",
+      "runtimeExecutable": "/Users/gbern/Downloads/pipeline-gen-app/.claude/run-npm.sh",
+      "runtimeArgs": ["run", "dev", "-w", "packages/web"],
+      "port": 5173
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+node_modules/
+dist/
+
+# Database
+*.db
+*.db-shm
+*.db-wal
+packages/server/data/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Claude Code local settings (may contain project IDs)
+.claude/settings.local.json
+
+# Build / runtime
+*.log
+coverage/

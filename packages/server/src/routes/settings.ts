@@ -1,6 +1,7 @@
 import { Router, Response } from 'express';
 import { authenticate, requireAdmin, AuthRequest } from '../auth/middleware.js';
 import { getSetting, saveSetting } from './icp.js';
+import { logActivity } from '../services/activityLog.js';
 import { config } from '../config.js';
 import { getDb } from '../db/schema.js';
 
@@ -55,10 +56,26 @@ router.get('/vertex', authenticate, requireAdmin, (_req: AuthRequest, res: Respo
 router.put('/vertex', authenticate, requireAdmin, (req: AuthRequest, res: Response) => {
   const body = req.body;
 
+  const changedFields: Record<string, { old: unknown; new: unknown }> = {};
   for (const field of VERTEX_FIELDS) {
     if (body[field] !== undefined && body[field] !== null && body[field] !== '') {
+      const oldVal = getSetting(getSettingKey(field), getEnvValue(field) || getDefault(field));
       saveSetting(getSettingKey(field), body[field], req.user!.id);
+      if (String(oldVal) !== String(body[field])) {
+        changedFields[field] = { old: oldVal, new: body[field] };
+      }
     }
+  }
+
+  if (Object.keys(changedFields).length > 0) {
+    logActivity({
+      userId: req.user!.id,
+      entityType: 'setting',
+      entityId: 'vertex',
+      entityTitle: 'AI Provider Config',
+      action: 'updated',
+      changes: changedFields,
+    });
   }
 
   res.json({ success: true });

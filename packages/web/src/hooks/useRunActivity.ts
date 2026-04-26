@@ -19,7 +19,14 @@ export interface ActivityEntry {
   };
 }
 
-const PHASES = ['discover', 'research', 'qualify', 'enrich', 'enrichment', 'score', 'scoring', 'brief', 'brief_generation'] as const;
+const PHASES = ['discover', 'qualify', 'enrich', 'score', 'brief'] as const;
+
+const PHASE_ALIASES: Record<string, string> = {
+  research: 'discover',
+  enrichment: 'enrich',
+  scoring: 'score',
+  brief_generation: 'brief',
+};
 
 export function useRunActivity(runId: string | null) {
   const [activities, setActivities] = useState<ActivityEntry[]>([]);
@@ -116,16 +123,23 @@ export function useRunActivity(runId: string | null) {
     return () => { unsub(); unsubComplete(); };
   }, [runId, subscribe]);
 
-  const completedPhases = activities
-    .filter(a => a.activity_type === 'phase_complete')
-    .map(a => a.phase)
-    .filter(Boolean) as string[];
+  const normalizePhase = (p: string) => PHASE_ALIASES[p] || p;
+
+  const completedPhases = new Set(
+    activities
+      .filter(a => a.activity_type === 'phase_complete')
+      .map(a => a.phase)
+      .filter(Boolean)
+      .map(p => normalizePhase(p!))
+  );
+
+  const normalizedCurrent = currentPhase ? normalizePhase(currentPhase) : null;
 
   const phaseStates = PHASES.map(p => ({
     phase: p,
-    state: completedPhases.includes(p)
+    state: completedPhases.has(p)
       ? 'complete' as const
-      : currentPhase === p
+      : normalizedCurrent === p
         ? 'active' as const
         : 'pending' as const,
   }));

@@ -79,7 +79,7 @@ export function useEventStream(options: EventStreamOptions = {}) {
       const eventTypes = types || [
         'pipeline.progress', 'pipeline.completed', 'pipeline.failed', 'pipeline.started',
         'campaign.progress', 'campaign.completed', 'campaign.failed', 'campaign.started',
-        'run.activity',
+        'run.activity', 'run.ai_stream',
       ];
 
       for (const eventType of eventTypes) {

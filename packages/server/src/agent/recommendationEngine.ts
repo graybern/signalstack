@@ -6,6 +6,7 @@ interface Recommendation {
   title: string;
   description: string;
   rationale: string;
+  action_data?: Record<string, any>;
 }
 
 interface AnalyticsSnapshot {
@@ -37,6 +38,11 @@ Return a JSON array of recommendations. Each must have:
 - title: short actionable title (under 80 chars)
 - description: 1-2 sentence explanation of what to change
 - rationale: 1-2 sentence explanation of why, citing specific data points
+- action_data: structured object with the specific changes to apply when accepted:
+  - For icp_adjustment: { "field": "scoring_weight_name", "current": value, "proposed": value }
+  - For exclusion_suggestion: { "companies": [{"company_name": "...", "domain": "...", "reason": "..."}] }
+  - For campaign_suggestion: { "campaign_name": "...", "pattern_thesis": "...", "target_signals": [...] }
+  - For source_priority: { "sources": {"source_id": true/false, ...}, "reason": "..." }
 
 Only return the JSON array, no other text.`;
 

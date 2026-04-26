@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import { v4 as uuid } from 'uuid';
 import { getDb } from '../db/schema.js';
 import { authenticate, requireOperator, AuthRequest } from '../auth/middleware.js';
+import { logActivity } from '../services/activityLog.js';
 import multer from 'multer';
 import { parse } from 'csv-parse/sync';
 
@@ -53,9 +54,19 @@ router.post('/', authenticate, requireOperator, (req: AuthRequest, res: Response
   if (!company_name) return res.status(400).json({ error: 'company_name required' });
 
   const id = uuid();
-  getDb().prepare(
+  const db = getDb();
+  db.prepare(
     'INSERT INTO exclusions (id, company_name, domain, industry, reason, added_by) VALUES (?,?,?,?,?,?)'
   ).run(id, company_name, domain || null, industry || null, reason || null, req.user!.id);
+
+  logActivity({
+    userId: req.user!.id,
+    entityType: 'exclusion',
+    entityId: id,
+    entityTitle: company_name,
+    action: 'created',
+    snapshot: { company_name, domain, industry, reason },
+  });
 
   res.status(201).json({ id, company_name });
 });
@@ -96,8 +107,22 @@ router.post('/import', authenticate, requireOperator, upload.single('file'), (re
 });
 
 router.delete('/:id', authenticate, requireOperator, (req: AuthRequest, res: Response) => {
-  const result = getDb().prepare('DELETE FROM exclusions WHERE id = ?').run(req.params.id);
+  const db = getDb();
+  const existing = db.prepare('SELECT * FROM exclusions WHERE id = ?').get(req.params.id) as any;
+  const result = db.prepare('DELETE FROM exclusions WHERE id = ?').run(req.params.id);
   if (result.changes === 0) return res.status(404).json({ error: 'Not found' });
+
+  if (existing) {
+    logActivity({
+      userId: req.user!.id,
+      entityType: 'exclusion',
+      entityId: req.params.id,
+      entityTitle: existing.company_name,
+      action: 'deleted',
+      snapshot: existing,
+    });
+  }
+
   res.json({ success: true });
 });
 

@@ -4,6 +4,8 @@ import { getDb } from '../db/schema.js';
 import { authenticate, requireMember, AuthRequest } from '../auth/middleware.js';
 import { generateRecommendations } from '../agent/recommendationEngine.js';
 import { ActivityLogger } from '../agent/activityLogger.js';
+import { logActivity } from '../services/activityLog.js';
+import { getSetting, saveSetting } from './icp.js';
 
 const router = Router();
 
@@ -227,13 +229,13 @@ router.post('/recommendations/generate', authenticate, requireMember, async (_re
 
     // Insert recommendations
     const insert = db.prepare(
-      `INSERT INTO ai_recommendations (id, type, title, description, rationale, data_snapshot, status)
-       VALUES (?, ?, ?, ?, ?, ?, 'pending')`
+      `INSERT INTO ai_recommendations (id, type, title, description, rationale, data_snapshot, action_data, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')`
     );
 
     const tx = db.transaction(() => {
       for (const rec of recommendations) {
-        insert.run(uuid(), rec.type, rec.title, rec.description, rec.rationale, JSON.stringify(snapshot));
+        insert.run(uuid(), rec.type, rec.title, rec.description, rec.rationale, JSON.stringify(snapshot), rec.action_data ? JSON.stringify(rec.action_data) : null);
       }
     });
     tx();
@@ -253,14 +255,62 @@ router.patch('/recommendations/:id', authenticate, requireMember, (req: AuthRequ
   }
 
   const db = getDb();
-  const rec = db.prepare('SELECT id FROM ai_recommendations WHERE id = ?').get(req.params.id);
+  const rec = db.prepare('SELECT * FROM ai_recommendations WHERE id = ?').get(req.params.id) as any;
   if (!rec) return res.status(404).json({ error: 'Recommendation not found' });
 
   db.prepare(
     `UPDATE ai_recommendations SET status = ?, acted_at = datetime('now'), acted_by = ? WHERE id = ?`
   ).run(status, req.user!.id, req.params.id);
 
-  res.json({ success: true });
+  const applied: string[] = [];
+
+  if (status === 'accepted' && rec.action_data) {
+    try {
+      const actionData = JSON.parse(rec.action_data);
+
+      if (rec.type === 'exclusion_suggestion' && actionData.companies?.length) {
+        for (const comp of actionData.companies) {
+          const existingExcl = db.prepare('SELECT id FROM exclusions WHERE company_name = ?').get(comp.company_name);
+          if (!existingExcl) {
+            const exclId = uuid();
+            db.prepare(
+              `INSERT INTO exclusions (id, company_name, domain, reason, category) VALUES (?, ?, ?, ?, 'disqualifying_criteria')`
+            ).run(exclId, comp.company_name, comp.domain || null, comp.reason || rec.title);
+            applied.push(`Excluded ${comp.company_name}`);
+          }
+        }
+      }
+
+      if (rec.type === 'icp_adjustment' && actionData.field && actionData.proposed != null) {
+        const weights: any[] = getSetting('icp.signal_weights', []);
+        const existing = weights.find((w: any) => w.signal === actionData.field);
+        if (existing) {
+          existing.weight = actionData.proposed;
+        } else {
+          weights.push({ signal: actionData.field, weight: actionData.proposed, category: 'ai_recommended' });
+        }
+        saveSetting('icp.signal_weights', weights, req.user!.id);
+        applied.push(`Updated ICP weight: ${actionData.field} → ${actionData.proposed}`);
+      }
+    } catch (err) {
+      console.error('[recommendations] Failed to apply action_data:', err);
+    }
+  }
+
+  logActivity({
+    userId: req.user!.id,
+    entityType: 'setting',
+    entityId: req.params.id,
+    entityTitle: rec.title,
+    action: status === 'accepted' ? 'updated' : 'deleted',
+    changes: {
+      status: { old: rec.status, new: status },
+      ...(applied.length ? { applied_actions: { old: null, new: applied } } : {}),
+    },
+    snapshot: { type: rec.type, title: rec.title, description: rec.description, rationale: rec.rationale },
+  });
+
+  res.json({ success: true, applied });
 });
 
 // ── GET /run-trends — Cross-campaign score + cost trends ──────

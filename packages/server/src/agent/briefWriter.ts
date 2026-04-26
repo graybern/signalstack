@@ -1,4 +1,5 @@
 import { createAIClient, getAIConfig, resolveModel } from '../config/vertexConfig.js';
+import { streamAICall } from './streamingAI.js';
 import { getBriefPrompt } from './prompts/brief.js';
 import type {
   ICPConfigParsed,
@@ -11,6 +12,7 @@ import type {
 import type { ResearchCandidate } from './researcher.js';
 import type { ScoringResult } from './scorer.js';
 import type { TokenTracker } from './tokenTracker.js';
+import type { StreamContext } from './scorer.js';
 
 export interface PersonaBrief {
   role_type: 'champion' | 'economic_buyer' | 'executive_sponsor';
@@ -58,7 +60,8 @@ export async function generateBrief(
   tracker?: TokenTracker,
   promptInstructions?: string,
   outreachTone?: string,
-  stepConfig?: FunnelStepConfig
+  stepConfig?: FunnelStepConfig,
+  streamCtx?: StreamContext
 ): Promise<BriefResult> {
   const aiConfig = getAIConfig();
   const client = await createAIClient();
@@ -111,16 +114,29 @@ ${icpConfig.success_stories ? `- **Success Stories:** ${JSON.stringify(icpConfig
 
 Generate the full lead brief as a JSON object.${outreachTone ? `\n\n## Outreach Tone\nWrite all outreach messaging in a ${outreachTone} tone.` : ''}${stepConfig?.persona_types?.length ? `\n\n## Persona Types\nOnly generate personas for these roles: ${stepConfig.persona_types.join(', ')}. Do not include other role types.` : ''}${stepConfig?.brief_depth === 'quick' ? `\n\n## Brief Depth: Quick\nGenerate a snapshot: company overview, 2 pain hypotheses, 1 persona. Skip extended analysis.` : stepConfig?.brief_depth === 'comprehensive' ? `\n\n## Brief Depth: Comprehensive\nGenerate an exhaustive brief with extended analysis, multiple outreach variants per persona, detailed competitive positioning, and thorough why-now analysis.` : ''}${promptInstructions ? `\n\n## Additional Instructions\n${promptInstructions}` : ''}`;
 
-  const response = await client.messages.create({
-    model: resolveModel(model || aiConfig.defaultModel, aiConfig.provider),
-    max_tokens: stepConfig?.max_tokens || 16384,
-    system: systemPrompt,
-    messages: [{ role: 'user', content: userMessage }],
-  });
+  let rawText: string;
 
-  if (tracker) tracker.addUsage(response);
-
-  const rawText = response.content[0].type === 'text' ? response.content[0].text : '';
+  if (streamCtx) {
+    const result = await streamAICall({
+      model: model || aiConfig.defaultModel,
+      max_tokens: stepConfig?.max_tokens || 16384,
+      system: systemPrompt,
+      userMessage,
+      thinking_budget: 10000,
+      tracker,
+      context: { ...streamCtx, companyName: candidate.company_name },
+    });
+    rawText = result.text;
+  } else {
+    const response = await client.messages.create({
+      model: resolveModel(model || aiConfig.defaultModel, aiConfig.provider),
+      max_tokens: stepConfig?.max_tokens || 16384,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: userMessage }],
+    });
+    if (tracker) tracker.addUsage(response);
+    rawText = response.content[0].type === 'text' ? response.content[0].text : '';
+  }
   const jsonStr = extractJson(rawText);
 
   try {
@@ -148,6 +164,10 @@ Generate the full lead brief as a JSON object.${outreachTone ? `\n\n## Outreach 
     // Filter to requested persona types
     if (stepConfig?.persona_types?.length) {
       personas = personas.filter(p => stepConfig.persona_types!.includes(p.role_type));
+    }
+
+    if (personas.length === 0) {
+      personas.push(buildFallbackChampion(candidate.company_name, candidate.segment));
     }
 
     return {
@@ -180,7 +200,7 @@ Generate the full lead brief as a JSON object.${outreachTone ? `\n\n## Outreach 
     return {
       company_snapshot: rawText.substring(0, 500),
       pain_hypotheses: [],
-      personas: [],
+      personas: [buildFallbackChampion(candidate.company_name, candidate.segment)],
       tech_stack: { vpn_product: null, pam_product: null, recent_purchases: [], cloud_infra: [], dev_tools: [], notes: 'Brief generation failed — JSON parse error' },
       competitive_displacement: { likely_current: [], evidence_sources: [], twingate_wedge: [], proof_points_to_use: [] },
       outreach_strategy: '',
@@ -189,6 +209,28 @@ Generate the full lead brief as a JSON object.${outreachTone ? `\n\n## Outreach 
       brief_markdown: `# ${candidate.company_name}\n\n*Brief generation encountered a parsing error. Raw response available in activity logs.*`,
     };
   }
+}
+
+function buildFallbackChampion(companyName: string, segment?: string): PersonaBrief {
+  const title = segment === 'ENT' ? 'Director of IT Infrastructure' :
+    segment === 'MM' ? 'Senior IT Manager' : 'IT Manager';
+  return {
+    role_type: 'champion',
+    name: null,
+    title,
+    linkedin_url: null,
+    department: 'IT / Infrastructure',
+    tenure: null,
+    outreach_angle: `Explore how ${companyName} handles secure remote access for distributed teams`,
+    talking_points: JSON.stringify([
+      'Current remote access architecture and pain points',
+      'Zero-trust approach vs. traditional VPN',
+      'Deployment simplicity — no network reconfiguration required',
+    ]),
+    outreach_message: null,
+    social_signals: null,
+    buying_signals: null,
+  };
 }
 
 function validateRoleType(

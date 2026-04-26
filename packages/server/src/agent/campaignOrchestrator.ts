@@ -355,8 +355,11 @@ export async function runCampaign(campaignId: string, triggeredBy: string, reque
           const score = scores?.get(c.company_name);
           const brief = briefs?.get(c.company_name);
           const sourceCitations = brief?.source_citations || [];
-          const signalCount = Array.isArray(sourceCitations) ? sourceCitations.length : (Array.isArray(c.signals) ? c.signals.length : 0);
+          const signalCount = brief ? (Array.isArray(sourceCitations) ? sourceCitations.length : 0) : (Array.isArray(c.signals) ? c.signals.length : 0);
           const leadStatus = stage === 'briefed' ? 'scored' : stage;
+          const candidateData: Record<string, any> = { signals: c.signals, sources: c.sources, notes: c.notes };
+          if (score?.score_breakdown) candidateData.score_breakdown = score.score_breakdown;
+          if (score?.reasoning) candidateData.reasoning = score.reasoning;
           upsertLeadStage.run(
             leadId, runId, campaignId,
             c.company_name, c.segment,
@@ -376,7 +379,7 @@ export async function runCampaign(campaignId: string, triggeredBy: string, reque
             brief?.brief_markdown || null,
             signalCount,
             stage,
-            JSON.stringify({ signals: c.signals, sources: c.sources, notes: c.notes }),
+            JSON.stringify(candidateData),
             leadStatus
           );
         }
@@ -519,7 +522,7 @@ export async function runCampaign(campaignId: string, triggeredBy: string, reque
               logger.thinking('discover', `Backfill attempt ${attempt}/${maxAttempts} — need ${minLeads - candidates.length} more candidates`);
             }
 
-            let batchCandidates = await researchCampaignPattern(campaign, icpConfig, exclusions, stepPipelineConfig, stepTracker, logger, signal, discoverPrompt, step, searchContext);
+            let batchCandidates = await researchCampaignPattern(campaign, icpConfig, exclusions, stepPipelineConfig, stepTracker, logger, signal, discoverPrompt, step, searchContext, { runId, campaignId });
 
             // ── Post-discover programmatic filters ──
 
@@ -726,7 +729,7 @@ export async function runCampaign(campaignId: string, triggeredBy: string, reque
             if (signal.aborted) throw new Error('Run cancelled by user');
             emitProgress('score', candidate.company_name);
             logger.thinking('score', `Scoring ${candidate.company_name} against ICP criteria...`);
-            const score = await scoreCandidate(candidate, icpConfig, stepModel, scoreTracker, step.prompt_instructions, step);
+            const score = await scoreCandidate(candidate, icpConfig, stepModel, scoreTracker, step.prompt_instructions, step, { runId, campaignId, phase: 'score' });
             scoredCandidates.push({ candidate, score });
             if (score.reasoning) {
               logger.thinking('score', `[${candidate.company_name}] ${score.reasoning.substring(0, 300)}${score.reasoning.length > 300 ? '...' : ''}`);
@@ -742,9 +745,12 @@ export async function runCampaign(campaignId: string, triggeredBy: string, reque
             avg_score: scoredCandidates.length > 0 ? Math.round(scoredCandidates.reduce((s, c) => s + c.score.fit_score, 0) / scoredCandidates.length) : 0,
             model: stepModel,
           });
-          // Sort and apply candidate limit (top N for brief step)
+          // Sort by score descending
           scoredCandidates.sort((a, b) => b.score.fit_score - a.score.fit_score);
-          // Apply min score threshold
+          // Persist ALL scored candidates before filtering — so every score is saved
+          const allScoreMap = new Map(scoredCandidates.map(sc => [sc.candidate.company_name, sc.score]));
+          persistCandidates('scored', scoredCandidates.map(sc => sc.candidate), allScoreMap);
+          // Apply filters to select candidates for brief step
           if (step.min_score_threshold) {
             const before = scoredCandidates.length;
             scoredCandidates = scoredCandidates.filter(sc => sc.score.fit_score >= step.min_score_threshold!);
@@ -752,7 +758,6 @@ export async function runCampaign(campaignId: string, triggeredBy: string, reque
               logger.thinking('score', `Filtered ${before - scoredCandidates.length} candidates below score threshold ${step.min_score_threshold}`);
             }
           }
-          // Apply confidence filter
           if (step.confidence_filter && step.confidence_filter !== 'all') {
             const before = scoredCandidates.length;
             if (step.confidence_filter === 'high_only') {
@@ -767,8 +772,6 @@ export async function runCampaign(campaignId: string, triggeredBy: string, reque
           if (step.candidate_limit) {
             scoredCandidates = scoredCandidates.slice(0, step.candidate_limit);
           }
-          const scoreMap = new Map(scoredCandidates.map(sc => [sc.candidate.company_name, sc.score]));
-          persistCandidates('scored', scoredCandidates.map(sc => sc.candidate), scoreMap);
           break;
         }
 
@@ -783,7 +786,7 @@ export async function runCampaign(campaignId: string, triggeredBy: string, reque
             try {
               // Outreach tone: prefer funnel step config, fall back to prompt config
               const briefTone = step.outreach_tone || promptConfig?.outreach_tone;
-              const brief = await generateBrief(candidate, score, icpConfig, stepModel, briefTracker, step.prompt_instructions, briefTone, step);
+              const brief = await generateBrief(candidate, score, icpConfig, stepModel, briefTracker, step.prompt_instructions, briefTone, step, { runId, campaignId, phase: 'brief' });
               briefResults.push({ candidate, score, brief });
               const painSummary = brief.pain_hypotheses?.slice(0, 2).map((p: any) => typeof p === 'string' ? p : p.hypothesis || p.pain).filter(Boolean).join('; ');
               logger.finding('brief', candidate.company_name, `Brief ready — ${brief.personas?.length || 0} personas, ${brief.why_now?.length || 0} triggers`, {
@@ -941,7 +944,8 @@ async function researchCampaignPattern(
   signal?: AbortSignal,
   promptInstructions?: string,
   discoverStep?: FunnelStepConfig,
-  searchContext?: string
+  searchContext?: string,
+  streamCtx?: { runId: string; campaignId?: string }
 ): Promise<ResearchCandidate[]> {
   const aiConfig = getAIConfig();
   const client = await createAIClient();
@@ -980,12 +984,23 @@ async function researchCampaignPattern(
 
   stream.on('text', (text: string) => {
     accumulatedText += text;
+
+    if (streamCtx) {
+      eventBus.emit('run.ai_stream', {
+        run_id: streamCtx.runId,
+        campaign_id: streamCtx.campaignId,
+        phase: 'discover',
+        block_type: 'text',
+        delta: text,
+        done: false,
+      });
+    }
+
     // Log progress every ~1500 chars
     if (accumulatedText.length - lastLoggedLength > 1500) {
       const candidateMatches = accumulatedText.match(/"company_name"/g);
       const candidateCount = candidateMatches ? candidateMatches.length : 0;
       if (candidateCount > lastCandidateCount) {
-        // Extract the latest company name found
         const nameMatches = accumulatedText.match(/"company_name"\s*:\s*"([^"]+)"/g);
         const latestName = nameMatches ? nameMatches[nameMatches.length - 1]?.replace(/"company_name"\s*:\s*"/, '').replace(/"$/, '') : '';
         logger?.thinking('research', `Claude is researching... ${candidateCount} candidates identified${latestName ? ` (latest: ${latestName})` : ''}`, {
@@ -1003,6 +1018,17 @@ async function researchCampaignPattern(
   });
 
   const response = await stream.finalMessage();
+
+  if (streamCtx) {
+    eventBus.emit('run.ai_stream', {
+      run_id: streamCtx.runId,
+      campaign_id: streamCtx.campaignId,
+      phase: 'discover',
+      block_type: 'text',
+      delta: '',
+      done: true,
+    });
+  }
 
   if (tracker) tracker.addUsage(response);
 

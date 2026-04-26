@@ -5,6 +5,7 @@ import { authenticate, requireOperator, requireMember, AuthRequest } from '../au
 import { runCampaign } from '../agent/campaignOrchestrator.js';
 import { getSetting, getDefaultPipelineConfig, getDefaultPromptConfig } from './icp.js';
 import { registerCampaignCron, unregisterCampaignCron } from '../scheduler/campaignScheduler.js';
+import { logActivity, computeChanges } from '../services/activityLog.js';
 import type { CampaignParsed, CampaignExclusionConfig, Exclusion } from '../types/index.js';
 
 const router = Router();
@@ -131,14 +132,24 @@ router.post('/', authenticate, requireOperator, (req: AuthRequest, res: Response
     req.user!.id,
   );
 
-  const created = db.prepare('SELECT * FROM campaigns WHERE id = ?').get(id);
+  const created = db.prepare('SELECT * FROM campaigns WHERE id = ?').get(id) as any;
+
+  logActivity({
+    userId: req.user!.id,
+    entityType: 'campaign',
+    entityId: id,
+    entityTitle: body.name,
+    action: 'created',
+    snapshot: created,
+  });
+
   res.status(201).json(parseCampaignRow(created));
 });
 
 // Update campaign
 router.put('/:id', authenticate, requireOperator, (req: AuthRequest, res: Response) => {
   const db = getDb();
-  const existing = db.prepare('SELECT id FROM campaigns WHERE id = ?').get(req.params.id);
+  const existing = db.prepare('SELECT * FROM campaigns WHERE id = ?').get(req.params.id) as any;
   if (!existing) return res.status(404).json({ error: 'Campaign not found' });
 
   const body = req.body;
@@ -174,14 +185,41 @@ router.put('/:id', authenticate, requireOperator, (req: AuthRequest, res: Respon
     req.params.id,
   );
 
-  const updated = db.prepare('SELECT * FROM campaigns WHERE id = ?').get(req.params.id);
+  const updated = db.prepare('SELECT * FROM campaigns WHERE id = ?').get(req.params.id) as any;
+
+  const changes = computeChanges(existing, updated);
+  if (changes) {
+    logActivity({
+      userId: req.user!.id,
+      entityType: 'campaign',
+      entityId: req.params.id,
+      entityTitle: updated.name,
+      action: 'updated',
+      changes,
+      snapshot: existing,
+    });
+  }
+
   res.json(parseCampaignRow(updated));
 });
 
 // Archive campaign (soft delete)
 router.delete('/:id', authenticate, requireOperator, (req: AuthRequest, res: Response) => {
   const db = getDb();
+  const existing = db.prepare('SELECT * FROM campaigns WHERE id = ?').get(req.params.id) as any;
   db.prepare("UPDATE campaigns SET status = 'archived', updated_at = datetime('now') WHERE id = ?").run(req.params.id);
+
+  if (existing) {
+    logActivity({
+      userId: req.user!.id,
+      entityType: 'campaign',
+      entityId: req.params.id,
+      entityTitle: existing.name,
+      action: 'deleted',
+      snapshot: existing,
+    });
+  }
+
   res.json({ success: true });
 });
 
@@ -215,7 +253,7 @@ router.get('/:id/config', authenticate, (req: AuthRequest, res: Response) => {
 // Save campaign config overrides
 router.put('/:id/config', authenticate, requireOperator, (req: AuthRequest, res: Response) => {
   const db = getDb();
-  const existing = db.prepare('SELECT id FROM campaigns WHERE id = ?').get(req.params.id);
+  const existing = db.prepare('SELECT * FROM campaigns WHERE id = ?').get(req.params.id) as any;
   if (!existing) return res.status(404).json({ error: 'Campaign not found' });
 
   const body = req.body;
@@ -239,10 +277,24 @@ router.put('/:id/config', authenticate, requireOperator, (req: AuthRequest, res:
     req.params.id,
   );
 
+  const updated = db.prepare('SELECT * FROM campaigns WHERE id = ?').get(req.params.id) as any;
+
+  const changes = computeChanges(existing, updated);
+  if (changes) {
+    logActivity({
+      userId: req.user!.id,
+      entityType: 'campaign',
+      entityId: req.params.id,
+      entityTitle: updated.name,
+      action: 'updated',
+      changes,
+      snapshot: existing,
+    });
+  }
+
   // Update campaign scheduler when schedule changes
-  const campaignRow = db.prepare('SELECT name FROM campaigns WHERE id = ?').get(req.params.id) as any;
   if (body.schedule_enabled && body.schedule_cron) {
-    registerCampaignCron(req.params.id, campaignRow?.name || '', body.schedule_cron);
+    registerCampaignCron(req.params.id, updated?.name || '', body.schedule_cron);
   } else {
     unregisterCampaignCron(req.params.id);
   }

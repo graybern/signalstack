@@ -1,0 +1,16 @@
+{
+  "name": "SignalStack",
+  "short_name": "SignalStack",
+  "description": "AI-Powered Prospect Intelligence",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#1e1b2e",
+  "theme_color": "#ec4899",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

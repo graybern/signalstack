@@ -17,6 +17,7 @@ import webhookRoutes from './routes/webhooks.js';
 import eventRoutes from './routes/events.js';
 import analyticsRoutes from './routes/analytics.js';
 import settingsRoutes from './routes/settings.js';
+import activityRoutes from './routes/activity.js';
 import { initScheduler } from './scheduler/cron.js';
 import { initCampaignScheduler } from './scheduler/campaignScheduler.js';
 import { initWebhookDispatcher } from './events/webhookDispatcher.js';
@@ -49,6 +50,7 @@ const mountRoutes = (prefix: string) => {
   app.use(`${prefix}/events`, eventRoutes);
   app.use(`${prefix}/analytics`, analyticsRoutes);
   app.use(`${prefix}/settings`, settingsRoutes);
+  app.use(`${prefix}/activity`, activityRoutes);
 };
 
 mountRoutes('/api');
@@ -121,7 +123,22 @@ initWebhookDispatcher();
 initScheduler();
 initCampaignScheduler();
 
-app.listen(config.port, () => {
+const server = app.listen(config.port, () => {
   console.log(`SignalStack server running on port ${config.port}`);
   console.log(`Environment: ${config.nodeEnv}`);
 });
+
+server.on('error', (err: NodeJS.ErrnoException) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`Port ${config.port} is already in use — another server instance is running. This process will exit.`);
+    process.exit(1);
+  }
+  throw err;
+});
+
+function cleanup() {
+  server.close();
+  process.exit(0);
+}
+process.on('SIGTERM', cleanup);
+process.on('SIGINT', cleanup);

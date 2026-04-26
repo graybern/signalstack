@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { ScoreBadge, SegmentBadge } from '../components/ScoreBadge';
 import { ActivityPanel } from '../components/ActivityPanel';
+import { AILogPanel } from '../components/AILogPanel';
 
 interface RunData {
   id: string;
@@ -169,6 +170,11 @@ export function RunDetail() {
           <p className="text-sm text-red-600 mt-1">{run.error_message}</p>
         </div>
       )}
+
+      {/* AI Output Console — streaming thinking + response */}
+      <div className="mb-4">
+        <AILogPanel runId={run.id} campaignId={run.campaign_id || undefined} model={run.model_used || undefined} />
+      </div>
 
       {/* Activity Terminal — hero section */}
       <div className="mb-6">

@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import { v4 as uuid } from 'uuid';
 import { getDb } from '../db/schema.js';
 import { authenticate, requireOperator, AuthRequest } from '../auth/middleware.js';
+import { logActivity } from '../services/activityLog.js';
 
 const router = Router();
 
@@ -43,6 +44,15 @@ router.put('/', authenticate, requireOperator, (req: AuthRequest, res: Response)
     }
   }
 
+  logActivity({
+    userId: req.user!.id,
+    entityType: 'icp_config',
+    entityId: id,
+    entityTitle: `ICP v${version}`,
+    action: 'created',
+    snapshot: body,
+  });
+
   res.json({ success: true, version });
 });
 
@@ -76,7 +86,18 @@ router.get('/pipeline', authenticate, (_req: AuthRequest, res: Response) => {
 });
 
 router.put('/pipeline', authenticate, requireOperator, (req: AuthRequest, res: Response) => {
+  const before = getSetting('pipeline', getDefaultPipelineConfig());
   saveSetting('pipeline', req.body, req.user!.id);
+
+  logActivity({
+    userId: req.user!.id,
+    entityType: 'setting',
+    entityId: 'pipeline',
+    entityTitle: 'Pipeline Config',
+    action: 'updated',
+    snapshot: before,
+  });
+
   res.json({ success: true });
 });
 
@@ -87,7 +108,18 @@ router.get('/prompts', authenticate, (_req: AuthRequest, res: Response) => {
 });
 
 router.put('/prompts', authenticate, requireOperator, (req: AuthRequest, res: Response) => {
+  const before = getSetting('prompts', getDefaultPromptConfig());
   saveSetting('prompts', req.body, req.user!.id);
+
+  logActivity({
+    userId: req.user!.id,
+    entityType: 'setting',
+    entityId: 'prompts',
+    entityTitle: 'Prompt Config',
+    action: 'updated',
+    snapshot: before,
+  });
+
   res.json({ success: true });
 });
 

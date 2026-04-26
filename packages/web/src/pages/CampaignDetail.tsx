@@ -15,6 +15,7 @@ import {
 } from 'recharts';
 import { ScoreBadge, SegmentBadge } from '../components/ScoreBadge';
 import { ActivityPanel } from '../components/ActivityPanel';
+import { AILogPanel } from '../components/AILogPanel';
 import { FunnelConfigurator } from '../components/FunnelConfigurator';
 import { useEventStream } from '../hooks/useEventStream';
 import { permissions } from '../utils/permissions';
@@ -43,7 +44,6 @@ interface CampaignFull {
   avg_score: number | null;
   runs: any[];
   leads: any[];
-  icp_overrides: Record<string, any> | null;
   schedule_cron: string | null;
   schedule_enabled: number;
   exclusion_config: { additions: any[]; exemptions: string[] } | null;
@@ -69,14 +69,14 @@ const DATA_SOURCES: { id: string; label: string; description: string; free: bool
   { id: 'apollo', label: 'Apollo', description: 'Contact data, org charts, direct emails, and phone numbers for outreach', free: false },
 ];
 
-type TabId = 'overview' | 'leads' | 'runs' | 'analytics' | 'settings';
+type TabId = 'overview' | 'leads' | 'runs' | 'analytics' | 'configure';
 
 const TABS: { id: TabId; label: string; icon: typeof Target }[] = [
   { id: 'overview', label: 'Overview', icon: Target },
   { id: 'leads', label: 'Leads', icon: Users },
   { id: 'runs', label: 'Runs', icon: Activity },
   { id: 'analytics', label: 'Analytics', icon: BarChart3 },
-  { id: 'settings', label: 'Settings', icon: Settings },
+  { id: 'configure', label: 'Configure', icon: Settings },
 ];
 
 export function CampaignDetail() {
@@ -85,7 +85,11 @@ export function CampaignDetail() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [campaign, setCampaign] = useState<CampaignFull | null>(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<TabId>((searchParams.get('tab') as TabId) || 'overview');
+  const [activeTab, setActiveTab] = useState<TabId>(() => {
+    const tab = searchParams.get('tab');
+    if (tab === 'settings') return 'configure';
+    return (tab as TabId) || 'overview';
+  });
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [viewLogRunId, setViewLogRunId] = useState<string | null>(null);
 
@@ -96,8 +100,8 @@ export function CampaignDetail() {
   const [leadSortDir, setLeadSortDir] = useState<'asc' | 'desc'>('desc');
   const [leadSegmentFilter, setLeadSegmentFilter] = useState<string>('');
 
-  // Settings state
-  const [configTab, setConfigTab] = useState<'funnel' | 'schedule' | 'exclusions' | 'feed'>('funnel');
+  // Configure state
+  const [configTab, setConfigTab] = useState<'definition' | 'funnel' | 'schedule' | 'exclusions' | 'feed'>('definition');
   const [copiedRss, setCopiedRss] = useState(false);
   const [configDirty, setConfigDirty] = useState(false);
   const [editConfig, setEditConfig] = useState<{
@@ -225,6 +229,7 @@ export function CampaignDetail() {
       if (event.type === 'campaign.completed' || event.type === 'campaign.failed' || event.type === 'campaign.cancelled') {
         setActiveRunId(null);
         setActiveRunProgress(null);
+        setStopping(false);
         api<CampaignFull>(`/campaigns/${id}`).then(setCampaign);
       }
 
@@ -240,12 +245,16 @@ export function CampaignDetail() {
     return unsub;
   }, [activeRunId, id, subscribe]);
 
+  const [stopping, setStopping] = useState(false);
+
   const stopRun = async () => {
     if (!activeRunId) return;
+    setStopping(true);
     try {
       await api(`/runs/${activeRunId}/cancel`, { method: 'POST' });
     } catch (err: any) {
       alert(err.message);
+      setStopping(false);
     }
   };
 
@@ -337,11 +346,6 @@ export function CampaignDetail() {
 
         {permissions.canRunCampaign(user?.role) && (
           <div className="flex items-center gap-2">
-            {permissions.canEditCampaign(user?.role) && (
-              <Link to={`/campaigns/${id}/edit`} className="flex items-center gap-2 px-3 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 text-sm">
-                <Edit className="w-4 h-4" /> Edit
-              </Link>
-            )}
             {isRunning ? (
               <>
                 {activeRunProgress && (
@@ -358,8 +362,8 @@ export function CampaignDetail() {
                     )}
                   </div>
                 )}
-                <button onClick={stopRun} className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 text-sm font-medium">
-                  <X className="w-4 h-4" /> Stop Run
+                <button onClick={stopRun} disabled={stopping} className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium ${stopping ? 'bg-gray-400 text-white cursor-not-allowed' : 'bg-red-600 text-white hover:bg-red-700'}`}>
+                  <X className="w-4 h-4" /> {stopping ? 'Stopping...' : 'Stop Run'}
                 </button>
               </>
             ) : (
@@ -413,6 +417,13 @@ export function CampaignDetail() {
         </div>
         <StatCard icon={Calendar} label="Schedule" value={campaign.schedule_enabled && campaign.schedule_cron ? describeCron(campaign.schedule_cron) : 'Not scheduled'} small />
       </div>
+
+      {/* AI Output Console — live streaming */}
+      {activeRunId && (
+        <div className="mb-4">
+          <AILogPanel runId={activeRunId} campaignId={id} />
+        </div>
+      )}
 
       {/* Active Run Activity Panel */}
       {activeRunId && (
@@ -489,9 +500,10 @@ export function CampaignDetail() {
         <AnalyticsTab analytics={analytics} loading={analyticsLoading} />
       )}
 
-      {activeTab === 'settings' && (
-        <SettingsTab
+      {activeTab === 'configure' && (
+        <ConfigureTab
           campaign={campaign}
+          setCampaign={setCampaign}
           editConfig={editConfig}
           setEditConfig={setEditConfig}
           configTab={configTab}
@@ -503,7 +515,10 @@ export function CampaignDetail() {
           copiedRss={copiedRss}
           copyRssUrl={copyRssUrl}
           campaignId={id!}
-          canEdit={permissions.canEditFunnelConfig(user?.role)}
+          canEdit={permissions.canEditCampaign(user?.role)}
+          canEditPipeline={permissions.canEditFunnelConfig(user?.role)}
+          canEditSchedule={permissions.canEditSchedule(user?.role)}
+          canEditExclusions={permissions.canEditExclusions(user?.role)}
           orgICP={orgICP}
           onRunStep={(stepId) => triggerRun([stepId])}
         />
@@ -878,12 +893,12 @@ function RunsTab({
               </div>
             )}
 
-            {(isViewing || isActive) && (
+            {isViewing && !isActive && (
               <div className="border-t border-gray-200">
                 <ActivityPanel
                   runId={run.id}
                   campaignId={campaignId}
-                  onClose={() => { setViewLogRunId(null); if (isActive) setActiveRunId(null); }}
+                  onClose={() => setViewLogRunId(null)}
                 />
               </div>
             )}
@@ -919,12 +934,14 @@ function AnalyticsTab({ analytics, loading }: { analytics: any; loading: boolean
 
 // ── Settings Tab ──────────────────────────────────────────────────
 
-function SettingsTab({
-  campaign, editConfig, setEditConfig, configTab, setConfigTab,
+function ConfigureTab({
+  campaign, setCampaign, editConfig, setEditConfig, configTab, setConfigTab,
   configDirty, setConfigDirty, saveConfig, globalExclusions,
-  copiedRss, copyRssUrl, campaignId, canEdit, orgICP, onRunStep,
+  copiedRss, copyRssUrl, campaignId, canEdit, canEditPipeline, canEditSchedule, canEditExclusions,
+  orgICP, onRunStep,
 }: {
   campaign: CampaignFull;
+  setCampaign: (c: CampaignFull) => void;
   editConfig: any;
   setEditConfig: (c: any) => void;
   configTab: string;
@@ -937,206 +954,539 @@ function SettingsTab({
   copyRssUrl: () => void;
   campaignId: string;
   canEdit: boolean;
+  canEditPipeline: boolean;
+  canEditSchedule: boolean;
+  canEditExclusions: boolean;
   orgICP?: { verticals: string[]; tech_signals: string[]; competitors: string[] };
   onRunStep?: (stepId: string) => void;
 }) {
+  const configTabs = [
+    { key: 'definition' as const, label: 'Definition', icon: Target },
+    { key: 'funnel' as const, label: 'Pipeline', icon: Layers },
+    { key: 'schedule' as const, label: 'Schedule', icon: Clock },
+    { key: 'exclusions' as const, label: 'Exclusions', icon: Shield },
+    { key: 'feed' as const, label: 'Feed', icon: Rss },
+  ];
+
   return (
-    <div className="bg-white rounded-xl border border-gray-200">
-      {/* Config tabs */}
-      <div className="flex items-center border-b border-gray-200 px-4 gap-0.5 overflow-x-auto">
-        {([
-          { key: 'funnel' as const, label: 'Pipeline', icon: Layers },
-        ]).map(tab => (
-          <button
-            key={tab.key}
-            onClick={() => setConfigTab(tab.key)}
-            className={`flex items-center gap-1.5 px-3 py-2.5 text-sm border-b-2 -mb-px transition-colors whitespace-nowrap ${
-              configTab === tab.key
-                ? 'border-brand-600 text-brand-600 font-medium'
-                : 'border-transparent text-gray-500 hover:text-gray-700'
-            }`}
-          >
-            <tab.icon className="w-3.5 h-3.5" />
-            {tab.label}
-          </button>
-        ))}
-        <div className="w-px h-5 bg-gray-200 mx-1" />
-        {([
-          { key: 'schedule' as const, label: 'Schedule', icon: Clock },
-          { key: 'exclusions' as const, label: 'Exclusions', icon: Shield },
-          { key: 'feed' as const, label: 'Feed', icon: Rss },
-        ]).map(tab => (
-          <button
-            key={tab.key}
-            onClick={() => setConfigTab(tab.key)}
-            className={`flex items-center gap-1.5 px-2.5 py-2.5 text-xs border-b-2 -mb-px transition-colors whitespace-nowrap ${
-              configTab === tab.key
-                ? 'border-brand-600 text-brand-600 font-medium'
-                : 'border-transparent text-gray-400 hover:text-gray-600'
-            }`}
-          >
-            <tab.icon className="w-3 h-3" />
-            {tab.label}
-          </button>
-        ))}
+    <div className="space-y-4">
+      {/* Config summary card */}
+      <div className="bg-white rounded-xl border border-gray-200 p-4">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-sm">
+          <div>
+            <span className="text-xs text-gray-500">Steps</span>
+            <p className="font-medium text-gray-900">
+              {(campaign.funnel_config?.steps || []).filter((s: any) => s.enabled).length} active
+            </p>
+          </div>
+          <div>
+            <span className="text-xs text-gray-500">Signals</span>
+            <p className="font-medium text-gray-900">{campaign.target_signals.length} defined</p>
+          </div>
+          <div>
+            <span className="text-xs text-gray-500">Patterns</span>
+            <p className="font-medium text-gray-900">{campaign.search_patterns.length} verticals</p>
+          </div>
+          <div>
+            <span className="text-xs text-gray-500">Schedule</span>
+            <p className="font-medium text-gray-900">{campaign.schedule_enabled && campaign.schedule_cron ? describeCron(campaign.schedule_cron) : 'Off'}</p>
+          </div>
+          <div>
+            <span className="text-xs text-gray-500">Exclusions</span>
+            <p className="font-medium text-gray-900">{globalExclusions.length} global{campaign.exclusion_config?.additions?.length ? ` + ${campaign.exclusion_config.additions.length}` : ''}</p>
+          </div>
+        </div>
       </div>
 
-      <div className="p-6">
-        {/* Pipeline Funnel */}
-        {configTab === 'funnel' && (
-          <FunnelConfigurator
-            value={editConfig.funnel_config || {
-              version: 1,
-              steps: [
-                { id: 'discover', enabled: true, model: 'claude-haiku-4-5@20251001', max_tokens: 16384, candidate_limit: 50, source_strategy: 'search_augmented' as const, search_max_queries: 8, search_max_results_per_query: 5 },
-                { id: 'qualify', enabled: true, candidate_limit: 20, qualification_criteria: [], disqualification_criteria: [] },
-                { id: 'enrich', enabled: true, candidate_limit: 15 },
-                { id: 'score', enabled: true, model: 'claude-opus-4-6@default', max_tokens: 2048, candidate_limit: 10 },
-                { id: 'brief', enabled: true, model: 'claude-opus-4-6@default', max_tokens: 16384 },
-              ],
-            }}
-            onChange={(config) => {
-              setEditConfig({ ...editConfig, funnel_config: config });
-              setConfigDirty(true);
-            }}
-            dataSources={DATA_SOURCES}
-            orgICP={orgICP}
-            onRunStep={canEdit ? onRunStep : undefined}
-            readOnly={!canEdit}
-          />
-        )}
+      <div className="bg-white rounded-xl border border-gray-200">
+        {/* Config tabs */}
+        <div className="flex items-center border-b border-gray-200 px-4 gap-0.5 overflow-x-auto">
+          {configTabs.map(tab => (
+            <button
+              key={tab.key}
+              onClick={() => setConfigTab(tab.key)}
+              className={`flex items-center gap-1.5 px-3 py-2.5 text-sm border-b-2 -mb-px transition-colors whitespace-nowrap ${
+                configTab === tab.key
+                  ? 'border-brand-600 text-brand-600 font-medium'
+                  : 'border-transparent text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              <tab.icon className="w-3.5 h-3.5" />
+              {tab.label}
+            </button>
+          ))}
+        </div>
 
-        {/* Schedule */}
-        {configTab === 'schedule' && (
-          <ScheduleTab editConfig={editConfig} setEditConfig={setEditConfig} setConfigDirty={setConfigDirty} />
-        )}
+        <div className="p-6">
+          {/* Definition */}
+          {configTab === 'definition' && (
+            <DefinitionEditor
+              campaign={campaign}
+              campaignId={campaignId}
+              canEdit={canEdit}
+              onSaved={setCampaign}
+            />
+          )}
 
-        {/* Exclusions */}
-        {configTab === 'exclusions' && (
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <h4 className="text-sm font-medium text-gray-900">Campaign Exclusions</h4>
-              {campaign.exclusion_config ? (
-                <span className="text-xs px-2 py-0.5 bg-amber-50 text-amber-700 rounded-full">
-                  {(campaign.exclusion_config.additions?.length || 0)} additions, {(campaign.exclusion_config.exemptions?.length || 0)} exemptions
-                </span>
-              ) : (
-                <span className="text-xs px-2 py-0.5 bg-gray-100 text-gray-500 rounded-full">Using global exclusions only</span>
-              )}
-            </div>
-            <p className="text-xs text-gray-500">This campaign inherits all global exclusions. You can add campaign-specific exclusions or exempt specific global entries.</p>
-            {globalExclusions.length > 0 && (
-              <div>
-                <h5 className="text-xs font-semibold text-gray-500 uppercase mb-2">
-                  Global Exclusions ({globalExclusions.length})
-                  {(editConfig.exclusion_config?.exemptions || []).length > 0 && (
-                    <span className="text-amber-600 ml-1">- {editConfig.exclusion_config!.exemptions.length} exempted</span>
-                  )}
-                </h5>
-                <div className="max-h-48 overflow-y-auto border border-gray-200 rounded-lg divide-y divide-gray-100">
-                  {globalExclusions.map(exc => {
-                    const isExempt = (editConfig.exclusion_config?.exemptions || []).includes(exc.id);
-                    return (
-                      <div key={exc.id} className={`flex items-center justify-between px-3 py-2 text-sm ${isExempt ? 'bg-amber-50' : ''}`}>
-                        <div className="flex items-center gap-2">
-                          <span className={isExempt ? 'text-gray-400 line-through' : 'text-gray-700'}>{exc.company_name}</span>
-                          {exc.domain && <span className="text-xs text-gray-400">{exc.domain}</span>}
-                        </div>
-                        <button
-                          onClick={() => {
-                            const current = editConfig.exclusion_config || { additions: [], exemptions: [] };
-                            const exemptions = isExempt
-                              ? current.exemptions.filter((id: string) => id !== exc.id)
-                              : [...(current.exemptions || []), exc.id];
-                            setEditConfig({ ...editConfig, exclusion_config: { ...current, exemptions } });
-                            setConfigDirty(true);
-                          }}
-                          className={`text-xs px-2 py-0.5 rounded ${isExempt ? 'bg-amber-200 text-amber-800' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
-                        >
-                          {isExempt ? 'Exempted' : 'Exempt'}
-                        </button>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-            <div>
-              <h5 className="text-xs font-semibold text-gray-500 uppercase mb-2">Campaign-Specific Additions</h5>
-              {(editConfig.exclusion_config?.additions || []).map((a: any, i: number) => (
-                <div key={i} className="flex items-center gap-2 mb-2">
-                  <span className="text-sm text-gray-700">{a.company_name}</span>
-                  {a.domain && <span className="text-xs text-gray-400">{a.domain}</span>}
-                  {a.category && <ExclusionCategoryBadge category={a.category} />}
-                  <button
-                    onClick={() => {
-                      const additions = [...(editConfig.exclusion_config?.additions || [])];
-                      additions.splice(i, 1);
-                      setEditConfig({ ...editConfig, exclusion_config: { ...editConfig.exclusion_config!, additions, exemptions: editConfig.exclusion_config?.exemptions || [] } });
-                      setConfigDirty(true);
-                    }}
-                    className="text-xs text-red-500 hover:text-red-700 ml-auto"
-                  >Remove</button>
-                </div>
-              ))}
-              <AddExclusionInline onAdd={(company_name, domain, category) => {
-                const current = editConfig.exclusion_config || { additions: [], exemptions: [] };
-                setEditConfig({
-                  ...editConfig,
-                  exclusion_config: { ...current, additions: [...(current.additions || []), { company_name, domain, category }] },
-                });
+          {/* Pipeline Funnel */}
+          {configTab === 'funnel' && (
+            <FunnelConfigurator
+              value={editConfig.funnel_config || {
+                version: 1,
+                steps: [
+                  { id: 'discover', enabled: true, model: 'claude-haiku-4-5@20251001', max_tokens: 16384, candidate_limit: 50, source_strategy: 'search_augmented' as const, search_max_queries: 8, search_max_results_per_query: 5 },
+                  { id: 'qualify', enabled: true, candidate_limit: 20, qualification_criteria: [], disqualification_criteria: [] },
+                  { id: 'enrich', enabled: true, candidate_limit: 15 },
+                  { id: 'score', enabled: true, model: 'claude-opus-4-6@default', max_tokens: 2048, candidate_limit: 10 },
+                  { id: 'brief', enabled: true, model: 'claude-opus-4-6@default', max_tokens: 16384 },
+                ],
+              }}
+              onChange={(config) => {
+                setEditConfig({ ...editConfig, funnel_config: config });
                 setConfigDirty(true);
-              }} />
-            </div>
-          </div>
-        )}
+              }}
+              dataSources={DATA_SOURCES}
+              orgICP={orgICP}
+              onRunStep={canEditPipeline ? onRunStep : undefined}
+              readOnly={!canEditPipeline}
+            />
+          )}
 
-        {/* RSS Feed */}
-        {configTab === 'feed' && (
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <h4 className="text-sm font-medium text-gray-900">RSS Feed</h4>
-              <label className="flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={editConfig.rss_enabled}
-                  onChange={e => { setEditConfig({ ...editConfig, rss_enabled: e.target.checked }); setConfigDirty(true); }}
-                  className="rounded border-gray-300"
-                />
-                Enable RSS
-              </label>
-            </div>
-            {editConfig.rss_enabled && (
-              <>
-                <div className="bg-gray-50 rounded-lg p-3">
-                  <label className="block text-xs text-gray-500 mb-1">Feed URL</label>
-                  <div className="flex items-center gap-2">
-                    <code className="flex-1 text-xs bg-white border border-gray-200 rounded px-3 py-2 text-gray-700 truncate">
-                      {window.location.origin}/api/campaigns/{campaignId}/rss
-                    </code>
-                    <button onClick={copyRssUrl} className="flex items-center gap-1 px-3 py-2 text-xs border border-gray-200 rounded hover:bg-white transition-colors">
-                      {copiedRss ? <Check className="w-3.5 h-3.5 text-green-600" /> : <Copy className="w-3.5 h-3.5" />}
-                      {copiedRss ? 'Copied' : 'Copy'}
-                    </button>
+          {/* Schedule */}
+          {configTab === 'schedule' && (
+            canEditSchedule ? (
+              <ScheduleTab editConfig={editConfig} setEditConfig={setEditConfig} setConfigDirty={setConfigDirty} />
+            ) : (
+              <div className="text-center py-8 text-sm text-gray-400">You don't have permission to edit the schedule.</div>
+            )
+          )}
+
+          {/* Exclusions */}
+          {configTab === 'exclusions' && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <h4 className="text-sm font-medium text-gray-900">Campaign Exclusions</h4>
+                {campaign.exclusion_config ? (
+                  <span className="text-xs px-2 py-0.5 bg-amber-50 text-amber-700 rounded-full">
+                    {(campaign.exclusion_config.additions?.length || 0)} additions, {(campaign.exclusion_config.exemptions?.length || 0)} exemptions
+                  </span>
+                ) : (
+                  <span className="text-xs px-2 py-0.5 bg-gray-100 text-gray-500 rounded-full">Using global exclusions only</span>
+                )}
+              </div>
+              <p className="text-xs text-gray-500">This campaign inherits all global exclusions. You can add campaign-specific exclusions or exempt specific global entries.</p>
+              {globalExclusions.length > 0 && (
+                <div>
+                  <h5 className="text-xs font-semibold text-gray-500 uppercase mb-2">
+                    Global Exclusions ({globalExclusions.length})
+                    {(editConfig.exclusion_config?.exemptions || []).length > 0 && (
+                      <span className="text-amber-600 ml-1">- {editConfig.exclusion_config!.exemptions.length} exempted</span>
+                    )}
+                  </h5>
+                  <div className="max-h-48 overflow-y-auto border border-gray-200 rounded-lg divide-y divide-gray-100">
+                    {globalExclusions.map(exc => {
+                      const isExempt = (editConfig.exclusion_config?.exemptions || []).includes(exc.id);
+                      return (
+                        <div key={exc.id} className={`flex items-center justify-between px-3 py-2 text-sm ${isExempt ? 'bg-amber-50' : ''}`}>
+                          <div className="flex items-center gap-2">
+                            <span className={isExempt ? 'text-gray-400 line-through' : 'text-gray-700'}>{exc.company_name}</span>
+                            {exc.domain && <span className="text-xs text-gray-400">{exc.domain}</span>}
+                          </div>
+                          {canEditExclusions && (
+                            <button
+                              onClick={() => {
+                                const current = editConfig.exclusion_config || { additions: [], exemptions: [] };
+                                const exemptions = isExempt
+                                  ? current.exemptions.filter((id: string) => id !== exc.id)
+                                  : [...(current.exemptions || []), exc.id];
+                                setEditConfig({ ...editConfig, exclusion_config: { ...current, exemptions } });
+                                setConfigDirty(true);
+                              }}
+                              className={`text-xs px-2 py-0.5 rounded ${isExempt ? 'bg-amber-200 text-amber-800' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                            >
+                              {isExempt ? 'Exempted' : 'Exempt'}
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
-                <p className="text-xs text-gray-500">
-                  Subscribe to this feed in Slack using <code className="bg-gray-100 px-1 rounded">/feed {window.location.origin}/api/campaigns/{campaignId}/rss</code>
-                </p>
-              </>
+              )}
+              {canEditExclusions && (
+                <div>
+                  <h5 className="text-xs font-semibold text-gray-500 uppercase mb-2">Campaign-Specific Additions</h5>
+                  {(editConfig.exclusion_config?.additions || []).map((a: any, i: number) => (
+                    <div key={i} className="flex items-center gap-2 mb-2">
+                      <span className="text-sm text-gray-700">{a.company_name}</span>
+                      {a.domain && <span className="text-xs text-gray-400">{a.domain}</span>}
+                      {a.category && <ExclusionCategoryBadge category={a.category} />}
+                      <button
+                        onClick={() => {
+                          const additions = [...(editConfig.exclusion_config?.additions || [])];
+                          additions.splice(i, 1);
+                          setEditConfig({ ...editConfig, exclusion_config: { ...editConfig.exclusion_config!, additions, exemptions: editConfig.exclusion_config?.exemptions || [] } });
+                          setConfigDirty(true);
+                        }}
+                        className="text-xs text-red-500 hover:text-red-700 ml-auto"
+                      >Remove</button>
+                    </div>
+                  ))}
+                  <AddExclusionInline onAdd={(company_name, domain, category) => {
+                    const current = editConfig.exclusion_config || { additions: [], exemptions: [] };
+                    setEditConfig({
+                      ...editConfig,
+                      exclusion_config: { ...current, additions: [...(current.additions || []), { company_name, domain, category }] },
+                    });
+                    setConfigDirty(true);
+                  }} />
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* RSS Feed */}
+          {configTab === 'feed' && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <h4 className="text-sm font-medium text-gray-900">RSS Feed</h4>
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={editConfig.rss_enabled}
+                    onChange={e => { setEditConfig({ ...editConfig, rss_enabled: e.target.checked }); setConfigDirty(true); }}
+                    className="rounded border-gray-300"
+                  />
+                  Enable RSS
+                </label>
+              </div>
+              {editConfig.rss_enabled && (
+                <>
+                  <div className="bg-gray-50 rounded-lg p-3">
+                    <label className="block text-xs text-gray-500 mb-1">Feed URL</label>
+                    <div className="flex items-center gap-2">
+                      <code className="flex-1 text-xs bg-white border border-gray-200 rounded px-3 py-2 text-gray-700 truncate">
+                        {window.location.origin}/api/campaigns/{campaignId}/rss
+                      </code>
+                      <button onClick={copyRssUrl} className="flex items-center gap-1 px-3 py-2 text-xs border border-gray-200 rounded hover:bg-white transition-colors">
+                        {copiedRss ? <Check className="w-3.5 h-3.5 text-green-600" /> : <Copy className="w-3.5 h-3.5" />}
+                        {copiedRss ? 'Copied' : 'Copy'}
+                      </button>
+                    </div>
+                  </div>
+                  <p className="text-xs text-gray-500">
+                    Subscribe to this feed in Slack using <code className="bg-gray-100 px-1 rounded">/feed {window.location.origin}/api/campaigns/{campaignId}/rss</code>
+                  </p>
+                </>
+              )}
+            </div>
+          )}
+
+          {/* Save button (for pipeline/schedule/exclusions/feed changes) */}
+          {configDirty && configTab !== 'definition' && (canEditPipeline || canEditSchedule || canEditExclusions) && (
+            <div className="mt-6 pt-4 border-t border-gray-100 flex justify-end">
+              <button onClick={saveConfig} className="px-4 py-2 bg-brand-600 text-white rounded-lg hover:bg-brand-700 text-sm font-medium">
+                Save Configuration
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Definition Editor (inline campaign editing) ──────────────────
+
+interface DefinitionForm {
+  name: string;
+  description: string;
+  pattern_thesis: string;
+  example_companies: { name: string; domain: string; why_they_fit: string }[];
+  target_signals: string[];
+  anti_patterns: string[];
+  search_patterns: SearchPattern[];
+  value_prop_angle: string;
+  target_count: number;
+}
+
+function DefinitionEditor({ campaign, campaignId, canEdit, onSaved }: {
+  campaign: CampaignFull;
+  campaignId: string;
+  canEdit: boolean;
+  onSaved: (c: CampaignFull) => void;
+}) {
+  const [form, setForm] = useState<DefinitionForm>({
+    name: campaign.name,
+    description: campaign.description || '',
+    pattern_thesis: campaign.pattern_thesis,
+    example_companies: campaign.example_companies || [],
+    target_signals: campaign.target_signals || [],
+    anti_patterns: campaign.anti_patterns || [],
+    search_patterns: campaign.search_patterns || [],
+    value_prop_angle: campaign.value_prop_angle || '',
+    target_count: campaign.target_count,
+  });
+  const [dirty, setDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [tagInput, setTagInput] = useState<Record<string, string>>({});
+  const [expandedPattern, setExpandedPattern] = useState<number | null>(null);
+
+  const update = (patch: Partial<DefinitionForm>) => {
+    setForm(prev => ({ ...prev, ...patch }));
+    setDirty(true);
+  };
+
+  const addTag = (field: 'target_signals' | 'anti_patterns') => {
+    const val = (tagInput[field] || '').trim();
+    if (!val) return;
+    update({ [field]: [...form[field], val] });
+    setTagInput({ ...tagInput, [field]: '' });
+  };
+
+  const removeTag = (field: 'target_signals' | 'anti_patterns', idx: number) => {
+    update({ [field]: form[field].filter((_, i) => i !== idx) });
+  };
+
+  const handleSave = async () => {
+    if (!form.name || !form.pattern_thesis) {
+      alert('Name and pattern thesis are required.');
+      return;
+    }
+    setSaving(true);
+    try {
+      await api(`/campaigns/${campaignId}`, { method: 'PUT', body: JSON.stringify(form) });
+      const refreshed = await api<CampaignFull>(`/campaigns/${campaignId}`);
+      onSaved(refreshed);
+      setDirty(false);
+    } catch (err: any) {
+      alert(err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!canEdit) {
+    return (
+      <div className="space-y-4">
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-700">
+          You don't have permission to edit the campaign definition.
+        </div>
+        <InlineOverview campaign={campaign} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-5">
+      {/* Basics */}
+      <div className="space-y-3">
+        <div>
+          <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Campaign Name *</label>
+          <input
+            value={form.name}
+            onChange={(e) => update({ name: e.target.value })}
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+          />
+        </div>
+        <div>
+          <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Description</label>
+          <textarea
+            value={form.description}
+            onChange={(e) => update({ description: e.target.value })}
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+            rows={2}
+          />
+        </div>
+      </div>
+
+      {/* Pattern */}
+      <div className="space-y-3">
+        <div>
+          <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Pattern Thesis *</label>
+          <textarea
+            value={form.pattern_thesis}
+            onChange={(e) => update({ pattern_thesis: e.target.value })}
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+            rows={4}
+          />
+        </div>
+        <div>
+          <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Value Prop Angle</label>
+          <textarea
+            value={form.value_prop_angle}
+            onChange={(e) => update({ value_prop_angle: e.target.value })}
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+            rows={2}
+          />
+        </div>
+        <div>
+          <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Target Candidate Count</label>
+          <input
+            type="number"
+            value={form.target_count}
+            onChange={(e) => update({ target_count: parseInt(e.target.value) || 12 })}
+            className="w-24 px-3 py-2 border border-gray-300 rounded-lg text-sm"
+            min={5} max={50}
+          />
+        </div>
+      </div>
+
+      {/* Target Signals */}
+      <div>
+        <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Target Signals</label>
+        <div className="flex flex-wrap gap-1.5 mb-2">
+          {form.target_signals.map((s, i) => (
+            <span key={i} className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700">
+              {s}
+              <button onClick={() => removeTag('target_signals', i)} className="hover:opacity-70"><X className="w-3 h-3" /></button>
+            </span>
+          ))}
+        </div>
+        <div className="flex gap-2">
+          <input
+            value={tagInput.target_signals || ''}
+            onChange={(e) => setTagInput({ ...tagInput, target_signals: e.target.value })}
+            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addTag('target_signals'); } }}
+            className="flex-1 px-3 py-1.5 border border-gray-300 rounded text-sm"
+            placeholder="Add signal..."
+          />
+          <button onClick={() => addTag('target_signals')} className="px-3 py-1.5 text-sm text-brand-600 border border-brand-300 rounded hover:bg-brand-50">Add</button>
+        </div>
+      </div>
+
+      {/* Anti-Patterns */}
+      <div>
+        <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Anti-Patterns</label>
+        <div className="flex flex-wrap gap-1.5 mb-2">
+          {form.anti_patterns.map((a, i) => (
+            <span key={i} className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-red-50 text-red-700">
+              {a}
+              <button onClick={() => removeTag('anti_patterns', i)} className="hover:opacity-70"><X className="w-3 h-3" /></button>
+            </span>
+          ))}
+        </div>
+        <div className="flex gap-2">
+          <input
+            value={tagInput.anti_patterns || ''}
+            onChange={(e) => setTagInput({ ...tagInput, anti_patterns: e.target.value })}
+            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addTag('anti_patterns'); } }}
+            className="flex-1 px-3 py-1.5 border border-gray-300 rounded text-sm"
+            placeholder="Add anti-pattern..."
+          />
+          <button onClick={() => addTag('anti_patterns')} className="px-3 py-1.5 text-sm text-brand-600 border border-brand-300 rounded hover:bg-brand-50">Add</button>
+        </div>
+      </div>
+
+      {/* Example Companies */}
+      <div>
+        <div className="flex items-center justify-between mb-2">
+          <label className="text-xs font-semibold text-gray-500 uppercase">Example Companies</label>
+          <button onClick={() => update({ example_companies: [...form.example_companies, { name: '', domain: '', why_they_fit: '' }] })} className="text-xs text-brand-600 hover:text-brand-700">+ Add</button>
+        </div>
+        {form.example_companies.map((ex, idx) => (
+          <div key={idx} className="relative bg-gray-50 rounded-lg p-3 mb-2">
+            <button onClick={() => update({ example_companies: form.example_companies.filter((_, i) => i !== idx) })} className="absolute top-2 right-2 text-gray-400 hover:text-red-500"><X className="w-3.5 h-3.5" /></button>
+            <div className="grid grid-cols-2 gap-2 mb-2">
+              <input value={ex.name} onChange={e => { const u = [...form.example_companies]; u[idx] = { ...u[idx], name: e.target.value }; update({ example_companies: u }); }} className="px-2 py-1 border border-gray-300 rounded text-sm" placeholder="Company" />
+              <input value={ex.domain} onChange={e => { const u = [...form.example_companies]; u[idx] = { ...u[idx], domain: e.target.value }; update({ example_companies: u }); }} className="px-2 py-1 border border-gray-300 rounded text-sm" placeholder="domain.com" />
+            </div>
+            <textarea value={ex.why_they_fit} onChange={e => { const u = [...form.example_companies]; u[idx] = { ...u[idx], why_they_fit: e.target.value }; update({ example_companies: u }); }} className="w-full px-2 py-1 border border-gray-300 rounded text-sm" rows={2} placeholder="Why they fit" />
+          </div>
+        ))}
+      </div>
+
+      {/* Search Patterns (collapsed summary) */}
+      <div>
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-2">
+            <Layers className="w-3.5 h-3.5 text-brand-600" />
+            <label className="text-xs font-semibold text-gray-500 uppercase">Search Patterns ({form.search_patterns.length})</label>
+          </div>
+          <button onClick={() => { update({ search_patterns: [...form.search_patterns, { name: '', description: '', examples: [], keywords: [] }] }); setExpandedPattern(form.search_patterns.length); }} className="text-xs text-brand-600 hover:text-brand-700">+ Add Pattern</button>
+        </div>
+        {form.search_patterns.map((sp, idx) => (
+          <div key={idx} className={`border rounded-lg mb-2 overflow-hidden ${expandedPattern === idx ? 'border-brand-200' : 'border-gray-200'}`}>
+            <div className="flex items-center gap-2 px-3 py-2 bg-white cursor-pointer" onClick={() => setExpandedPattern(expandedPattern === idx ? null : idx)}>
+              <span className="text-xs text-gray-400 font-mono w-4">{idx + 1}.</span>
+              <span className="flex-1 text-sm font-medium text-gray-900">{sp.name || 'Untitled'}</span>
+              <span className="text-xs text-gray-400">{sp.examples.length} ex, {sp.keywords.length} kw</span>
+              <button onClick={e => { e.stopPropagation(); update({ search_patterns: form.search_patterns.filter((_, i) => i !== idx) }); }} className="text-gray-400 hover:text-red-500 p-0.5"><X className="w-3 h-3" /></button>
+              {expandedPattern === idx ? <ChevronUp className="w-3.5 h-3.5 text-gray-400" /> : <ChevronDown className="w-3.5 h-3.5 text-gray-400" />}
+            </div>
+            {expandedPattern === idx && (
+              <div className="px-3 pb-3 pt-2 space-y-3 border-t border-gray-100">
+                <input value={sp.name} onChange={e => { const u = [...form.search_patterns]; u[idx] = { ...u[idx], name: e.target.value }; update({ search_patterns: u }); }} className="w-full px-2 py-1 border border-gray-300 rounded text-sm" placeholder="Pattern name" />
+                <textarea value={sp.description} onChange={e => { const u = [...form.search_patterns]; u[idx] = { ...u[idx], description: e.target.value }; update({ search_patterns: u }); }} className="w-full px-2 py-1 border border-gray-300 rounded text-sm" rows={2} placeholder="Description" />
+                <InlineTagList label="Examples" tags={sp.examples} color="indigo" onUpdate={tags => { const u = [...form.search_patterns]; u[idx] = { ...u[idx], examples: tags }; update({ search_patterns: u }); }} />
+                <InlineTagList label="Keywords" tags={sp.keywords} color="amber" onUpdate={tags => { const u = [...form.search_patterns]; u[idx] = { ...u[idx], keywords: tags }; update({ search_patterns: u }); }} />
+              </div>
             )}
           </div>
-        )}
-
-        {/* Save button */}
-        {configDirty && canEdit && (
-          <div className="mt-6 pt-4 border-t border-gray-100 flex justify-end">
-            <button onClick={saveConfig} className="px-4 py-2 bg-brand-600 text-white rounded-lg hover:bg-brand-700 text-sm font-medium">
-              Save Configuration
-            </button>
-          </div>
-        )}
+        ))}
       </div>
+
+      {/* Save */}
+      {dirty && (
+        <div className="pt-4 border-t border-gray-100 flex items-center gap-3">
+          <button onClick={handleSave} disabled={saving} className="px-4 py-2 bg-brand-600 text-white rounded-lg hover:bg-brand-700 text-sm font-medium disabled:opacity-50">
+            {saving ? 'Saving...' : 'Save Definition'}
+          </button>
+          <button onClick={() => { setForm({ name: campaign.name, description: campaign.description || '', pattern_thesis: campaign.pattern_thesis, example_companies: campaign.example_companies || [], target_signals: campaign.target_signals || [], anti_patterns: campaign.anti_patterns || [], search_patterns: campaign.search_patterns || [], value_prop_angle: campaign.value_prop_angle || '', target_count: campaign.target_count }); setDirty(false); }} className="px-4 py-2 text-gray-600 hover:text-gray-900 text-sm">
+            Discard
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function InlineTagList({ label, tags, color, onUpdate }: { label: string; tags: string[]; color: string; onUpdate: (tags: string[]) => void }) {
+  const [input, setInput] = useState('');
+  const colorMap: Record<string, string> = { indigo: 'bg-indigo-50 text-indigo-700', amber: 'bg-amber-50 text-amber-700', emerald: 'bg-emerald-50 text-emerald-700', red: 'bg-red-50 text-red-700' };
+  const add = () => { const v = input.trim(); if (v && !tags.includes(v)) { onUpdate([...tags, v]); setInput(''); } };
+  return (
+    <div>
+      <label className="block text-xs text-gray-500 mb-1">{label}</label>
+      <div className="flex flex-wrap gap-1 mb-1.5">
+        {tags.map((t, i) => (
+          <span key={i} className={`flex items-center gap-1 text-xs px-2 py-0.5 rounded-full ${colorMap[color] || 'bg-gray-100 text-gray-700'}`}>
+            {t}
+            <button onClick={() => onUpdate(tags.filter((_, j) => j !== i))} className="hover:opacity-70"><X className="w-2.5 h-2.5" /></button>
+          </span>
+        ))}
+      </div>
+      <div className="flex gap-1.5">
+        <input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); add(); } }} className="flex-1 px-2 py-1 border border-gray-300 rounded text-xs" placeholder={`Add ${label.toLowerCase()}...`} />
+        <button onClick={add} className="px-2 py-1 text-xs text-brand-600 border border-brand-300 rounded hover:bg-brand-50">Add</button>
+      </div>
+    </div>
+  );
+}
+
+function InlineOverview({ campaign }: { campaign: CampaignFull }) {
+  return (
+    <div className="space-y-4">
+      <div>
+        <h4 className="text-xs font-semibold text-gray-500 uppercase mb-1">Pattern Thesis</h4>
+        <p className="text-sm text-gray-700 whitespace-pre-wrap">{campaign.pattern_thesis}</p>
+      </div>
+      {campaign.target_signals.length > 0 && (
+        <div>
+          <h4 className="text-xs font-semibold text-gray-500 uppercase mb-1">Target Signals</h4>
+          <div className="flex flex-wrap gap-1.5">
+            {campaign.target_signals.map(s => <span key={s} className="text-xs px-2 py-0.5 bg-emerald-50 text-emerald-700 rounded-full">{s}</span>)}
+          </div>
+        </div>
+      )}
+      {campaign.anti_patterns.length > 0 && (
+        <div>
+          <h4 className="text-xs font-semibold text-gray-500 uppercase mb-1">Anti-Patterns</h4>
+          <div className="flex flex-wrap gap-1.5">
+            {campaign.anti_patterns.map(a => <span key={a} className="text-xs px-2 py-0.5 bg-red-50 text-red-700 rounded-full">{a}</span>)}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

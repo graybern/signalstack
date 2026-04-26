@@ -492,4 +492,28 @@ function initSchema(db: Database.Database) {
       CREATE INDEX IF NOT EXISTS idx_runs_campaign_id ON pipeline_runs(campaign_id);
     `);
   }
+
+  // User activity log — audit trail for all entity changes
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS activity_log (
+      id              TEXT PRIMARY KEY,
+      user_id         TEXT NOT NULL,
+      entity_type     TEXT NOT NULL,
+      entity_id       TEXT NOT NULL,
+      entity_title    TEXT,
+      action          TEXT NOT NULL,
+      changes         TEXT,
+      snapshot        TEXT,
+      created_at      TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_actlog_user ON activity_log(user_id);
+    CREATE INDEX IF NOT EXISTS idx_actlog_entity ON activity_log(entity_type, entity_id);
+    CREATE INDEX IF NOT EXISTS idx_actlog_created ON activity_log(created_at DESC);
+  `);
+
+  // Add action_data column to ai_recommendations
+  const recCols = db.prepare("PRAGMA table_info(ai_recommendations)").all() as { name: string }[];
+  if (!recCols.find(c => c.name === 'action_data')) {
+    db.exec("ALTER TABLE ai_recommendations ADD COLUMN action_data TEXT");
+  }
 }

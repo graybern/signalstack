@@ -4,6 +4,7 @@ import crypto from 'crypto';
 import { v4 as uuid } from 'uuid';
 import { getDb } from '../db/schema.js';
 import { authenticate, requireAdmin, requireSuperAdmin, hasRole, AuthRequest } from '../auth/middleware.js';
+import { logActivity } from '../services/activityLog.js';
 import type { UserRole } from '../types/index.js';
 
 const router = Router();
@@ -46,7 +47,7 @@ router.patch('/:id/role', authenticate, requireAdmin, (req: AuthRequest, res: Re
   }
 
   const db = getDb();
-  const target = db.prepare('SELECT id, role FROM users WHERE id = ?').get(targetId) as any;
+  const target = db.prepare('SELECT id, email, display_name, role FROM users WHERE id = ?').get(targetId) as any;
   if (!target) return res.status(404).json({ error: 'User not found' });
 
   // Only superadmins can assign/remove superadmin role
@@ -65,6 +66,16 @@ router.patch('/:id/role', authenticate, requireAdmin, (req: AuthRequest, res: Re
   }
 
   db.prepare('UPDATE users SET role = ? WHERE id = ?').run(role, targetId);
+
+  logActivity({
+    userId: actor.id,
+    entityType: 'user',
+    entityId: targetId,
+    entityTitle: target.display_name || target.email,
+    action: 'updated',
+    changes: { role: { old: target.role, new: role } },
+  });
+
   res.json({ success: true });
 });
 
@@ -226,7 +237,7 @@ router.delete('/:id', authenticate, requireAdmin, (req: AuthRequest, res: Respon
   }
 
   const db = getDb();
-  const target = db.prepare('SELECT id, role FROM users WHERE id = ?').get(targetId) as any;
+  const target = db.prepare('SELECT id, email, display_name, role FROM users WHERE id = ?').get(targetId) as any;
   if (!target) return res.status(404).json({ error: 'User not found' });
 
   // Only superadmins can delete admins or other superadmins
@@ -235,6 +246,16 @@ router.delete('/:id', authenticate, requireAdmin, (req: AuthRequest, res: Respon
   }
 
   db.prepare('DELETE FROM users WHERE id = ?').run(targetId);
+
+  logActivity({
+    userId: actor.id,
+    entityType: 'user',
+    entityId: targetId,
+    entityTitle: target.display_name || target.email,
+    action: 'deleted',
+    snapshot: { id: target.id, role: target.role, email: target.email, display_name: target.display_name },
+  });
+
   res.json({ success: true });
 });
 

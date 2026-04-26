@@ -1,8 +1,16 @@
 import { createAIClient, getAIConfig, resolveModel } from '../config/vertexConfig.js';
+import { streamAICall } from './streamingAI.js';
 import { getScoringPrompt } from './prompts/scoring.js';
 import type { ICPConfigParsed, ScoreBreakdown, FunnelStepConfig } from '../types/index.js';
 import type { ResearchCandidate } from './researcher.js';
 import type { TokenTracker } from './tokenTracker.js';
+
+export interface StreamContext {
+  runId: string;
+  campaignId?: string;
+  phase: string;
+  companyName?: string;
+}
 
 export interface ScoringResult {
   fit_score: number;
@@ -30,7 +38,8 @@ export async function scoreCandidate(
   model?: string,
   tracker?: TokenTracker,
   promptInstructions?: string,
-  stepConfig?: FunnelStepConfig
+  stepConfig?: FunnelStepConfig,
+  streamCtx?: StreamContext
 ): Promise<ScoringResult> {
   const aiConfig = getAIConfig();
   const client = await createAIClient();
@@ -81,21 +90,38 @@ ${candidate.notes}
 
 Score this company using the rubric. Apply the Evidence Density Modifier: ${signalCount} signals from ${sourceCount} sources should directly influence where you place scores within each tier. Cite specific signal counts in each category's evidence array.${promptInstructions ? `\n\n## Additional Instructions\n${promptInstructions}` : ''}`;
 
-  const response = await client.messages.create({
-    model: resolveModel(model || aiConfig.defaultModel, aiConfig.provider),
-    max_tokens: 4096,
-    system: systemPrompt,
-    messages: [{ role: 'user', content: userMessage }],
-  });
+  let rawText: string;
+  let thinkingText = '';
 
-  if (tracker) tracker.addUsage(response);
+  if (streamCtx) {
+    const result = await streamAICall({
+      model: model || aiConfig.defaultModel,
+      max_tokens: 4096,
+      system: systemPrompt,
+      userMessage,
+      thinking_budget: 8000,
+      tracker,
+      context: { ...streamCtx, companyName: candidate.company_name },
+    });
+    rawText = result.text;
+    thinkingText = result.thinking;
+  } else {
+    const response = await client.messages.create({
+      model: resolveModel(model || aiConfig.defaultModel, aiConfig.provider),
+      max_tokens: 4096,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: userMessage }],
+    });
+    if (tracker) tracker.addUsage(response);
+    rawText = response.content[0].type === 'text' ? response.content[0].text : '';
+  }
 
-  const rawText = response.content[0].type === 'text' ? response.content[0].text : '';
   const jsonStr = extractJson(rawText);
 
-  // Extract reasoning (text before the JSON block)
+  // Extract reasoning (text before the JSON block, or thinking if streamed)
   const jsonStart = rawText.indexOf(jsonStr);
-  const reasoning = jsonStart > 0 ? rawText.substring(0, jsonStart).trim() : undefined;
+  const textReasoning = jsonStart > 0 ? rawText.substring(0, jsonStart).trim() : undefined;
+  const reasoning = thinkingText || textReasoning;
 
   try {
     const result = JSON.parse(jsonStr);

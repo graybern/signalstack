@@ -150,6 +150,15 @@ export interface EventPayloads {
       estimated_cost: number;
     };
   };
+  'run.ai_stream': {
+    run_id: string;
+    campaign_id?: string;
+    phase: string;
+    company_name?: string;
+    block_type: 'thinking' | 'text';
+    delta: string;
+    done: boolean;
+  };
 }
 
 export type EventType = keyof EventPayloads;
@@ -243,6 +252,7 @@ export class EventBus {
       'import.failed',
       'convergence.detected',
       'run.activity',
+      'run.ai_stream',
     ];
   }
 }

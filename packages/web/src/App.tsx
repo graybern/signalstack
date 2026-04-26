@@ -13,6 +13,7 @@ import { Campaigns } from './pages/Campaigns';
 import { CampaignDetail } from './pages/CampaignDetail';
 import { CampaignCreate } from './pages/CampaignCreate';
 import { Inbound } from './pages/Inbound';
+import { ActivityLog } from './pages/ActivityLog';
 import React, { createContext, useContext } from 'react';
 
 interface AuthContextType {
@@ -59,6 +60,7 @@ export default function App() {
             <Route path="leads/:id" element={<LeadDetail />} />
             <Route path="runs" element={<RunHistory />} />
             <Route path="runs/:id" element={<RunDetail />} />
+            <Route path="activity" element={<ActivityLog />} />
             {/* Connect */}
             <Route path="import" element={<Inbound />} />
             <Route path="export" element={<ExportPage />} />

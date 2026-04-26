@@ -14,6 +14,7 @@ import {
   Building2,
   AppWindow,
   ChevronDown,
+  ClipboardList,
 } from 'lucide-react';
 import { useState, useRef, useEffect } from 'react';
 import { permissions } from '../utils/permissions';
@@ -42,6 +43,7 @@ export function Layout() {
         { to: '/campaigns', icon: Target, label: 'Campaigns' },
         { to: '/leads', icon: Users, label: 'Leads' },
         { to: '/runs', icon: History, label: 'Run History' },
+        ...(permissions.canAccessSettings(role) ? [{ to: '/activity', icon: ClipboardList, label: 'Activity Log' }] : []),
       ],
     },
     ...(permissions.canViewConnect(role) ? [{

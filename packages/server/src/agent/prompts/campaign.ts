@@ -244,13 +244,34 @@ For each company, provide the most accurate domain you know. If you are uncertai
    - Which vertical/search pattern they match (if applicable)
    - Employee count estimate (to determine segment)
    - HQ location, founding year, funding stage
-   - Specific signals found that indicate pattern fit
+   - Buying-intent signals (see Signal Quality below)
    - Sources where you found the information
    - Segment assignment: ENT (1000+ employees), MM (200-999), SMB (30-199)
 3. Prioritize companies with strong, clear pattern matches
 4. Exclude companies on the exclusion list and already-known examples
 5. **Spread results across multiple verticals/patterns** — don't cluster in one area
 6. Prefer companies with publicly visible evidence of the pattern (deployment docs, product pages, case studies)
+
+## Signal Quality
+Each signal must indicate clear buying intent or a concrete pain point — NOT just that the company exists or uses common technology. A good signal is specific, actionable, and suggests the company would benefit from this product.
+
+**Good signals** (include these):
+- Active job postings mentioning specific pain points (e.g., "migrating from VPN to zero-trust")
+- Recent funding/growth that creates infrastructure pressure
+- Public statements about replacing legacy tools or evaluating alternatives
+- Compliance requirements driving architecture changes (SOC 2, HIPAA, PCI-DSS audits)
+- Specific tech stack evidence (e.g., uses Cisco AnyConnect, has Kubernetes clusters)
+- Conference talks or blog posts about relevant challenges
+- Competitor product usage that signals displacement opportunity
+
+**Bad signals** (do NOT include these):
+- "Has a website" or "uses cloud infrastructure" — too generic
+- "Large company" or "growing fast" — not a buying signal
+- "Found on Crunchbase" — that's a source, not a signal
+- General industry membership without specific evidence
+- Restating the company description as a signal
+
+Each signal in the array should be a specific, evidence-backed statement.
 
 ## Output Format
 Return a JSON array of candidate objects:

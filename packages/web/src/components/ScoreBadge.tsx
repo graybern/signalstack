@@ -6,9 +6,9 @@ interface ScoreBadgeProps {
 }
 
 export function ScoreBadge({ score, size = 'md' }: ScoreBadgeProps) {
-  const color = score >= 80 ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
-    : score >= 60 ? 'bg-amber-100 text-amber-800 border-amber-200'
-    : score >= 40 ? 'bg-orange-100 text-orange-800 border-orange-200'
+  const color = score >= 70 ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
+    : score >= 55 ? 'bg-amber-100 text-amber-800 border-amber-200'
+    : score >= 35 ? 'bg-orange-100 text-orange-800 border-orange-200'
     : 'bg-red-100 text-red-800 border-red-200';
 
   const sizeClass = size === 'sm' ? 'w-8 h-8 text-xs'
@@ -23,10 +23,10 @@ export function ScoreBadge({ score, size = 'md' }: ScoreBadgeProps) {
 }
 
 export function ScoreLabel({ score }: { score: number }) {
-  if (score >= 90) return <span className="text-emerald-700 font-medium">Extremely High</span>;
-  if (score >= 75) return <span className="text-emerald-600 font-medium">High</span>;
-  if (score >= 60) return <span className="text-amber-600 font-medium">Medium</span>;
-  if (score >= 40) return <span className="text-orange-600 font-medium">Low</span>;
+  if (score >= 85) return <span className="text-emerald-700 font-medium">Extremely High</span>;
+  if (score >= 70) return <span className="text-emerald-600 font-medium">High</span>;
+  if (score >= 55) return <span className="text-amber-600 font-medium">Medium</span>;
+  if (score >= 35) return <span className="text-orange-600 font-medium">Low</span>;
   return <span className="text-red-600 font-medium">Very Low</span>;
 }
 

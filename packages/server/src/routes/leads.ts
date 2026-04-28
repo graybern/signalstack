@@ -1,7 +1,8 @@
 import { Router, Response } from 'express';
 import { v4 as uuid } from 'uuid';
 import { getDb } from '../db/schema.js';
-import { authenticate, AuthRequest } from '../auth/middleware.js';
+import { authenticate, AuthRequest, requireOperator, requireAdmin } from '../auth/middleware.js';
+import { logActivity } from '../services/activityLog.js';
 import type { Lead, Persona, LeadFeedback } from '../types/index.js';
 
 const router = Router();
@@ -90,6 +91,43 @@ router.get('/stats', authenticate, (_req: AuthRequest, res: Response) => {
     with_feedback: withFeedback,
     feedback_breakdown: feedbackBreakdown,
   });
+});
+
+// Export briefs as markdown files (JSON payload for frontend zip)
+router.get('/export/briefs', authenticate, (req: AuthRequest, res: Response) => {
+  const { campaign_id, segment, run_id, feedback, min_score, max_score } = req.query;
+  const db = getDb();
+  const conditions: string[] = ["l.brief_markdown IS NOT NULL AND l.brief_markdown != ''"];
+  const params: any[] = [];
+
+  if (campaign_id) { conditions.push('l.campaign_id = ?'); params.push(campaign_id); }
+  if (segment) { conditions.push('l.segment = ?'); params.push(segment); }
+  if (run_id) { conditions.push('l.run_id = ?'); params.push(run_id); }
+  if (feedback) { conditions.push('l.current_feedback = ?'); params.push(feedback); }
+  if (min_score) { conditions.push('l.fit_score >= ?'); params.push(parseInt(min_score as string)); }
+  if (max_score) { conditions.push('l.fit_score <= ?'); params.push(parseInt(max_score as string)); }
+
+  const where = `WHERE ${conditions.join(' AND ')}`;
+
+  const leads = db.prepare(
+    `SELECT l.company_name, l.domain, l.segment, l.fit_score, l.brief_markdown
+     FROM leads l
+     ${where}
+     ORDER BY l.fit_score DESC`
+  ).all(...params) as any[];
+
+  const briefs = leads.map(l => {
+    const slug = l.company_name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+    return {
+      filename: `${slug}-brief`,
+      company_name: l.company_name,
+      segment: l.segment,
+      fit_score: l.fit_score,
+      markdown: l.brief_markdown,
+    };
+  });
+
+  res.json({ briefs, total: briefs.length });
 });
 
 // Export leads as JSON/CSV
@@ -231,6 +269,101 @@ router.post('/:id/feedback', authenticate, (req: AuthRequest, res: Response) => 
   res.json({ success: true });
 });
 
+// Delete all leads from a specific run
+router.delete('/by-run/:runId', authenticate, requireOperator, (req: AuthRequest, res: Response) => {
+  const db = getDb();
+  const run = db.prepare('SELECT id, campaign_id FROM pipeline_runs WHERE id = ?').get(req.params.runId) as any;
+  if (!run) return res.status(404).json({ error: 'Run not found' });
+
+  const leads = db.prepare('SELECT id, company_name FROM leads WHERE run_id = ?').all(req.params.runId) as any[];
+  const deleteTx = db.transaction(() => {
+    for (const lead of leads) {
+      db.prepare('DELETE FROM lead_feedback WHERE lead_id = ?').run(lead.id);
+    }
+    db.prepare('DELETE FROM leads WHERE run_id = ?').run(req.params.runId);
+  });
+  deleteTx();
+
+  logActivity({
+    userId: req.user!.id,
+    entityType: 'lead',
+    entityId: req.params.runId,
+    entityTitle: `Cleared ${leads.length} leads from run`,
+    action: 'deleted',
+    snapshot: { lead_count: leads.length, companies: leads.map(l => l.company_name) },
+  });
+
+  res.json({ success: true, deleted: leads.length });
+});
+
+// Bulk delete leads (admin only) — supports ids array, campaign_id query, or all
+router.delete('/', authenticate, requireAdmin, (req: AuthRequest, res: Response) => {
+  const db = getDb();
+  const { campaign_id } = req.query;
+  const ids = req.body?.ids as string[] | undefined;
+
+  let count: number;
+  const deleteTx = db.transaction(() => {
+    if (ids && Array.isArray(ids) && ids.length > 0) {
+      for (const id of ids) {
+        db.prepare('DELETE FROM personas WHERE lead_id = ?').run(id);
+        db.prepare('DELETE FROM lead_feedback WHERE lead_id = ?').run(id);
+        db.prepare('DELETE FROM leads WHERE id = ?').run(id);
+      }
+      count = ids.length;
+    } else if (campaign_id) {
+      const leads = db.prepare('SELECT id FROM leads WHERE campaign_id = ?').all(campaign_id as string) as any[];
+      for (const lead of leads) {
+        db.prepare('DELETE FROM personas WHERE lead_id = ?').run(lead.id);
+        db.prepare('DELETE FROM lead_feedback WHERE lead_id = ?').run(lead.id);
+      }
+      const result = db.prepare('DELETE FROM leads WHERE campaign_id = ?').run(campaign_id as string);
+      count = result.changes;
+    } else {
+      db.prepare('DELETE FROM personas').run();
+      db.prepare('DELETE FROM lead_feedback').run();
+      const result = db.prepare('DELETE FROM leads').run();
+      count = result.changes;
+    }
+  });
+  deleteTx();
+
+  logActivity({
+    userId: req.user!.id,
+    entityType: 'lead',
+    entityId: ids ? 'bulk' : campaign_id as string || 'all',
+    entityTitle: `Bulk deleted ${count!} leads${ids ? ' (selected)' : campaign_id ? ' from campaign' : ''}`,
+    action: 'deleted',
+    snapshot: { count: count!, campaign_id: campaign_id || null, ids: ids || null },
+  });
+
+  res.json({ success: true, deleted: count! });
+});
+
+// Delete a single lead (must be after /by-run to avoid route conflict)
+router.delete('/:id', authenticate, requireOperator, (req: AuthRequest, res: Response) => {
+  const db = getDb();
+  const lead = db.prepare('SELECT id, company_name, campaign_id FROM leads WHERE id = ?').get(req.params.id) as any;
+  if (!lead) return res.status(404).json({ error: 'Lead not found' });
+
+  const deleteTx = db.transaction(() => {
+    db.prepare('DELETE FROM lead_feedback WHERE lead_id = ?').run(req.params.id);
+    db.prepare('DELETE FROM leads WHERE id = ?').run(req.params.id);
+  });
+  deleteTx();
+
+  logActivity({
+    userId: req.user!.id,
+    entityType: 'lead',
+    entityId: req.params.id,
+    entityTitle: lead.company_name,
+    action: 'deleted',
+    snapshot: lead,
+  });
+
+  res.json({ success: true, deleted: 1 });
+});
+
 function parseLead(row: any) {
   const lead = { ...row };
   try { lead.personas = JSON.parse(row.personas_json || '[]').filter((p: any) => p.id !== null); } catch { lead.personas = []; }
@@ -243,6 +376,7 @@ function parseLead(row: any) {
   try { lead.why_now_parsed = JSON.parse(row.why_now); } catch { lead.why_now_parsed = null; }
   try { lead.investors_parsed = JSON.parse(row.investors); } catch { lead.investors_parsed = null; }
   try { lead.outreach_strategy_parsed = JSON.parse(row.outreach_strategy); } catch { lead.outreach_strategy_parsed = null; }
+  try { lead.candidate_data_parsed = JSON.parse(row.candidate_data); } catch { lead.candidate_data_parsed = null; }
 
   let signalCount = 0;
   if (lead.sources_parsed && Array.isArray(lead.sources_parsed)) signalCount += lead.sources_parsed.length;

@@ -1,10 +1,12 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api/client';
+import { useAuth } from '../hooks/useAuth';
 import {
   Clock, CheckCircle, XCircle, AlertCircle, RefreshCw, Target,
   DollarSign, ChevronDown, ChevronUp, Calendar, Filter,
-  TrendingUp, Users, Loader2, Activity, Eye,
+  TrendingUp, Users, Loader2, Activity, Eye, Trash2, AlertTriangle,
+  X, Hash,
 } from 'lucide-react';
 import { ScoreBadge, SegmentBadge } from '../components/ScoreBadge';
 import { TokenCounter } from '../components/TokenCounter';
@@ -39,6 +41,7 @@ interface Run {
   started_at: string | null;
   completed_at: string | null;
   created_at: string;
+  run_number: number;
 }
 
 interface UpcomingRun {
@@ -63,6 +66,9 @@ interface ProgressData {
 }
 
 export function RunHistory() {
+  const { user } = useAuth();
+  const isSuperAdmin = user?.role === 'superadmin';
+
   const [runs, setRuns] = useState<Run[]>([]);
   const [stats, setStats] = useState<RunStats | null>(null);
   const [upcoming, setUpcoming] = useState<UpcomingRun[]>([]);
@@ -73,13 +79,21 @@ export function RunHistory() {
   const [liveProgress, setLiveProgress] = useState<Record<string, ProgressData>>({});
   const [activityRunId, setActivityRunId] = useState<string | null>(null);
 
+  // Selection for bulk delete
+  const [selectedRuns, setSelectedRuns] = useState<Set<string>>(new Set());
+  const [deleteConfirm, setDeleteConfirm] = useState<{ type: 'single' | 'bulk'; ids: string[]; leadCount: number } | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
   // Filters
   const [filterType, setFilterType] = useState('');
   const [filterCampaign, setFilterCampaign] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
+  const [filterDateFrom, setFilterDateFrom] = useState('');
+  const [filterDateTo, setFilterDateTo] = useState('');
+  const [filterTriggeredBy, setFilterTriggeredBy] = useState('');
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [campaigns, setCampaigns] = useState<{ id: string; name: string }[]>([]);
 
-  // SSE for live progress
   const { subscribe } = useEventStream({
     types: ['pipeline.progress', 'campaign.progress', 'pipeline.completed', 'campaign.completed', 'pipeline.failed', 'campaign.failed', 'pipeline.started', 'campaign.started'],
   });
@@ -90,6 +104,8 @@ export function RunHistory() {
       if (filterType) params.set('type', filterType);
       if (filterCampaign) params.set('campaign_id', filterCampaign);
       if (filterStatus) params.set('status', filterStatus);
+      if (filterDateFrom) params.set('date_from', filterDateFrom);
+      if (filterDateTo) params.set('date_to', filterDateTo);
 
       const [data, upcomingData] = await Promise.all([
         api(`/runs?${params}`),
@@ -103,7 +119,7 @@ export function RunHistory() {
     } finally {
       setLoading(false);
     }
-  }, [filterType, filterCampaign, filterStatus]);
+  }, [filterType, filterCampaign, filterStatus, filterDateFrom, filterDateTo]);
 
   useEffect(() => {
     api('/campaigns').then(data => setCampaigns(Array.isArray(data) ? data.map((c: any) => ({ id: c.id, name: c.name })) : [])).catch(() => {});
@@ -111,12 +127,10 @@ export function RunHistory() {
 
   useEffect(() => {
     loadRuns();
-    // Slower polling when SSE is active (SSE handles real-time, poll is fallback)
     const interval = setInterval(loadRuns, 60000);
     return () => clearInterval(interval);
   }, [loadRuns]);
 
-  // Subscribe to progress events
   useEffect(() => {
     const unsubProgress = subscribe('*', (event) => {
       const { type, data } = event;
@@ -133,7 +147,6 @@ export function RunHistory() {
         }));
       }
       if (type.endsWith('.completed') || type.endsWith('.failed') || type.endsWith('.started')) {
-        // Refresh runs list on state changes
         loadRuns();
         if (type.endsWith('.completed') || type.endsWith('.failed')) {
           setLiveProgress(prev => {
@@ -162,8 +175,57 @@ export function RunHistory() {
     finally { setLoadingLeads(false); }
   };
 
+  const toggleSelect = (runId: string) => {
+    setSelectedRuns(prev => {
+      const next = new Set(prev);
+      next.has(runId) ? next.delete(runId) : next.add(runId);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    const finishedRuns = runs.filter(r => r.status === 'completed' || r.status === 'failed' || r.status === 'cancelled');
+    if (selectedRuns.size === finishedRuns.length) {
+      setSelectedRuns(new Set());
+    } else {
+      setSelectedRuns(new Set(finishedRuns.map(r => r.id)));
+    }
+  };
+
+  const handleDeleteSelected = () => {
+    const ids = Array.from(selectedRuns);
+    const totalLeads = runs.filter(r => ids.includes(r.id)).reduce((sum, r) => sum + (r.lead_count || 0), 0);
+    setDeleteConfirm({ type: 'bulk', ids, leadCount: totalLeads });
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteConfirm) return;
+    setDeleting(true);
+    try {
+      if (deleteConfirm.type === 'single') {
+        await api(`/runs/${deleteConfirm.ids[0]}`, { method: 'DELETE' });
+      } else {
+        await api('/runs', { method: 'DELETE', body: JSON.stringify({ ids: deleteConfirm.ids }) });
+      }
+      setSelectedRuns(new Set());
+      setDeleteConfirm(null);
+      loadRuns();
+    } catch (err) {
+      console.error('Delete failed:', err);
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   const activeRuns = runs.filter(r => r.status === 'running' || r.status === 'pending');
-  const completedRuns = runs.filter(r => r.status === 'completed' || r.status === 'failed');
+  const finishedRuns = runs.filter(r => r.status !== 'running' && r.status !== 'pending');
+
+  // Client-side triggered_by filter
+  const filteredFinishedRuns = filterTriggeredBy
+    ? finishedRuns.filter(r => (r.triggered_by_name || 'System').toLowerCase().includes(filterTriggeredBy.toLowerCase()))
+    : finishedRuns;
+
+  const hasActiveFilters = filterType || filterCampaign || filterStatus || filterDateFrom || filterDateTo || filterTriggeredBy;
 
   if (loading) {
     return (
@@ -180,9 +242,20 @@ export function RunHistory() {
           <h1 className="text-2xl font-bold text-gray-900">Run History</h1>
           <p className="text-sm text-gray-500">Operations log — scheduled runs, campaign executions, and import processing.</p>
         </div>
-        <button onClick={loadRuns} className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">
-          <RefreshCw className="w-3.5 h-3.5" /> Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          {isSuperAdmin && selectedRuns.size > 0 && (
+            <button
+              onClick={handleDeleteSelected}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-red-600 border border-red-200 rounded-lg hover:bg-red-50"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              Delete {selectedRuns.size} run{selectedRuns.size !== 1 ? 's' : ''}
+            </button>
+          )}
+          <button onClick={loadRuns} className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">
+            <RefreshCw className="w-3.5 h-3.5" /> Refresh
+          </button>
+        </div>
       </div>
 
       {/* Stats bar */}
@@ -197,7 +270,7 @@ export function RunHistory() {
       )}
 
       {/* Filters */}
-      <div className="flex items-center gap-3 mb-6">
+      <div className="flex items-center gap-3 mb-4 flex-wrap">
         <Filter className="w-4 h-4 text-gray-400" />
         <select value={filterType} onChange={e => setFilterType(e.target.value)} className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg bg-white">
           <option value="">All Types</option>
@@ -213,14 +286,66 @@ export function RunHistory() {
         <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg bg-white">
           <option value="">All Statuses</option>
           <option value="completed">Completed</option>
-          <option value="running">Running</option>
           <option value="failed">Failed</option>
+          <option value="cancelled">Cancelled</option>
+          <option value="running">Running</option>
           <option value="pending">Pending</option>
         </select>
-        {(filterType || filterCampaign || filterStatus) && (
-          <button onClick={() => { setFilterType(''); setFilterCampaign(''); setFilterStatus(''); }} className="text-xs text-gray-400 hover:text-gray-600">Clear</button>
+        <button
+          onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
+          className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg border transition-colors ${
+            showAdvancedFilters || filterDateFrom || filterDateTo || filterTriggeredBy
+              ? 'bg-brand-50 border-brand-300 text-brand-700 font-medium'
+              : 'border-gray-200 text-gray-600 hover:bg-gray-50'
+          }`}
+        >
+          <Calendar className="w-3.5 h-3.5" />
+          More
+          {(filterDateFrom || filterDateTo || filterTriggeredBy) && (
+            <span className="ml-1 w-4 h-4 text-[10px] leading-4 text-center rounded-full bg-brand-600 text-white">
+              {[filterDateFrom, filterDateTo, filterTriggeredBy].filter(Boolean).length}
+            </span>
+          )}
+        </button>
+        {hasActiveFilters && (
+          <button
+            onClick={() => { setFilterType(''); setFilterCampaign(''); setFilterStatus(''); setFilterDateFrom(''); setFilterDateTo(''); setFilterTriggeredBy(''); }}
+            className="text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1"
+          >
+            <X className="w-3 h-3" /> Clear all
+          </button>
         )}
       </div>
+
+      {/* Advanced filters */}
+      {showAdvancedFilters && (
+        <div className="flex items-center gap-3 mb-4 flex-wrap bg-gray-50 rounded-lg p-3 border border-gray-200">
+          <div className="flex items-center gap-2">
+            <label className="text-xs font-medium text-gray-500 uppercase">Date</label>
+            <input
+              type="date" value={filterDateFrom}
+              onChange={e => setFilterDateFrom(e.target.value)}
+              className="px-2 py-1.5 text-sm border border-gray-300 rounded"
+            />
+            <span className="text-gray-400">to</span>
+            <input
+              type="date" value={filterDateTo}
+              onChange={e => setFilterDateTo(e.target.value)}
+              className="px-2 py-1.5 text-sm border border-gray-300 rounded"
+            />
+          </div>
+          <div className="w-px h-6 bg-gray-300" />
+          <div className="flex items-center gap-2">
+            <label className="text-xs font-medium text-gray-500 uppercase">Triggered By</label>
+            <input
+              type="text" placeholder="Name..."
+              value={filterTriggeredBy}
+              onChange={e => setFilterTriggeredBy(e.target.value)}
+              className="w-32 px-2 py-1.5 text-sm border border-gray-300 rounded"
+            />
+          </div>
+        </div>
+      )}
 
       {/* Upcoming section */}
       {upcoming.length > 0 && (
@@ -266,35 +391,49 @@ export function RunHistory() {
         </div>
       )}
 
-      {/* Completed runs */}
+      {/* Completed / Failed runs */}
       <div>
         <h2 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
-          <CheckCircle className="w-4 h-4 text-gray-400" /> Completed ({completedRuns.length})
+          <CheckCircle className="w-4 h-4 text-gray-400" /> Run Log ({filteredFinishedRuns.length})
         </h2>
 
-        {completedRuns.length === 0 ? (
+        {filteredFinishedRuns.length === 0 ? (
           <div className="text-center py-12 bg-white rounded-xl border border-gray-200">
             <Clock className="w-10 h-10 text-gray-300 mx-auto mb-3" />
-            <p className="text-sm text-gray-500">No completed runs yet.</p>
+            <p className="text-sm text-gray-500">{hasActiveFilters ? 'No runs match your filters.' : 'No completed runs yet.'}</p>
           </div>
         ) : (
           <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
             <table className="w-full text-sm">
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Type</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Campaign</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Leads</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Tokens</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Cost</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Started</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">By</th>
-                  <th className="px-4 py-3 w-8"></th>
+                  {isSuperAdmin && (
+                    <th className="px-3 py-3 w-8">
+                      <input
+                        type="checkbox"
+                        checked={selectedRuns.size > 0 && selectedRuns.size === filteredFinishedRuns.length}
+                        onChange={toggleSelectAll}
+                        className="rounded border-gray-300 text-brand-600"
+                      />
+                    </th>
+                  )}
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase w-12">
+                    <Hash className="w-3 h-3 inline" />
+                  </th>
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">Type</th>
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">Campaign</th>
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">Leads</th>
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">Tokens</th>
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">Cost</th>
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">Duration</th>
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">Started</th>
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">By</th>
+                  <th className="px-3 py-3 w-16"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {completedRuns.map(run => (
+                {filteredFinishedRuns.map(run => (
                   <CompletedRunRow
                     key={run.id}
                     run={run}
@@ -304,6 +443,11 @@ export function RunHistory() {
                     onToggle={() => toggleExpand(run.id)}
                     onViewLog={() => setActivityRunId(activityRunId === run.id ? null : run.id)}
                     showingLog={activityRunId === run.id}
+                    isSuperAdmin={isSuperAdmin}
+                    selected={selectedRuns.has(run.id)}
+                    onSelect={() => toggleSelect(run.id)}
+                    onDelete={() => setDeleteConfirm({ type: 'single', ids: [run.id], leadCount: run.lead_count || 0 })}
+                    colSpan={isSuperAdmin ? 13 : 12}
                   />
                 ))}
               </tbody>
@@ -311,6 +455,54 @@ export function RunHistory() {
           </div>
         )}
       </div>
+
+      {/* Delete Confirmation Modal */}
+      {deleteConfirm && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl shadow-xl p-6 max-w-md w-full mx-4">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center">
+                <AlertTriangle className="w-5 h-5 text-red-600" />
+              </div>
+              <div>
+                <h3 className="font-semibold text-gray-900">
+                  Delete {deleteConfirm.ids.length} Run{deleteConfirm.ids.length !== 1 ? 's' : ''}
+                </h3>
+                <p className="text-sm text-gray-500">This action cannot be undone</p>
+              </div>
+            </div>
+            <p className="text-sm text-gray-600 mb-4">
+              This will permanently delete {deleteConfirm.ids.length === 1 ? 'this run' : `${deleteConfirm.ids.length} runs`} and all associated data:
+            </p>
+            <ul className="text-sm text-gray-600 mb-6 space-y-1 pl-4">
+              <li className="flex items-center gap-2">
+                <span className="w-1.5 h-1.5 rounded-full bg-red-400" />
+                {deleteConfirm.leadCount} lead{deleteConfirm.leadCount !== 1 ? 's' : ''} (with personas and feedback)
+              </li>
+              <li className="flex items-center gap-2">
+                <span className="w-1.5 h-1.5 rounded-full bg-red-400" />
+                Activity logs and analytics data
+              </li>
+            </ul>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setDeleteConfirm(null)}
+                disabled={deleting}
+                className="px-4 py-2 text-sm text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmDelete}
+                disabled={deleting}
+                className="px-4 py-2 text-sm text-white bg-red-600 rounded-lg hover:bg-red-700 disabled:opacity-50"
+              >
+                {deleting ? 'Deleting...' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -335,7 +527,6 @@ const PHASE_LABELS: Record<string, string> = {
 };
 
 function ActiveRunCard({ run, liveProgress, onViewActivity }: { run: Run; liveProgress?: ProgressData; onViewActivity?: () => void }) {
-  // Prefer live SSE progress over polled progress_json
   const fallbackProgress = run.progress_json ? JSON.parse(run.progress_json) : null;
   const progress = liveProgress || fallbackProgress;
 
@@ -353,6 +544,7 @@ function ActiveRunCard({ run, liveProgress, onViewActivity }: { run: Run; livePr
               {run.campaign_name || run.run_type || 'Pipeline Run'}
             </span>
             <RunTypeBadge type={run.run_type} />
+            <span className="text-[10px] text-gray-400 font-mono">#{run.run_number}</span>
           </div>
           {progress && (
             <div className="space-y-1.5">
@@ -402,7 +594,7 @@ function ActiveRunCard({ run, liveProgress, onViewActivity }: { run: Run; livePr
   );
 }
 
-function CompletedRunRow({ run, expanded, leads, loadingLeads, onToggle, onViewLog, showingLog }: {
+function CompletedRunRow({ run, expanded, leads, loadingLeads, onToggle, onViewLog, showingLog, isSuperAdmin, selected, onSelect, onDelete, colSpan }: {
   run: Run;
   expanded: boolean;
   leads: any[];
@@ -410,51 +602,109 @@ function CompletedRunRow({ run, expanded, leads, loadingLeads, onToggle, onViewL
   onToggle: () => void;
   onViewLog?: () => void;
   showingLog?: boolean;
+  isSuperAdmin: boolean;
+  selected: boolean;
+  onSelect: () => void;
+  onDelete: () => void;
+  colSpan: number;
 }) {
   const totalTokens = (run.input_tokens || 0) + (run.output_tokens || 0);
+  const isFailed = run.status === 'failed';
+  const isCancelled = run.status === 'cancelled';
+
+  let duration = '—';
+  if (run.started_at && run.completed_at) {
+    const ms = new Date(run.completed_at).getTime() - new Date(run.started_at).getTime();
+    if (ms < 60000) duration = `${Math.round(ms / 1000)}s`;
+    else if (ms < 3600000) duration = `${Math.round(ms / 60000)}m`;
+    else duration = `${(ms / 3600000).toFixed(1)}h`;
+  }
 
   return (
     <>
-      <tr className="hover:bg-gray-50 cursor-pointer" onClick={onToggle}>
-        <td className="px-4 py-3">{statusIcon(run.status)}</td>
-        <td className="px-4 py-3"><RunTypeBadge type={run.run_type} /></td>
-        <td className="px-4 py-3">
+      <tr className={`hover:bg-gray-50 cursor-pointer ${isFailed ? 'bg-red-50/30' : isCancelled ? 'bg-gray-50/50' : ''}`} onClick={onToggle}>
+        {isSuperAdmin && (
+          <td className="px-3 py-3" onClick={e => e.stopPropagation()}>
+            <input
+              type="checkbox"
+              checked={selected}
+              onChange={onSelect}
+              className="rounded border-gray-300 text-brand-600"
+            />
+          </td>
+        )}
+        <td className="px-3 py-3 text-xs text-gray-400 font-mono">#{run.run_number}</td>
+        <td className="px-3 py-3">
+          <div className="flex items-center gap-1.5">
+            {statusIcon(run.status)}
+            <span className={`text-xs font-medium ${
+              isFailed ? 'text-red-600' : isCancelled ? 'text-gray-500' : 'text-emerald-600'
+            }`}>
+              {run.status === 'completed' ? 'Completed' : run.status === 'failed' ? 'Failed' : run.status === 'cancelled' ? 'Cancelled' : run.status}
+            </span>
+          </div>
+        </td>
+        <td className="px-3 py-3"><RunTypeBadge type={run.run_type} /></td>
+        <td className="px-3 py-3">
           {run.campaign_name ? (
-            <Link to={`/campaigns/${run.campaign_id}`} onClick={e => e.stopPropagation()} className="text-brand-600 hover:text-brand-700 font-medium">
+            <Link to={`/campaigns/${run.campaign_id}`} onClick={e => e.stopPropagation()} className="text-brand-600 hover:text-brand-700 font-medium text-xs">
               {run.campaign_name}
             </Link>
           ) : (
-            <span className="text-gray-400">—</span>
+            <span className="text-gray-400 text-xs">—</span>
           )}
         </td>
-        <td className="px-4 py-3 text-gray-700">{run.lead_count || 0}</td>
-        <td className="px-4 py-3 text-gray-500 text-xs font-mono">{totalTokens > 0 ? formatTokens(totalTokens) : '—'}</td>
-        <td className="px-4 py-3 text-gray-500 text-xs">{run.estimated_cost > 0 ? `$${run.estimated_cost.toFixed(2)}` : '—'}</td>
-        <td className="px-4 py-3 text-gray-500 text-xs">{run.started_at ? new Date(run.started_at).toLocaleString() : '—'}</td>
-        <td className="px-4 py-3 text-gray-500 text-xs">{run.triggered_by_name || 'System'}</td>
-        <td className="px-4 py-3 flex items-center gap-1">
-          {onViewLog && (
-            <button onClick={e => { e.stopPropagation(); onViewLog(); }} className={`p-1 rounded hover:bg-gray-100 ${showingLog ? 'text-brand-600' : 'text-gray-400'}`} title="View Activity Log">
-              <Eye className="w-3.5 h-3.5" />
-            </button>
-          )}
-          {expanded ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
+        <td className="px-3 py-3 text-gray-700 text-xs">{run.lead_count || 0}</td>
+        <td className="px-3 py-3 text-gray-500 text-xs font-mono">{totalTokens > 0 ? formatTokens(totalTokens) : '—'}</td>
+        <td className="px-3 py-3 text-gray-500 text-xs">{run.estimated_cost > 0 ? `$${run.estimated_cost.toFixed(2)}` : '—'}</td>
+        <td className="px-3 py-3 text-gray-500 text-xs">{duration}</td>
+        <td className="px-3 py-3 text-gray-500 text-xs">{run.started_at ? new Date(run.started_at).toLocaleString() : '—'}</td>
+        <td className="px-3 py-3 text-gray-500 text-xs">{run.triggered_by_name || 'System'}</td>
+        <td className="px-3 py-3">
+          <div className="flex items-center gap-1">
+            {onViewLog && (
+              <button onClick={e => { e.stopPropagation(); onViewLog(); }} className={`p-1 rounded hover:bg-gray-100 ${showingLog ? 'text-brand-600' : 'text-gray-400'}`} title="View Activity Log">
+                <Eye className="w-3.5 h-3.5" />
+              </button>
+            )}
+            {isSuperAdmin && (
+              <button onClick={e => { e.stopPropagation(); onDelete(); }} className="p-1 rounded hover:bg-red-50 text-gray-300 hover:text-red-500" title="Delete run">
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            )}
+            {expanded ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
+          </div>
         </td>
       </tr>
-      {run.error_message && expanded && (
+      {(isFailed || isCancelled) && expanded && run.error_message && (
         <tr>
-          <td colSpan={9} className="px-4 py-2 bg-red-50">
-            <p className="text-xs text-red-600"><AlertCircle className="w-3 h-3 inline mr-1" />{run.error_message}</p>
+          <td colSpan={colSpan} className={`px-4 py-3 ${isFailed ? 'bg-red-50' : 'bg-gray-50'}`}>
+            <div className="flex items-start gap-2">
+              <AlertCircle className={`w-4 h-4 mt-0.5 flex-shrink-0 ${isFailed ? 'text-red-500' : 'text-gray-400'}`} />
+              <div>
+                <p className={`text-xs font-medium ${isFailed ? 'text-red-700' : 'text-gray-600'}`}>
+                  {isFailed ? 'Run Failed' : 'Run Cancelled'}
+                </p>
+                <p className={`text-xs mt-0.5 ${isFailed ? 'text-red-600' : 'text-gray-500'}`}>{run.error_message}</p>
+              </div>
+            </div>
           </td>
         </tr>
       )}
-      {expanded && !run.error_message && (
+      {expanded && !(isFailed && run.error_message) && (
         <tr>
-          <td colSpan={9} className="px-0">
+          <td colSpan={colSpan} className="px-0">
             {loadingLeads ? (
               <div className="flex justify-center py-4"><Loader2 className="w-5 h-5 animate-spin text-brand-500" /></div>
             ) : leads.length === 0 ? (
-              <div className="px-6 py-4 text-xs text-gray-400">No leads in this run.</div>
+              <div className="px-6 py-4 text-xs text-gray-400">
+                {isFailed ? 'Run failed before generating leads.' : isCancelled ? 'Run was cancelled.' : 'No leads in this run.'}
+                {(isFailed || isCancelled) && (
+                  <button onClick={e => { e.stopPropagation(); onViewLog?.(); }} className="ml-2 text-brand-600 hover:underline">
+                    View activity log
+                  </button>
+                )}
+              </div>
             ) : (
               <div className="bg-gray-50 px-6 py-3 border-t border-gray-100">
                 <p className="text-xs text-gray-500 mb-2">{leads.length} leads</p>
@@ -482,7 +732,7 @@ function CompletedRunRow({ run, expanded, leads, loadingLeads, onToggle, onViewL
       )}
       {showingLog && (
         <tr>
-          <td colSpan={9} className="px-4 py-3 bg-gray-50">
+          <td colSpan={colSpan} className="px-4 py-3 bg-gray-50">
             <ActivityPanel runId={run.id} onClose={onViewLog} />
           </td>
         </tr>
@@ -510,6 +760,7 @@ function statusIcon(status: string) {
   switch (status) {
     case 'completed': return <CheckCircle className="w-4 h-4 text-emerald-500" />;
     case 'failed': return <XCircle className="w-4 h-4 text-red-500" />;
+    case 'cancelled': return <AlertCircle className="w-4 h-4 text-gray-400" />;
     case 'running': return <Loader2 className="w-4 h-4 text-amber-500 animate-spin" />;
     case 'pending': return <Clock className="w-4 h-4 text-gray-400" />;
     default: return <AlertCircle className="w-4 h-4 text-gray-300" />;

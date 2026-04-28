@@ -1,11 +1,11 @@
-import { useState, useEffect } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useState, useEffect, useRef } from 'react';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import { ScoreBadge, ScoreLabel, ConfidenceBadge, SegmentBadge } from '../components/ScoreBadge';
 import {
   ArrowLeft, ExternalLink, Building2, Users, MapPin, Globe, Calendar,
   Briefcase, Linkedin, MessageSquare, Shield, Server, ChevronDown, ChevronUp,
-  Signal, Clock, History,
+  Signal, Clock, History, Trash2, AlertTriangle, Brain, FileText, Download,
 } from 'lucide-react';
 
 const VERDICT_OPTIONS = [
@@ -38,6 +38,7 @@ const FEEDBACK_LABELS: Record<string, string> = {
 
 export function LeadDetail() {
   const { id } = useParams();
+  const navigate = useNavigate();
   const [lead, setLead] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [feedbackLoading, setFeedbackLoading] = useState(false);
@@ -46,6 +47,50 @@ export function LeadDetail() {
   const [selectedVerdict, setSelectedVerdict] = useState('');
   const [expandedPersona, setExpandedPersona] = useState<number>(0);
   const [showFeedbackHistory, setShowFeedbackHistory] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [showBriefMenu, setShowBriefMenu] = useState(false);
+  const briefMenuRef = useRef<HTMLDivElement>(null);
+
+  const handleDeleteLead = async () => {
+    setDeleting(true);
+    try {
+      await api(`/leads/${id}`, { method: 'DELETE' });
+      navigate('/leads');
+    } catch (err) {
+      console.error('Delete failed:', err);
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const handleDownloadBrief = async (format: 'markdown' | 'pdf') => {
+    if (!lead?.brief_markdown) return;
+    setShowBriefMenu(false);
+    if (format === 'markdown') {
+      const slug = lead.company_name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+      const blob = new Blob([lead.brief_markdown], { type: 'text/markdown' });
+      downloadBlob(blob, `${slug}-brief.md`);
+    } else {
+      const { openBriefPrintWindow } = await import('../utils/markdownToPdf');
+      openBriefPrintWindow([{
+        markdown: lead.brief_markdown,
+        company_name: lead.company_name,
+        fit_score: lead.fit_score,
+        segment: lead.segment,
+      }]);
+    }
+  };
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (briefMenuRef.current && !briefMenuRef.current.contains(e.target as Node)) {
+        setShowBriefMenu(false);
+      }
+    }
+    if (showBriefMenu) document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showBriefMenu]);
 
   useEffect(() => {
     api(`/leads/${id}`).then(setLead).finally(() => setLoading(false));
@@ -89,9 +134,56 @@ export function LeadDetail() {
 
   return (
     <div>
-      <Link to="/leads" className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700 mb-4">
-        <ArrowLeft className="w-4 h-4" /> Back to Leads
-      </Link>
+      <div className="flex items-center justify-between mb-4">
+        <Link to="/leads" className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700">
+          <ArrowLeft className="w-4 h-4" /> Back to Leads
+        </Link>
+        <div className="flex items-center gap-2">
+          {lead?.brief_markdown && (
+            <div className="relative" ref={briefMenuRef}>
+              <button
+                onClick={() => setShowBriefMenu(!showBriefMenu)}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50"
+              >
+                <FileText className="w-3.5 h-3.5" />
+                Download Brief
+                <ChevronDown className="w-3 h-3" />
+              </button>
+              {showBriefMenu && (
+                <div className="absolute right-0 top-full mt-1 w-44 bg-white border border-gray-200 rounded-lg shadow-lg z-20 py-1">
+                  <button
+                    onClick={() => handleDownloadBrief('markdown')}
+                    className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-3"
+                  >
+                    <FileText className="w-4 h-4 text-gray-400" />
+                    <div>
+                      <p className="font-medium">Markdown</p>
+                      <p className="text-xs text-gray-400">.md file</p>
+                    </div>
+                  </button>
+                  <button
+                    onClick={() => handleDownloadBrief('pdf')}
+                    className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-3 border-t border-gray-100"
+                  >
+                    <Download className="w-4 h-4 text-brand-500" />
+                    <div>
+                      <p className="font-medium">PDF</p>
+                      <p className="text-xs text-gray-400">Styled brief</p>
+                    </div>
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+          <button
+            onClick={() => setShowDeleteConfirm(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-red-200 text-red-600 rounded-lg hover:bg-red-50"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            Delete
+          </button>
+        </div>
+      </div>
 
       {/* Header */}
       <div className="bg-white rounded-xl border border-gray-200 p-6 mb-4">
@@ -259,6 +351,15 @@ export function LeadDetail() {
                 ))}
               </div>
             </Section>
+          )}
+
+          {/* AI Reasoning */}
+          {(lead.scorer_thinking || lead.brief_thinking || lead.candidate_data_parsed?.reasoning) && (
+            <AIReasoningSection
+              scorerThinking={lead.scorer_thinking}
+              briefThinking={lead.brief_thinking}
+              reasoning={lead.candidate_data_parsed?.reasoning}
+            />
           )}
         </div>
 
@@ -443,6 +544,42 @@ export function LeadDetail() {
           )}
         </div>
       </div>
+
+      {/* Delete Confirmation Modal */}
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl shadow-xl p-6 max-w-md w-full mx-4">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center">
+                <AlertTriangle className="w-5 h-5 text-red-600" />
+              </div>
+              <div>
+                <h3 className="font-semibold text-gray-900">Delete Lead</h3>
+                <p className="text-sm text-gray-500">This action cannot be undone</p>
+              </div>
+            </div>
+            <p className="text-sm text-gray-600 mb-6">
+              Are you sure you want to delete "{lead.company_name}"? All associated personas and feedback will be removed.
+            </p>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setShowDeleteConfirm(false)}
+                disabled={deleting}
+                className="px-4 py-2 text-sm text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDeleteLead}
+                disabled={deleting}
+                className="px-4 py-2 text-sm text-white bg-red-600 rounded-lg hover:bg-red-700 disabled:opacity-50"
+              >
+                {deleting ? 'Deleting...' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -467,4 +604,61 @@ function ScoreBar({ label, value, max }: { label: string; value: number; max: nu
       <span className="w-10 text-right text-gray-500">{value}/{max}</span>
     </div>
   );
+}
+
+function AIReasoningSection({ scorerThinking, briefThinking, reasoning }: { scorerThinking?: string; briefThinking?: string; reasoning?: string }) {
+  const [expandedSection, setExpandedSection] = useState<string | null>(null);
+
+  const sections = [
+    { key: 'scoring', label: 'Scoring Reasoning', content: scorerThinking || reasoning, color: 'border-amber-300 bg-amber-50' },
+    { key: 'brief', label: 'Brief Generation Reasoning', content: briefThinking, color: 'border-purple-300 bg-purple-50' },
+  ].filter(s => s.content);
+
+  if (sections.length === 0) return null;
+
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 p-5">
+      <h2 className="text-sm font-semibold text-gray-900 uppercase tracking-wide mb-3 flex items-center gap-2">
+        <Brain className="w-4 h-4" />
+        AI Reasoning
+      </h2>
+      <p className="text-xs text-gray-500 mb-3">
+        Claude's internal reasoning during scoring and brief generation for this candidate.
+      </p>
+      <div className="space-y-2">
+        {sections.map(section => (
+          <div key={section.key} className="border border-gray-200 rounded-lg overflow-hidden">
+            <button
+              onClick={() => setExpandedSection(expandedSection === section.key ? null : section.key)}
+              className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-gray-50"
+            >
+              <span className="text-sm font-medium text-gray-700">{section.label}</span>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-gray-400">
+                  {(section.content?.length || 0).toLocaleString()} chars
+                </span>
+                {expandedSection === section.key ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
+              </div>
+            </button>
+            {expandedSection === section.key && (
+              <div className={`px-4 py-3 border-t ${section.color} max-h-96 overflow-y-auto`}>
+                <pre className="text-xs text-gray-800 whitespace-pre-wrap font-mono leading-relaxed">
+                  {section.content}
+                </pre>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
 }

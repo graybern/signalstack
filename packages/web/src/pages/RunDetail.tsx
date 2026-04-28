@@ -4,7 +4,7 @@ import { api } from '../api/client';
 import {
   ArrowLeft, CheckCircle2, XCircle, Clock, Loader2,
   Users, TrendingUp, DollarSign, Target, ExternalLink,
-  ChevronDown, ChevronUp,
+  ChevronDown, ChevronUp, Trash2, AlertTriangle,
 } from 'lucide-react';
 import { ScoreBadge, SegmentBadge } from '../components/ScoreBadge';
 import { ActivityPanel } from '../components/ActivityPanel';
@@ -74,6 +74,22 @@ export function RunDetail() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showLeads, setShowLeads] = useState(true);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  const handleClearLeads = async () => {
+    if (!id) return;
+    setDeleting(true);
+    try {
+      await api(`/leads/by-run/${id}`, { method: 'DELETE' });
+      setLeads([]);
+      setShowDeleteConfirm(false);
+    } catch (err) {
+      console.error('Failed to clear leads:', err);
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   useEffect(() => {
     if (!id) return;
@@ -143,15 +159,26 @@ export function RunDetail() {
             </div>
           </div>
         </div>
-        {run.campaign_id && (
-          <Link
-            to={`/campaigns/${run.campaign_id}`}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-300 rounded-lg hover:bg-gray-50"
-          >
-            <Target className="w-4 h-4" />
-            View Campaign
-          </Link>
-        )}
+        <div className="flex items-center gap-2">
+          {leads.length > 0 && (
+            <button
+              onClick={() => setShowDeleteConfirm(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-red-200 text-red-600 rounded-lg hover:bg-red-50"
+            >
+              <Trash2 className="w-4 h-4" />
+              Clear Leads
+            </button>
+          )}
+          {run.campaign_id && (
+            <Link
+              to={`/campaigns/${run.campaign_id}`}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-300 rounded-lg hover:bg-gray-50"
+            >
+              <Target className="w-4 h-4" />
+              View Campaign
+            </Link>
+          )}
+        </div>
       </div>
 
       {/* Stats bar */}
@@ -242,6 +269,42 @@ export function RunDetail() {
               </table>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl shadow-xl p-6 max-w-md w-full mx-4">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center">
+                <AlertTriangle className="w-5 h-5 text-red-600" />
+              </div>
+              <div>
+                <h3 className="font-semibold text-gray-900">Clear Run Leads</h3>
+                <p className="text-sm text-gray-500">This action cannot be undone</p>
+              </div>
+            </div>
+            <p className="text-sm text-gray-600 mb-6">
+              Delete all {leads.length} leads from this run? Their personas and feedback will also be removed.
+            </p>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setShowDeleteConfirm(false)}
+                disabled={deleting}
+                className="px-4 py-2 text-sm text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleClearLeads}
+                disabled={deleting}
+                className="px-4 py-2 text-sm text-white bg-red-600 rounded-lg hover:bg-red-700 disabled:opacity-50"
+              >
+                {deleting ? 'Deleting...' : 'Delete All'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

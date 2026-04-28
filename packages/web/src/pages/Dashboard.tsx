@@ -22,6 +22,7 @@ import {
   AlertCircle,
   Calendar,
   Hash,
+  DollarSign,
 } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
@@ -71,6 +72,7 @@ interface SegmentData {
 interface FeedbackData {
   score_by_feedback: { verdict: string; count: number; avg_score: number }[];
   score_ranges: { range: string; total: number; positive: number; negative: number }[];
+  score_distribution: { range: string; total: number }[];
 }
 
 interface Recommendation {
@@ -128,6 +130,33 @@ const FEEDBACK_LABELS: Record<string, string> = {
   good_fit_no_response: 'No Response',
 };
 
+const SCORE_RANGE_COLORS: Record<string, string> = {
+  '80-100': '#059669',
+  '60-79': '#3b82f6',
+  '40-59': '#f59e0b',
+  '0-39': '#ef4444',
+};
+
+function describeCron(expr: string): string {
+  const parts = expr.split(/\s+/);
+  if (parts.length < 5) return expr;
+  const [min, hour, , , dow] = parts;
+  const dayNames: Record<string, string> = { '0': 'Sun', '1': 'Mon', '2': 'Tue', '3': 'Wed', '4': 'Thu', '5': 'Fri', '6': 'Sat' };
+  let timeStr = '';
+  const h = parseInt(hour);
+  if (!isNaN(h)) {
+    const ampm = h >= 12 ? 'pm' : 'am';
+    const h12 = h % 12 || 12;
+    timeStr = `${h12}:${min.padStart(2, '0')}${ampm}`;
+  } else {
+    timeStr = `${hour}:${min}`;
+  }
+  if (dow === '*') return `Daily at ${timeStr}`;
+  if (dow === '1-5') return `Weekdays at ${timeStr}`;
+  const days = dow.split(',').map(d => dayNames[d] || d).join(', ');
+  return `${days} at ${timeStr}`;
+}
+
 // ── Main Component ─────────────────────────────────────────────
 
 export function Dashboard() {
@@ -140,6 +169,7 @@ export function Dashboard() {
   const [sourceData, setSourceData] = useState<SourceData | null>(null);
   const [verticals, setVerticals] = useState<VerticalData[]>([]);
   const [upcomingRuns, setUpcomingRuns] = useState<UpcomingRun[]>([]);
+  const [serverTzAbbr, setServerTzAbbr] = useState('');
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [recError, setRecError] = useState<string | null>(null);
@@ -162,8 +192,9 @@ export function Dashboard() {
       api('/analytics/sources').catch(() => null),
       api('/analytics/verticals').catch(() => ({ verticals: [] })),
       api('/campaigns?schedule_enabled=1').catch(() => []),
+      api('/settings/timezone').catch(() => ({ abbreviation: '' })),
     ])
-      .then(([ov, rn, tr, sg, fb, rc, src, vt, scheduledCampaigns]) => {
+      .then(([ov, rn, tr, sg, fb, rc, src, vt, scheduledCampaigns, tz]) => {
         setOverview(ov);
         setRuns(Array.isArray(rn) ? rn : (rn?.runs || []));
         setTrends(tr.leads_by_day || []);
@@ -172,6 +203,7 @@ export function Dashboard() {
         setRecommendations(Array.isArray(rc) ? rc : []);
         setSourceData(src);
         setVerticals(vt?.verticals || []);
+        setServerTzAbbr((tz as any)?.abbreviation || '');
         const upcoming = (Array.isArray(scheduledCampaigns) ? scheduledCampaigns : [])
           .filter((c: any) => c.schedule_enabled && c.schedule_cron)
           .map((c: any) => ({
@@ -186,7 +218,6 @@ export function Dashboard() {
       .finally(() => setLoading(false));
   }, []);
 
-  // Auto-refresh on run state changes and track progress
   useEffect(() => {
     const unsub = subscribe('*', (event) => {
       const data = event.data as any;
@@ -197,7 +228,7 @@ export function Dashboard() {
           total_steps: data.total_steps,
           tokens: data.tokens,
         }));
-        return; // Don't reload dashboard on every progress event
+        return;
       }
       if (event.type === 'campaign.completed' || event.type === 'campaign.failed' || event.type === 'campaign.cancelled') {
         setRunProgress(prev => {
@@ -220,7 +251,6 @@ export function Dashboard() {
     setRecError(null);
     try {
       await api('/analytics/recommendations/generate', { method: 'POST' });
-      // Reload recommendations
       const recs = await api('/analytics/recommendations?status=pending');
       setRecommendations(Array.isArray(recs) ? recs : []);
     } catch (err: any) {
@@ -270,16 +300,31 @@ export function Dashboard() {
         <p className="text-sm text-gray-500 mt-1">Analytics command center</p>
       </div>
 
-      {/* ═══ Section 1: Operations Bar ═══ */}
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
+      {/* ═══ Section 1: Overview Stats — full width, prominent ═══ */}
+      {overview && (
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+          <OverviewStat icon={<Users className="w-5 h-5 text-brand-600" />} label="Total Leads" value={overview.total_leads} accent="brand" />
+          <OverviewStat icon={<Target className="w-5 h-5 text-indigo-600" />} label="Campaigns" value={overview.active_campaigns} accent="indigo" />
+          <OverviewStat icon={<TrendingUp className="w-5 h-5 text-emerald-600" />} label="Avg Score" value={overview.avg_score ?? '—'} accent="emerald" />
+          <OverviewStat icon={<Play className="w-5 h-5 text-blue-600" />} label="Total Runs" value={overview.total_runs} accent="blue" />
+          <OverviewStat icon={<CheckCircle2 className="w-5 h-5 text-green-600" />} label="Success Rate" value={`${overview.success_rate}%`} accent="green" />
+          <OverviewStat icon={<BarChart3 className="w-5 h-5 text-amber-600" />} label="Feedback Rate" value={`${overview.feedback_rate}%`} accent="amber" />
+        </div>
+      )}
+
+      {/* ═══ Section 2: Operations — Active, Recent, Upcoming ═══ */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* Active Runs */}
-        <div className="bg-white rounded-xl border border-gray-200 p-4">
-          <div className="flex items-center gap-2 mb-3">
+        <div className="bg-white rounded-xl border border-gray-200 p-5">
+          <div className="flex items-center gap-2 mb-4">
             <Activity className="w-4 h-4 text-blue-600" />
             <h3 className="text-sm font-semibold text-gray-900">Active Runs</h3>
+            {activeRuns.length > 0 && (
+              <span className="ml-auto px-2 py-0.5 text-xs font-medium bg-blue-100 text-blue-700 rounded-full">{activeRuns.length}</span>
+            )}
           </div>
           {activeRuns.length === 0 ? (
-            <p className="text-sm text-gray-400">No active runs</p>
+            <p className="text-sm text-gray-400 py-4 text-center">No active runs</p>
           ) : (
             <div className="space-y-2">
               {activeRuns.map(run => (
@@ -290,8 +335,8 @@ export function Dashboard() {
         </div>
 
         {/* Recent Runs */}
-        <div className="bg-white rounded-xl border border-gray-200 p-4">
-          <div className="flex items-center justify-between mb-3">
+        <div className="bg-white rounded-xl border border-gray-200 p-5">
+          <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
               <Clock className="w-4 h-4 text-gray-500" />
               <h3 className="text-sm font-semibold text-gray-900">Recent Runs</h3>
@@ -301,9 +346,9 @@ export function Dashboard() {
             </Link>
           </div>
           {recentRuns.length === 0 ? (
-            <p className="text-sm text-gray-400">No runs yet</p>
+            <p className="text-sm text-gray-400 py-4 text-center">No runs yet</p>
           ) : (
-            <div className="space-y-1.5">
+            <div className="space-y-1">
               {recentRuns.map(run => (
                 <RunPill key={run.id} run={run} />
               ))}
@@ -311,79 +356,64 @@ export function Dashboard() {
           )}
         </div>
 
-        {/* Upcoming Runs */}
-        <div className="bg-white rounded-xl border border-gray-200 p-4">
-          <div className="flex items-center gap-2 mb-3">
+        {/* Upcoming Scheduled Runs */}
+        <div className="bg-white rounded-xl border border-gray-200 p-5">
+          <div className="flex items-center gap-2 mb-4">
             <Calendar className="w-4 h-4 text-emerald-600" />
-            <h3 className="text-sm font-semibold text-gray-900">Upcoming</h3>
+            <h3 className="text-sm font-semibold text-gray-900">Upcoming Scheduled</h3>
           </div>
           {upcomingRuns.length === 0 ? (
-            <p className="text-sm text-gray-400">No scheduled runs</p>
+            <p className="text-sm text-gray-400 py-4 text-center">No scheduled campaigns</p>
           ) : (
-            <div className="space-y-2">
+            <div className="space-y-3">
               {upcomingRuns.map(ur => (
-                <Link key={ur.campaign_id} to={`/campaigns/${ur.campaign_id}`} className="flex items-center justify-between py-1.5 px-2 rounded hover:bg-gray-50">
-                  <span className="text-sm text-gray-900 truncate">{ur.campaign_name}</span>
-                  <span className="text-xs text-gray-400 font-mono shrink-0">{ur.schedule_cron}</span>
+                <Link key={ur.campaign_id} to={`/campaigns/${ur.campaign_id}`} className="block px-3 py-2.5 rounded-lg border border-gray-100 hover:border-brand-200 hover:bg-brand-50/30 transition-colors">
+                  <p className="text-sm font-medium text-gray-900 mb-1">{ur.campaign_name}</p>
+                  <p className="text-xs text-gray-500">
+                    {describeCron(ur.schedule_cron)}
+                    {serverTzAbbr && <span className="text-gray-400"> {serverTzAbbr}</span>}
+                  </p>
                 </Link>
               ))}
             </div>
           )}
         </div>
-
-        {/* Quick Stats */}
-        <div className="bg-white rounded-xl border border-gray-200 p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <Zap className="w-4 h-4 text-amber-500" />
-            <h3 className="text-sm font-semibold text-gray-900">Overview</h3>
-          </div>
-          {overview && (
-            <div className="grid grid-cols-2 gap-3">
-              <MiniStat icon={<Users className="w-3.5 h-3.5" />} label="Total Leads" value={overview.total_leads} />
-              <MiniStat icon={<Target className="w-3.5 h-3.5" />} label="Campaigns" value={overview.active_campaigns} />
-              <MiniStat icon={<TrendingUp className="w-3.5 h-3.5" />} label="Avg Score" value={overview.avg_score ?? '—'} />
-              <MiniStat icon={<BarChart3 className="w-3.5 h-3.5" />} label="Feedback" value={`${overview.feedback_rate}%`} />
-              <MiniStat icon={<Play className="w-3.5 h-3.5" />} label="Total Runs" value={overview.total_runs} />
-              <MiniStat icon={<CheckCircle2 className="w-3.5 h-3.5" />} label="Success" value={`${overview.success_rate}%`} />
-            </div>
-          )}
-        </div>
       </div>
 
-      {/* ═══ Section 2: Analytics Grid ═══ */}
+      {/* ═══ Section 3: Analytics Grid ═══ */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Lead Trend */}
-        <div className="bg-white rounded-xl border border-gray-200 p-4">
-          <h3 className="text-sm font-semibold text-gray-900 mb-3">Lead Volume (30 days)</h3>
+        <div className="bg-white rounded-xl border border-gray-200 p-5">
+          <h3 className="text-sm font-semibold text-gray-900 mb-4">Lead Volume (30 days)</h3>
           {trends.length > 0 ? (
-            <ResponsiveContainer width="100%" height={200}>
+            <ResponsiveContainer width="100%" height={220}>
               <LineChart data={trends}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                <XAxis dataKey="day" tick={{ fontSize: 10 }} tickFormatter={d => d.slice(5)} />
-                <YAxis tick={{ fontSize: 10 }} allowDecimals={false} />
+                <XAxis dataKey="day" tick={{ fontSize: 11 }} tickFormatter={d => d.slice(5)} />
+                <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
                 <Tooltip
-                  contentStyle={{ fontSize: 12 }}
+                  contentStyle={{ fontSize: 12, borderRadius: 8 }}
                   labelFormatter={d => new Date(d).toLocaleDateString()}
                   formatter={(value: any, name: any) => [
                     name === 'count' ? value : Math.round(value),
                     name === 'count' ? 'Leads' : 'Avg Score',
                   ]}
                 />
-                <Line type="monotone" dataKey="count" stroke="#7c3aed" strokeWidth={2} dot={false} />
-                <Line type="monotone" dataKey="avg_score" stroke="#f59e0b" strokeWidth={1.5} dot={false} strokeDasharray="4 2" />
+                <Line type="monotone" dataKey="count" stroke="#7c3aed" strokeWidth={2} dot={false} name="count" />
+                <Line type="monotone" dataKey="avg_score" stroke="#f59e0b" strokeWidth={1.5} dot={false} strokeDasharray="4 2" name="avg_score" />
               </LineChart>
             </ResponsiveContainer>
           ) : (
-            <p className="text-sm text-gray-400 text-center py-12">No trend data yet</p>
+            <p className="text-sm text-gray-400 text-center py-16">No trend data yet</p>
           )}
         </div>
 
         {/* Segment Breakdown */}
-        <div className="bg-white rounded-xl border border-gray-200 p-4">
-          <h3 className="text-sm font-semibold text-gray-900 mb-3">Segment Breakdown</h3>
+        <div className="bg-white rounded-xl border border-gray-200 p-5">
+          <h3 className="text-sm font-semibold text-gray-900 mb-4">Segment Breakdown</h3>
           {segments.length > 0 ? (
-            <div className="flex items-center gap-4">
-              <ResponsiveContainer width="50%" height={200}>
+            <div className="flex items-center gap-6">
+              <ResponsiveContainer width="50%" height={220}>
                 <PieChart>
                   <Pie
                     data={segments}
@@ -391,93 +421,129 @@ export function Dashboard() {
                     nameKey="segment"
                     cx="50%"
                     cy="50%"
-                    outerRadius={70}
-                    innerRadius={40}
+                    outerRadius={80}
+                    innerRadius={45}
                     paddingAngle={2}
                   >
                     {segments.map((s) => (
                       <Cell key={s.segment} fill={SEGMENT_COLORS[s.segment] || '#94a3b8'} />
                     ))}
                   </Pie>
-                  <Tooltip contentStyle={{ fontSize: 12 }} />
+                  <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} />
                 </PieChart>
               </ResponsiveContainer>
-              <div className="flex-1 space-y-2">
+              <div className="flex-1 space-y-3">
                 {segments.map(s => (
-                  <div key={s.segment} className="flex items-center justify-between text-sm">
-                    <div className="flex items-center gap-2">
+                  <div key={s.segment} className="flex items-center justify-between">
+                    <div className="flex items-center gap-2.5">
                       <div className="w-3 h-3 rounded-full" style={{ backgroundColor: SEGMENT_COLORS[s.segment] }} />
-                      <span className="font-medium">{s.segment}</span>
+                      <span className="text-sm font-medium text-gray-900">{s.segment}</span>
                     </div>
                     <div className="text-right">
-                      <span className="text-gray-900 font-medium">{s.count}</span>
-                      <span className="text-gray-400 text-xs ml-1">avg {Math.round(s.avg_score)}</span>
+                      <span className="text-sm font-semibold text-gray-900">{s.count}</span>
+                      <span className="text-xs text-gray-400 ml-1.5">avg {Math.round(s.avg_score)}</span>
                     </div>
                   </div>
                 ))}
               </div>
             </div>
           ) : (
-            <p className="text-sm text-gray-400 text-center py-12">No segment data yet</p>
+            <p className="text-sm text-gray-400 text-center py-16">No segment data yet</p>
           )}
         </div>
 
-        {/* Feedback Accuracy */}
-        <div className="bg-white rounded-xl border border-gray-200 p-4">
-          <h3 className="text-sm font-semibold text-gray-900 mb-3">Score vs Feedback</h3>
+        {/* Score Distribution — always show if leads exist */}
+        {feedbackData && feedbackData.score_distribution && feedbackData.score_distribution.length > 0 && (
+          <div className="bg-white rounded-xl border border-gray-200 p-5">
+            <h3 className="text-sm font-semibold text-gray-900 mb-4">Score Distribution</h3>
+            <ResponsiveContainer width="100%" height={220}>
+              <BarChart data={feedbackData.score_distribution}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                <XAxis dataKey="range" tick={{ fontSize: 12 }} />
+                <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
+                <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} formatter={(v: any) => [v, 'Leads']} />
+                <Bar dataKey="total" name="Leads" radius={[4, 4, 0, 0]}>
+                  {feedbackData.score_distribution.map((d) => (
+                    <Cell key={d.range} fill={SCORE_RANGE_COLORS[d.range] || '#7c3aed'} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+
+        {/* Top Patterns — use vertical names (search_patterns) instead of signals */}
+        {segments.length > 0 && (
+          <div className="bg-white rounded-xl border border-gray-200 p-5">
+            <h3 className="text-sm font-semibold text-gray-900 mb-4">Top Verticals</h3>
+            <TopVerticalsWidget />
+          </div>
+        )}
+
+        {/* Score vs Feedback */}
+        <div className="bg-white rounded-xl border border-gray-200 p-5">
+          <h3 className="text-sm font-semibold text-gray-900 mb-4">Score vs Feedback</h3>
           {feedbackData && feedbackData.score_by_feedback.length > 0 ? (
-            <ResponsiveContainer width="100%" height={200}>
+            <ResponsiveContainer width="100%" height={220}>
               <BarChart data={feedbackData.score_by_feedback.map(f => ({
                 verdict: FEEDBACK_LABELS[f.verdict] || f.verdict,
                 count: f.count,
                 avg_score: Math.round(f.avg_score),
               }))}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                <XAxis dataKey="verdict" tick={{ fontSize: 10 }} />
-                <YAxis tick={{ fontSize: 10 }} />
-                <Tooltip contentStyle={{ fontSize: 12 }} />
+                <XAxis dataKey="verdict" tick={{ fontSize: 11 }} />
+                <YAxis tick={{ fontSize: 11 }} />
+                <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} />
                 <Bar dataKey="count" fill="#7c3aed" radius={[4, 4, 0, 0]} name="Count" />
                 <Bar dataKey="avg_score" fill="#f59e0b" radius={[4, 4, 0, 0]} name="Avg Score" />
               </BarChart>
             </ResponsiveContainer>
           ) : (
-            <p className="text-sm text-gray-400 text-center py-12">No feedback data yet</p>
+            <div className="text-center py-16">
+              <BarChart3 className="w-8 h-8 text-gray-200 mx-auto mb-2" />
+              <p className="text-sm text-gray-400">No feedback data yet</p>
+              <p className="text-xs text-gray-300 mt-1">Provide feedback on leads to populate this chart</p>
+            </div>
           )}
         </div>
 
         {/* Score Range Outcomes */}
-        <div className="bg-white rounded-xl border border-gray-200 p-4">
-          <h3 className="text-sm font-semibold text-gray-900 mb-3">Score Range Outcomes</h3>
+        <div className="bg-white rounded-xl border border-gray-200 p-5">
+          <h3 className="text-sm font-semibold text-gray-900 mb-4">Score Range Outcomes</h3>
           {feedbackData && feedbackData.score_ranges.length > 0 ? (
-            <ResponsiveContainer width="100%" height={200}>
+            <ResponsiveContainer width="100%" height={220}>
               <BarChart data={feedbackData.score_ranges} layout="vertical">
                 <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                <XAxis type="number" tick={{ fontSize: 10 }} />
-                <YAxis dataKey="range" type="category" tick={{ fontSize: 11 }} width={55} />
-                <Tooltip contentStyle={{ fontSize: 12 }} />
-                <Bar dataKey="positive" fill="#10b981" stackId="a" name="Positive" radius={[0, 0, 0, 0]} />
+                <XAxis type="number" tick={{ fontSize: 11 }} />
+                <YAxis dataKey="range" type="category" tick={{ fontSize: 12 }} width={55} />
+                <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} />
+                <Bar dataKey="positive" fill="#10b981" stackId="a" name="Positive" />
                 <Bar dataKey="negative" fill="#ef4444" stackId="a" name="Negative" radius={[0, 4, 4, 0]} />
                 <Legend wrapperStyle={{ fontSize: 11 }} />
               </BarChart>
             </ResponsiveContainer>
           ) : (
-            <p className="text-sm text-gray-400 text-center py-12">No score range data yet</p>
+            <div className="text-center py-16">
+              <TrendingUp className="w-8 h-8 text-gray-200 mx-auto mb-2" />
+              <p className="text-sm text-gray-400">No score range data yet</p>
+              <p className="text-xs text-gray-300 mt-1">Provide feedback on leads to see outcome correlations</p>
+            </div>
           )}
         </div>
 
-        {/* Feedback Breakdown (from overview) */}
+        {/* Feedback Distribution (from overview) */}
         {overview && overview.feedback_breakdown.length > 0 && (
-          <div className="bg-white rounded-xl border border-gray-200 p-4">
-            <h3 className="text-sm font-semibold text-gray-900 mb-3">Feedback Distribution</h3>
-            <ResponsiveContainer width="100%" height={180}>
+          <div className="bg-white rounded-xl border border-gray-200 p-5">
+            <h3 className="text-sm font-semibold text-gray-900 mb-4">Feedback Distribution</h3>
+            <ResponsiveContainer width="100%" height={200}>
               <BarChart data={overview.feedback_breakdown.map(f => ({
                 name: FEEDBACK_LABELS[f.verdict] || f.verdict,
                 count: f.count,
               }))}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                 <XAxis dataKey="name" tick={{ fontSize: 11 }} />
-                <YAxis tick={{ fontSize: 10 }} allowDecimals={false} />
-                <Tooltip contentStyle={{ fontSize: 12 }} />
+                <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
+                <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} />
                 <Bar dataKey="count" radius={[4, 4, 0, 0]}>
                   {overview.feedback_breakdown.map((_, i) => (
                     <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
@@ -488,41 +554,16 @@ export function Dashboard() {
           </div>
         )}
 
-        {/* Score Distribution Histogram */}
-        {overview && overview.total_leads > 0 && (
-          <div className="bg-white rounded-xl border border-gray-200 p-4">
-            <h3 className="text-sm font-semibold text-gray-900 mb-3">Score Distribution</h3>
-            {feedbackData && feedbackData.score_ranges.length > 0 ? (
-              <ResponsiveContainer width="100%" height={200}>
-                <BarChart data={feedbackData.score_ranges.map(r => ({
-                  range: r.range,
-                  total: r.total,
-                  positive: r.positive,
-                  negative: r.negative,
-                }))}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                  <XAxis dataKey="range" tick={{ fontSize: 11 }} />
-                  <YAxis tick={{ fontSize: 10 }} allowDecimals={false} />
-                  <Tooltip contentStyle={{ fontSize: 12 }} />
-                  <Bar dataKey="total" fill="#7c3aed" radius={[4, 4, 0, 0]} name="Leads" />
-                </BarChart>
-              </ResponsiveContainer>
-            ) : (
-              <p className="text-sm text-gray-400 text-center py-12">No score data yet</p>
-            )}
-          </div>
-        )}
-
         {/* Vertical Distribution */}
         {verticals.length > 0 && (
-          <div className="bg-white rounded-xl border border-gray-200 p-4">
-            <h3 className="text-sm font-semibold text-gray-900 mb-3">Vertical Distribution</h3>
-            <ResponsiveContainer width="100%" height={200}>
+          <div className="bg-white rounded-xl border border-gray-200 p-5">
+            <h3 className="text-sm font-semibold text-gray-900 mb-4">Vertical Distribution</h3>
+            <ResponsiveContainer width="100%" height={220}>
               <BarChart data={verticals.slice(0, 8)} layout="vertical">
                 <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                <XAxis type="number" tick={{ fontSize: 10 }} allowDecimals={false} />
-                <YAxis dataKey="name" type="category" tick={{ fontSize: 10 }} width={90} />
-                <Tooltip contentStyle={{ fontSize: 12 }} />
+                <XAxis type="number" tick={{ fontSize: 11 }} allowDecimals={false} />
+                <YAxis dataKey="name" type="category" tick={{ fontSize: 10 }} width={100} />
+                <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} />
                 <Bar dataKey="leads" fill="#14b8a6" radius={[0, 4, 4, 0]} name="Leads" />
               </BarChart>
             </ResponsiveContainer>
@@ -531,43 +572,35 @@ export function Dashboard() {
 
         {/* Source Performance */}
         {sourceData && sourceData.signal_correlation.length > 0 && (
-          <div className="bg-white rounded-xl border border-gray-200 p-4">
-            <h3 className="text-sm font-semibold text-gray-900 mb-3">Source Performance</h3>
+          <div className="bg-white rounded-xl border border-gray-200 p-5">
+            <h3 className="text-sm font-semibold text-gray-900 mb-4">Source Performance</h3>
             <p className="text-xs text-gray-400 mb-2">Signal count vs. average score correlation</p>
-            <ResponsiveContainer width="100%" height={180}>
+            <ResponsiveContainer width="100%" height={200}>
               <BarChart data={sourceData.signal_correlation.map(s => ({
                 signals: s.signal_range,
                 count: s.count,
                 avg_score: Math.round(s.avg_score),
               }))}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                <XAxis dataKey="signals" tick={{ fontSize: 11 }} label={{ value: 'Signals', position: 'bottom', fontSize: 10, offset: -5 }} />
-                <YAxis tick={{ fontSize: 10 }} />
-                <Tooltip contentStyle={{ fontSize: 12 }} />
+                <XAxis dataKey="signals" tick={{ fontSize: 11 }} />
+                <YAxis tick={{ fontSize: 11 }} />
+                <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} />
                 <Bar dataKey="avg_score" fill="#3b82f6" radius={[4, 4, 0, 0]} name="Avg Score" />
                 <Bar dataKey="count" fill="#e2e8f0" radius={[4, 4, 0, 0]} name="Leads" />
               </BarChart>
             </ResponsiveContainer>
           </div>
         )}
-
-        {/* Top Patterns */}
-        {segments.length > 0 && (
-          <div className="bg-white rounded-xl border border-gray-200 p-4">
-            <h3 className="text-sm font-semibold text-gray-900 mb-3">Top Patterns</h3>
-            <TopPatternsWidget />
-          </div>
-        )}
       </div>
 
-      {/* ═══ Section 2b: Campaign Performance Table ═══ */}
+      {/* ═══ Section 4: Campaign Performance Table ═══ */}
       <CampaignPerformanceTable />
 
-      {/* ═══ Section 2c: Cross-Campaign Run Trends ═══ */}
+      {/* ═══ Section 5: Cross-Campaign Run Trends ═══ */}
       <RunTrendsCharts />
 
-      {/* ═══ Section 3: AI Recommendations ═══ */}
-      <div className="bg-white rounded-xl border border-gray-200 p-4">
+      {/* ═══ Section 6: AI Recommendations ═══ */}
+      <div className="bg-white rounded-xl border border-gray-200 p-5">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
             <Sparkles className="w-5 h-5 text-amber-500" />
@@ -643,63 +676,68 @@ export function Dashboard() {
 
 // ── Sub-components ─────────────────────────────────────────────
 
+const ACCENT_STYLES: Record<string, string> = {
+  brand: 'border-brand-100 bg-brand-50/40',
+  indigo: 'border-indigo-100 bg-indigo-50/40',
+  emerald: 'border-emerald-100 bg-emerald-50/40',
+  blue: 'border-blue-100 bg-blue-50/40',
+  green: 'border-green-100 bg-green-50/40',
+  amber: 'border-amber-100 bg-amber-50/40',
+};
+
+function OverviewStat({ icon, label, value, accent }: { icon: React.ReactNode; label: string; value: string | number; accent: string }) {
+  return (
+    <div className={`rounded-xl border p-4 ${ACCENT_STYLES[accent] || 'border-gray-200 bg-white'}`}>
+      <div className="flex items-center gap-2 mb-2">{icon}</div>
+      <p className="text-2xl font-bold text-gray-900">{value}</p>
+      <p className="text-xs text-gray-500 mt-0.5">{label}</p>
+    </div>
+  );
+}
+
 function RunPill({ run, progress }: { run: Run; progress?: { phase?: string; step_number?: number; total_steps?: number; tokens?: { estimated_cost: number } } }) {
   const cfg = STATUS_CONFIG[run.status] || STATUS_CONFIG.pending;
   const isActive = run.status === 'running' || run.status === 'pending';
 
   return (
-    <Link to={`/runs/${run.id}`} className="flex items-center justify-between py-1.5 px-2 rounded hover:bg-gray-50 transition-colors">
-      <div className="flex items-center gap-2 min-w-0">
+    <Link to={isActive ? `/campaigns/${run.campaign_id}` : `/runs`} className="flex items-center gap-3 py-2 px-2.5 rounded-lg hover:bg-gray-50 transition-colors">
+      <div className="shrink-0">
         {isActive ? (
-          <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse shrink-0" />
+          <span className="flex w-5 h-5 items-center justify-center"><span className="w-2.5 h-2.5 rounded-full bg-green-500 animate-pulse" /></span>
         ) : (
           <span className={cfg.color}>{cfg.icon}</span>
         )}
-        <span className="text-sm text-gray-900 truncate">
-          {run.campaign_name || 'Pipeline Run'}
-        </span>
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm text-gray-900 font-medium truncate">{run.campaign_name || 'Pipeline Run'}</p>
         {isActive && progress?.phase && (
-          <span className="text-xs text-gray-500 capitalize shrink-0">{progress.phase}</span>
+          <p className="text-xs text-gray-500 capitalize">{progress.phase}
+            {progress.step_number != null && progress.total_steps != null && (
+              <span className="text-gray-400 ml-1">({Math.round((progress.step_number / progress.total_steps) * 100)}%)</span>
+            )}
+          </p>
         )}
       </div>
-      <div className="flex items-center gap-2 shrink-0">
-        {isActive && progress?.step_number != null && progress?.total_steps != null ? (
-          <>
-            <div className="w-12 h-1.5 bg-gray-200 rounded-full overflow-hidden">
-              <div
-                className="h-full bg-brand-500 rounded-full transition-all"
-                style={{ width: `${Math.round((progress.step_number / progress.total_steps) * 100)}%` }}
-              />
+      <div className="shrink-0 text-right">
+        {isActive && progress?.step_number != null && progress.total_steps != null ? (
+          <div className="flex items-center gap-2">
+            <div className="w-14 h-1.5 bg-gray-200 rounded-full overflow-hidden">
+              <div className="h-full bg-brand-500 rounded-full transition-all" style={{ width: `${Math.round((progress.step_number / progress.total_steps) * 100)}%` }} />
             </div>
-            <span className="text-xs text-gray-500">{Math.round((progress.step_number / progress.total_steps) * 100)}%</span>
             {progress.tokens?.estimated_cost != null && (
-              <span className="text-xs text-gray-400">${progress.tokens.estimated_cost.toFixed(3)}</span>
+              <span className="text-[10px] text-gray-400">${progress.tokens.estimated_cost.toFixed(2)}</span>
             )}
-          </>
+          </div>
         ) : (
-          <>
+          <div className="flex items-center gap-2">
             {run.lead_count > 0 && (
-              <span className="text-xs text-gray-500">{run.lead_count} leads</span>
+              <span className="text-xs font-medium text-gray-600">{run.lead_count} leads</span>
             )}
-            <span className="text-xs text-gray-400">
-              {timeAgo(run.completed_at || run.created_at)}
-            </span>
-          </>
+            <span className="text-[10px] text-gray-400">{timeAgo(run.completed_at || run.created_at)}</span>
+          </div>
         )}
       </div>
     </Link>
-  );
-}
-
-function MiniStat({ icon, label, value }: { icon: React.ReactNode; label: string; value: string | number }) {
-  return (
-    <div className="flex items-center gap-2">
-      <span className="text-gray-400">{icon}</span>
-      <div>
-        <p className="text-xs text-gray-500">{label}</p>
-        <p className="text-sm font-bold text-gray-900">{value}</p>
-      </div>
-    </div>
   );
 }
 
@@ -717,14 +755,14 @@ function RunTrendsCharts() {
   if (loading || trends.length < 2) return null;
 
   const scoreData = trends.map(t => ({
-    name: t.campaign_name ? t.campaign_name.substring(0, 15) : 'Run',
+    name: t.campaign_name ? t.campaign_name.substring(0, 20) : 'Run',
     date: new Date(t.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
     avg_score: Math.round(t.avg_score || 0),
     leads: t.lead_count || 0,
   }));
 
   const costData = trends.map(t => ({
-    name: t.campaign_name ? t.campaign_name.substring(0, 15) : 'Run',
+    name: t.campaign_name ? t.campaign_name.substring(0, 20) : 'Run',
     date: new Date(t.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
     cost: Math.round((t.estimated_cost || 0) * 1000) / 1000,
     leads: t.lead_count || 0,
@@ -732,9 +770,8 @@ function RunTrendsCharts() {
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-      {/* Score Trend */}
-      <div className="bg-white rounded-xl border border-gray-200 p-4">
-        <div className="flex items-center gap-2 mb-3">
+      <div className="bg-white rounded-xl border border-gray-200 p-5">
+        <div className="flex items-center gap-2 mb-4">
           <TrendingUp className="w-4 h-4 text-brand-600" />
           <h3 className="text-sm font-semibold text-gray-900">Score Trend (All Runs)</h3>
         </div>
@@ -764,10 +801,9 @@ function RunTrendsCharts() {
         </div>
       </div>
 
-      {/* Cost per Run */}
-      <div className="bg-white rounded-xl border border-gray-200 p-4">
-        <div className="flex items-center gap-2 mb-3">
-          <BarChart3 className="w-4 h-4 text-emerald-600" />
+      <div className="bg-white rounded-xl border border-gray-200 p-5">
+        <div className="flex items-center gap-2 mb-4">
+          <DollarSign className="w-4 h-4 text-emerald-600" />
           <h3 className="text-sm font-semibold text-gray-900">Cost per Run</h3>
         </div>
         <div className="h-48">
@@ -836,7 +872,7 @@ function CampaignPerformanceTable() {
 
   return (
     <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
+      <div className="flex items-center justify-between px-5 py-3.5 border-b border-gray-100">
         <div className="flex items-center gap-2">
           <Target className="w-4 h-4 text-brand-600" />
           <h3 className="text-sm font-semibold text-gray-900">Campaign Performance</h3>
@@ -875,9 +911,9 @@ function CampaignPerformanceTable() {
               <td className="px-4 py-3">
                 {c.avg_score ? (
                   <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
-                    c.avg_score >= 80 ? 'bg-emerald-50 text-emerald-700' :
-                    c.avg_score >= 60 ? 'bg-blue-50 text-blue-700' :
-                    c.avg_score >= 40 ? 'bg-amber-50 text-amber-700' : 'bg-gray-100 text-gray-600'
+                    c.avg_score >= 70 ? 'bg-emerald-50 text-emerald-700' :
+                    c.avg_score >= 55 ? 'bg-blue-50 text-blue-700' :
+                    c.avg_score >= 35 ? 'bg-amber-50 text-amber-700' : 'bg-gray-100 text-gray-600'
                   }`}>{Math.round(c.avg_score)}</span>
                 ) : <span className="text-gray-400">--</span>}
               </td>
@@ -898,43 +934,42 @@ function CampaignPerformanceTable() {
   );
 }
 
-function TopPatternsWidget() {
-  const [tags, setTags] = useState<{ tag: string; count: number }[]>([]);
+function TopVerticalsWidget() {
+  const [verticalNames, setVerticalNames] = useState<{ name: string; count: number }[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     api('/campaigns')
       .then((campaigns: any[]) => {
-        const tagMap: Record<string, number> = {};
+        const nameMap: Record<string, number> = {};
         for (const c of (Array.isArray(campaigns) ? campaigns : [])) {
-          const signals: string[] = JSON.parse(c.target_signals || '[]');
-          const categories: string[] = JSON.parse(c.target_categories || '[]');
-          for (const t of [...signals, ...categories]) {
-            tagMap[t] = (tagMap[t] || 0) + 1;
+          const patterns = c.search_patterns || [];
+          for (const p of (Array.isArray(patterns) ? patterns : [])) {
+            const name = typeof p === 'string' ? p : p.name;
+            if (name) nameMap[name] = (nameMap[name] || 0) + 1;
           }
         }
-        const sorted = Object.entries(tagMap)
-          .map(([tag, count]) => ({ tag, count }))
+        const sorted = Object.entries(nameMap)
+          .map(([name, count]) => ({ name, count }))
           .sort((a, b) => b.count - a.count)
-          .slice(0, 12);
-        setTags(sorted);
+          .slice(0, 10);
+        setVerticalNames(sorted);
       })
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
 
-  if (loading || tags.length === 0) return <p className="text-sm text-gray-400 text-center py-12">No patterns yet</p>;
+  if (loading || verticalNames.length === 0) return <p className="text-sm text-gray-400 text-center py-16">No verticals defined yet</p>;
 
-  const maxCount = tags[0]?.count || 1;
+  const maxCount = verticalNames[0]?.count || 1;
 
   return (
-    <div className="space-y-1.5">
-      {tags.map(({ tag, count }) => (
-        <div key={tag} className="flex items-center gap-2">
-          <Hash className="w-3 h-3 text-gray-400 shrink-0" />
-          <span className="text-xs text-gray-700 w-28 truncate">{tag}</span>
+    <div className="space-y-2">
+      {verticalNames.map(({ name, count }) => (
+        <div key={name} className="flex items-center gap-3">
+          <span className="text-xs text-gray-700 w-48 truncate" title={name}>{name}</span>
           <div className="flex-1 bg-gray-100 rounded-full h-2 overflow-hidden">
-            <div className="h-full bg-brand-500 rounded-full" style={{ width: `${(count / maxCount) * 100}%` }} />
+            <div className="h-full bg-brand-500 rounded-full transition-all" style={{ width: `${(count / maxCount) * 100}%` }} />
           </div>
           <span className="text-xs text-gray-400 w-5 text-right">{count}</span>
         </div>

@@ -112,4 +112,16 @@ router.put('/keys', authenticate, requireAdmin, (req: AuthRequest, res: Response
   res.json({ success: true });
 });
 
+// GET /settings/timezone — Returns server timezone for schedule display
+router.get('/timezone', authenticate, (_req: AuthRequest, res: Response) => {
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const abbr = new Date().toLocaleTimeString('en-US', { timeZoneName: 'short' }).split(' ').pop() || '';
+  const offset = new Date().getTimezoneOffset();
+  const sign = offset <= 0 ? '+' : '-';
+  const absH = Math.floor(Math.abs(offset) / 60);
+  const absM = Math.abs(offset) % 60;
+  const utcOffset = `UTC${sign}${absH}${absM ? ':' + String(absM).padStart(2, '0') : ''}`;
+  res.json({ timezone: tz, abbreviation: abbr, utc_offset: utcOffset });
+});
+
 export default router;

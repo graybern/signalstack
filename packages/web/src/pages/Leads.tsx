@@ -1,8 +1,10 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api/client';
+import { useAuth } from '../hooks/useAuth';
 import {
   Search,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   ArrowUpDown,
@@ -16,6 +18,9 @@ import {
   SlidersHorizontal,
   Calendar,
   X,
+  Trash2,
+  AlertTriangle,
+  FileText,
 } from 'lucide-react';
 import { ScoreBadge, SegmentBadge } from '../components/ScoreBadge';
 
@@ -49,6 +54,13 @@ interface Stats {
 interface CampaignOption {
   id: string;
   name: string;
+}
+
+interface RunOption {
+  id: string;
+  label: string;
+  lead_count: number;
+  status: string;
 }
 
 const SEGMENTS = ['', 'ENT', 'MM', 'SMB'];
@@ -104,6 +116,9 @@ const EXPORT_FIELD_OPTIONS = [
 ];
 
 export function Leads() {
+  const { user } = useAuth();
+  const canDelete = user?.role === 'superadmin' || user?.role === 'admin' || user?.role === 'operator';
+  const briefPickerRef = useRef<HTMLDivElement>(null);
   const [leads, setLeads] = useState<Lead[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -113,6 +128,8 @@ export function Leads() {
   const [feedbackFilter, setFeedbackFilter] = useState('');
   const [campaignId, setCampaignId] = useState('');
   const [campaigns, setCampaigns] = useState<CampaignOption[]>([]);
+  const [runId, setRunId] = useState('');
+  const [runs, setRuns] = useState<RunOption[]>([]);
   const [sort, setSort] = useState('fit_score');
   const [order, setOrder] = useState<'asc' | 'desc'>('desc');
   const [stats, setStats] = useState<Stats | null>(null);
@@ -126,6 +143,102 @@ export function Leads() {
   const [exporting, setExporting] = useState(false);
   const [showExportPicker, setShowExportPicker] = useState(false);
   const [exportFields, setExportFields] = useState<Set<string>>(new Set(EXPORT_FIELD_OPTIONS.map(f => f.key)));
+  const [selectedLeads, setSelectedLeads] = useState<Set<string>>(new Set());
+  const [deleteTarget, setDeleteTarget] = useState<{ type: 'single' | 'bulk' | 'all'; ids?: string[]; name?: string; count?: number } | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [briefStatus, setBriefStatus] = useState<{ phase: string; count?: number } | null>(null);
+  const [showBriefPicker, setShowBriefPicker] = useState(false);
+
+  const handleDownloadBriefs = async (format: 'markdown' | 'pdf') => {
+    setShowBriefPicker(false);
+    setBriefStatus({ phase: 'Fetching briefs...' });
+    try {
+      const params = new URLSearchParams();
+      if (segment) params.set('segment', segment);
+      if (campaignId) params.set('campaign_id', campaignId);
+      if (runId) params.set('run_id', runId);
+      if (feedbackFilter && feedbackFilter !== 'none') params.set('feedback', feedbackFilter);
+      if (minScore) params.set('min_score', minScore);
+      if (maxScore) params.set('max_score', maxScore);
+      const data = await api(`/leads/export/briefs?${params}`) as any;
+      if (!data.briefs || data.briefs.length === 0) {
+        setBriefStatus({ phase: 'No briefs found', count: 0 });
+        setTimeout(() => setBriefStatus(null), 3000);
+        return;
+      }
+      const count = data.briefs.length;
+
+      if (format === 'markdown') {
+        if (count === 1) {
+          setBriefStatus({ phase: 'Downloading brief...', count: 1 });
+          const b = data.briefs[0];
+          const blob = new Blob([b.markdown], { type: 'text/markdown' });
+          downloadBlob(blob, `${b.filename}.md`);
+        } else {
+          setBriefStatus({ phase: `Packaging ${count} briefs...`, count });
+          const { default: JSZip } = await import('jszip');
+          const zip = new JSZip();
+          for (const b of data.briefs) {
+            zip.file(`${b.filename}.md`, b.markdown);
+          }
+          const blob = await zip.generateAsync({ type: 'blob' });
+          downloadBlob(blob, `briefs-markdown-${new Date().toISOString().slice(0, 10)}.zip`);
+        }
+      } else {
+        const { openBriefPrintWindow } = await import('../utils/markdownToPdf');
+        openBriefPrintWindow(data.briefs.map((b: any) => ({
+          markdown: b.markdown,
+          company_name: b.company_name,
+          fit_score: b.fit_score,
+          segment: b.segment,
+        })));
+      }
+      setBriefStatus({ phase: format === 'pdf' ? `Opened ${count} briefs for printing` : `Downloaded ${count} brief${count === 1 ? '' : 's'}`, count });
+      setTimeout(() => setBriefStatus(null), 3000);
+    } catch (err: any) {
+      const message = err?.message || 'Something went wrong';
+      setBriefStatus({ phase: `Export failed: ${message}`, count: 0 });
+      setTimeout(() => setBriefStatus(null), 5000);
+    }
+  };
+
+  const toggleSelect = (id: string) => {
+    setSelectedLeads(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedLeads.size === filteredLeads.length) {
+      setSelectedLeads(new Set());
+    } else {
+      setSelectedLeads(new Set(filteredLeads.map(l => l.id)));
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    try {
+      if (deleteTarget.type === 'single' && deleteTarget.ids?.[0]) {
+        await api(`/leads/${deleteTarget.ids[0]}`, { method: 'DELETE' });
+      } else if (deleteTarget.type === 'bulk' && deleteTarget.ids) {
+        await api('/leads', { method: 'DELETE', body: JSON.stringify({ ids: deleteTarget.ids }) });
+      } else {
+        await api('/leads', { method: 'DELETE' });
+      }
+      setSelectedLeads(new Set());
+      setDeleteTarget(null);
+      fetchLeads();
+      api('/leads/stats').then((data: any) => setStats(data)).catch(() => {});
+    } catch (err) {
+      console.error('Delete failed:', err);
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   useEffect(() => {
     api('/campaigns').then((data: any) => {
@@ -134,12 +247,41 @@ export function Leads() {
     api('/leads/stats').then((data: any) => setStats(data)).catch(() => {});
   }, []);
 
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (briefPickerRef.current && !briefPickerRef.current.contains(e.target as Node)) {
+        setShowBriefPicker(false);
+      }
+    }
+    if (showBriefPicker) document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showBriefPicker]);
+
+  useEffect(() => {
+    const params = new URLSearchParams({ limit: '200' });
+    if (campaignId) params.set('campaign_id', campaignId);
+    api(`/runs?${params}`).then((data: any) => {
+      const runOptions: RunOption[] = (data.runs || [])
+        .filter((r: any) => r.lead_count > 0)
+        .map((r: any) => ({
+          id: r.id,
+          label: `${new Date(r.created_at).toLocaleDateString()} ${new Date(r.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} — ${r.lead_count} leads`,
+          lead_count: r.lead_count,
+          status: r.status,
+        }));
+      setRuns(runOptions);
+      if (runId && !runOptions.some((r: RunOption) => r.id === runId)) setRunId('');
+    }).catch(() => {});
+  }, [campaignId]);
+
   const fetchLeads = useCallback(async () => {
     setLoading(true);
+    setSelectedLeads(new Set());
     try {
       const params = new URLSearchParams({ page: String(page), limit: String(PAGE_SIZE), sort, order });
       if (segment) params.set('segment', segment);
       if (campaignId) params.set('campaign_id', campaignId);
+      if (runId) params.set('run_id', runId);
       if (needsReoutreach) {
         params.set('needs_reoutreach', 'true');
       } else if (feedbackFilter && feedbackFilter !== 'none') {
@@ -158,7 +300,7 @@ export function Leads() {
     } finally {
       setLoading(false);
     }
-  }, [page, segment, feedbackFilter, campaignId, sort, order, needsReoutreach, minScore, maxScore, minSignals, dateFrom, dateTo]);
+  }, [page, segment, feedbackFilter, campaignId, runId, sort, order, needsReoutreach, minScore, maxScore, minSignals, dateFrom, dateTo]);
 
   useEffect(() => { fetchLeads(); }, [fetchLeads]);
 
@@ -181,16 +323,16 @@ export function Leads() {
       if (feedbackFilter && feedbackFilter !== 'none') params.set('feedback', feedbackFilter);
       if (minScore) params.set('min_score', minScore);
       if (maxScore) params.set('max_score', maxScore);
+      if (exportFields.size > 0 && exportFields.size < EXPORT_FIELD_OPTIONS.length) {
+        params.set('fields', Array.from(exportFields).join(','));
+      }
 
+      const csvText = await api(`/leads/export?${params}`);
       if (format === 'json') {
-        const data = await api(`/leads/export?${params}`);
-        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        const blob = new Blob([JSON.stringify(csvText, null, 2)], { type: 'application/json' });
         downloadBlob(blob, `leads-export-${new Date().toISOString().slice(0, 10)}.json`);
       } else {
-        const response = await fetch(`/api/leads/export?${params}`, {
-          headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
-        });
-        const blob = await response.blob();
+        const blob = new Blob([csvText as string], { type: 'text/csv' });
         downloadBlob(blob, `leads-export-${new Date().toISOString().slice(0, 10)}.csv`);
       }
     } catch (err) {
@@ -223,7 +365,58 @@ export function Leads() {
           <h1 className="text-2xl font-bold text-gray-900">Leads</h1>
           <p className="text-sm text-gray-500 mt-1">{total} total leads across all campaigns</p>
         </div>
-        <div className="relative">
+        <div className="flex items-center gap-2">
+          {canDelete && selectedLeads.size > 0 && (
+            <button
+              onClick={() => setDeleteTarget({ type: 'bulk', ids: Array.from(selectedLeads), count: selectedLeads.size })}
+              className="flex items-center gap-1.5 px-3 py-2 text-sm text-red-600 border border-red-200 rounded-lg hover:bg-red-50"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              Delete {selectedLeads.size} lead{selectedLeads.size !== 1 ? 's' : ''}
+            </button>
+          )}
+          <div className="relative" ref={briefPickerRef}>
+            <button
+              onClick={() => !briefStatus && setShowBriefPicker(!showBriefPicker)}
+              disabled={!!briefStatus}
+              className={`flex items-center gap-2 px-4 py-2 border rounded-lg text-sm disabled:opacity-70 transition-colors ${
+                briefStatus?.count === 0
+                  ? 'border-amber-300 text-amber-700 bg-amber-50'
+                  : briefStatus
+                  ? 'border-brand-300 text-brand-700 bg-brand-50'
+                  : 'border-gray-300 text-gray-700 hover:bg-gray-50'
+              }`}
+            >
+              <FileText className="w-4 h-4" />
+              {briefStatus ? briefStatus.phase : 'Download Briefs'}
+              {!briefStatus && <ChevronDown className="w-3.5 h-3.5 -mr-1" />}
+            </button>
+            {showBriefPicker && (
+              <div className="absolute right-0 top-full mt-1 w-48 bg-white border border-gray-200 rounded-lg shadow-lg z-20 py-1">
+                <button
+                  onClick={() => handleDownloadBriefs('markdown')}
+                  className="w-full text-left px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-3"
+                >
+                  <FileText className="w-4 h-4 text-gray-400" />
+                  <div>
+                    <p className="font-medium">Markdown</p>
+                    <p className="text-xs text-gray-400">.md files</p>
+                  </div>
+                </button>
+                <button
+                  onClick={() => handleDownloadBriefs('pdf')}
+                  className="w-full text-left px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-3 border-t border-gray-100"
+                >
+                  <Download className="w-4 h-4 text-brand-500" />
+                  <div>
+                    <p className="font-medium">PDF</p>
+                    <p className="text-xs text-gray-400">Styled briefs</p>
+                  </div>
+                </button>
+              </div>
+            )}
+          </div>
+          <div className="relative">
           <button
             onClick={() => setShowExportPicker(!showExportPicker)}
             disabled={exporting}
@@ -277,6 +470,7 @@ export function Leads() {
             </div>
           )}
         </div>
+        </div>
       </div>
 
       {/* Stats row */}
@@ -329,10 +523,16 @@ export function Leads() {
           <option value="">All Segments</option>
           {SEGMENTS.filter(Boolean).map(s => <option key={s} value={s}>{s}</option>)}
         </select>
-        <select value={campaignId} onChange={e => { setCampaignId(e.target.value); setPage(1); }} className="px-3 py-2 text-sm border border-gray-300 rounded-lg bg-white">
+        <select value={campaignId} onChange={e => { setCampaignId(e.target.value); setRunId(''); setPage(1); }} className="px-3 py-2 text-sm border border-gray-300 rounded-lg bg-white">
           <option value="">All Campaigns</option>
           {campaigns.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
+        {runs.length > 0 && (
+          <select value={runId} onChange={e => { setRunId(e.target.value); setPage(1); }} className="px-3 py-2 text-sm border border-gray-300 rounded-lg bg-white max-w-[220px]">
+            <option value="">All Runs</option>
+            {runs.map(r => <option key={r.id} value={r.id}>{r.label}</option>)}
+          </select>
+        )}
         <select value={feedbackFilter} onChange={e => { setFeedbackFilter(e.target.value); setNeedsReoutreach(false); setPage(1); }} className="px-3 py-2 text-sm border border-gray-300 rounded-lg bg-white">
           {FEEDBACK_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
         </select>
@@ -427,6 +627,16 @@ export function Leads() {
         <table className="w-full text-sm">
           <thead>
             <tr className="bg-gray-50 border-b border-gray-200">
+              {canDelete && (
+                <th className="px-3 py-3 w-8">
+                  <input
+                    type="checkbox"
+                    checked={filteredLeads.length > 0 && selectedLeads.size === filteredLeads.length}
+                    onChange={toggleSelectAll}
+                    className="rounded border-gray-300 text-brand-600"
+                  />
+                </th>
+              )}
               {[
                 { key: 'company_name', label: 'Company' },
                 { key: 'fit_score', label: 'Score' },
@@ -450,15 +660,25 @@ export function Leads() {
           </thead>
           <tbody className="divide-y divide-gray-100">
             {loading ? (
-              <tr><td colSpan={8} className="px-4 py-12 text-center text-gray-500">Loading leads...</td></tr>
+              <tr><td colSpan={canDelete ? 9 : 8} className="px-4 py-12 text-center text-gray-500">Loading leads...</td></tr>
             ) : filteredLeads.length === 0 ? (
-              <tr><td colSpan={8} className="px-4 py-12 text-center text-gray-500">{search ? 'No leads match your search' : 'No leads found'}</td></tr>
+              <tr><td colSpan={canDelete ? 9 : 8} className="px-4 py-12 text-center text-gray-500">{search ? 'No leads match your search' : 'No leads found'}</td></tr>
             ) : (
               filteredLeads.map(lead => {
                 const feedback = getFeedback(lead);
                 const signalCount = lead.signal_count || 0;
                 return (
-                  <tr key={lead.id} className="hover:bg-gray-50 transition-colors">
+                  <tr key={lead.id} className={`hover:bg-gray-50 transition-colors ${selectedLeads.has(lead.id) ? 'bg-brand-50/30' : ''}`}>
+                    {canDelete && (
+                      <td className="px-3 py-3">
+                        <input
+                          type="checkbox"
+                          checked={selectedLeads.has(lead.id)}
+                          onChange={() => toggleSelect(lead.id)}
+                          className="rounded border-gray-300 text-brand-600"
+                        />
+                      </td>
+                    )}
                     <td className="px-4 py-3">
                       <Link to={`/leads/${lead.id}`} className="font-medium text-gray-900 hover:text-brand-600">
                         {lead.company_name}
@@ -501,9 +721,20 @@ export function Leads() {
                       {new Date(lead.created_at).toLocaleDateString()}
                     </td>
                     <td className="px-4 py-3">
-                      <Link to={`/leads/${lead.id}`} className="text-gray-400 hover:text-brand-600">
-                        <ExternalLink className="w-4 h-4" />
-                      </Link>
+                      <div className="flex items-center gap-1">
+                        <Link to={`/leads/${lead.id}`} className="text-gray-400 hover:text-brand-600">
+                          <ExternalLink className="w-4 h-4" />
+                        </Link>
+                        {canDelete && (
+                          <button
+                            onClick={() => setDeleteTarget({ type: 'single', ids: [lead.id], name: lead.company_name })}
+                            className="text-gray-300 hover:text-red-500 transition-colors"
+                            title="Delete lead"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 );
@@ -538,6 +769,55 @@ export function Leads() {
           </div>
         )}
       </div>
+
+      {/* Delete Confirmation Modal */}
+      {deleteTarget && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl shadow-xl p-6 max-w-md w-full mx-4">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center">
+                <AlertTriangle className="w-5 h-5 text-red-600" />
+              </div>
+              <div>
+                <h3 className="font-semibold text-gray-900">
+                  {deleteTarget.type === 'single' ? 'Delete Lead' : deleteTarget.type === 'bulk' ? `Delete ${deleteTarget.count} Lead${(deleteTarget.count || 0) !== 1 ? 's' : ''}` : 'Clear All Leads'}
+                </h3>
+                <p className="text-sm text-gray-500">This action cannot be undone</p>
+              </div>
+            </div>
+            <p className="text-sm text-gray-600 mb-4">
+              {deleteTarget.type === 'single'
+                ? `Are you sure you want to delete "${deleteTarget.name}"?`
+                : deleteTarget.type === 'bulk'
+                ? `This will permanently delete ${deleteTarget.count} selected lead${(deleteTarget.count || 0) !== 1 ? 's' : ''}.`
+                : `This will permanently delete all ${total} leads from the entire app.`
+              }
+            </p>
+            <ul className="text-sm text-gray-600 mb-6 space-y-1 pl-4">
+              <li className="flex items-center gap-2">
+                <span className="w-1.5 h-1.5 rounded-full bg-red-400" />
+                All associated personas and feedback will be removed
+              </li>
+            </ul>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setDeleteTarget(null)}
+                disabled={deleting}
+                className="px-4 py-2 text-sm text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDelete}
+                disabled={deleting}
+                className="px-4 py-2 text-sm text-white bg-red-600 rounded-lg hover:bg-red-700 disabled:opacity-50"
+              >
+                {deleting ? 'Deleting...' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

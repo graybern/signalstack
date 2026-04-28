@@ -382,6 +382,12 @@ function initSchema(db: Database.Database) {
   if (!leadColsStage.find(c => c.name === 'candidate_data')) {
     db.exec("ALTER TABLE leads ADD COLUMN candidate_data TEXT");
   }
+  if (!leadColsStage.find(c => c.name === 'scorer_thinking')) {
+    db.exec("ALTER TABLE leads ADD COLUMN scorer_thinking TEXT");
+  }
+  if (!leadColsStage.find(c => c.name === 'brief_thinking')) {
+    db.exec("ALTER TABLE leads ADD COLUMN brief_thinking TEXT");
+  }
   db.exec(`CREATE INDEX IF NOT EXISTS idx_leads_pipeline_stage ON leads(pipeline_stage)`);
 
   // Run activity log — persistent log of AI thinking/reasoning during runs

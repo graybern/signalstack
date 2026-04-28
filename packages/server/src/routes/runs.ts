@@ -1,6 +1,6 @@
 import { Router, Response } from 'express';
 import { getDb } from '../db/schema.js';
-import { authenticate, requireMember, AuthRequest } from '../auth/middleware.js';
+import { authenticate, requireMember, requireSuperAdmin, AuthRequest } from '../auth/middleware.js';
 import { runPipeline } from '../agent/orchestrator.js';
 import { cancelRun } from '../agent/runRegistry.js';
 
@@ -26,7 +26,8 @@ router.get('/', authenticate, (req: AuthRequest, res: Response) => {
   const runs = db.prepare(
     `SELECT pr.*,
        u.display_name as triggered_by_name,
-       c.name as campaign_name
+       c.name as campaign_name,
+       (SELECT COUNT(*) FROM pipeline_runs pr2 WHERE pr2.created_at <= pr.created_at) as run_number
      FROM pipeline_runs pr
      LEFT JOIN users u ON u.id = pr.triggered_by
      LEFT JOIN campaigns c ON c.id = pr.campaign_id
@@ -177,6 +178,56 @@ router.post('/trigger', authenticate, requireMember, async (req: AuthRequest, re
   });
 
   res.json({ message: 'Pipeline run triggered', status: 'pending' });
+});
+
+// ── DELETE /:id — Delete a run + associated data (superadmin only) ──
+router.delete('/:id', authenticate, requireSuperAdmin, (req: AuthRequest, res: Response) => {
+  const db = getDb();
+  const run = db.prepare('SELECT id, campaign_id, lead_count FROM pipeline_runs WHERE id = ?').get(req.params.id) as any;
+  if (!run) return res.status(404).json({ error: 'Run not found' });
+
+  const deleteTx = db.transaction(() => {
+    const leads = db.prepare('SELECT id FROM leads WHERE run_id = ?').all(req.params.id) as any[];
+    for (const lead of leads) {
+      db.prepare('DELETE FROM personas WHERE lead_id = ?').run(lead.id);
+      db.prepare('DELETE FROM lead_feedback WHERE lead_id = ?').run(lead.id);
+    }
+    db.prepare('DELETE FROM leads WHERE run_id = ?').run(req.params.id);
+    db.prepare('DELETE FROM run_activity_log WHERE run_id = ?').run(req.params.id);
+    db.prepare('DELETE FROM pipeline_runs WHERE id = ?').run(req.params.id);
+  });
+  deleteTx();
+
+  res.json({ success: true, deleted_leads: run.lead_count || 0 });
+});
+
+// ── DELETE / — Bulk delete runs (superadmin only) ──
+router.delete('/', authenticate, requireSuperAdmin, (req: AuthRequest, res: Response) => {
+  const db = getDb();
+  const ids = req.body?.ids as string[] | undefined;
+  if (!ids || !Array.isArray(ids) || ids.length === 0) {
+    return res.status(400).json({ error: 'ids array required' });
+  }
+
+  const placeholders = ids.map(() => '?').join(',');
+  let totalLeads = 0;
+
+  const deleteTx = db.transaction(() => {
+    for (const id of ids) {
+      const leads = db.prepare('SELECT id FROM leads WHERE run_id = ?').all(id) as any[];
+      for (const lead of leads) {
+        db.prepare('DELETE FROM personas WHERE lead_id = ?').run(lead.id);
+        db.prepare('DELETE FROM lead_feedback WHERE lead_id = ?').run(lead.id);
+      }
+      const result = db.prepare('DELETE FROM leads WHERE run_id = ?').run(id);
+      totalLeads += result.changes;
+    }
+    db.prepare(`DELETE FROM run_activity_log WHERE run_id IN (${placeholders})`).run(...ids);
+    db.prepare(`DELETE FROM pipeline_runs WHERE id IN (${placeholders})`).run(...ids);
+  });
+  deleteTx();
+
+  res.json({ success: true, deleted_runs: ids.length, deleted_leads: totalLeads });
 });
 
 export default router;

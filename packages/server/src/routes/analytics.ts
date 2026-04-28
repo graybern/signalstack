@@ -140,7 +140,20 @@ router.get('/feedback', authenticate, (_req: AuthRequest, res: Response) => {
      GROUP BY range ORDER BY range DESC`
   ).all();
 
-  res.json({ score_by_feedback: scoreByFeedback, score_ranges: scoreRanges });
+  const scoreDistribution = db.prepare(
+    `SELECT
+       CASE
+         WHEN fit_score >= 80 THEN '80-100'
+         WHEN fit_score >= 60 THEN '60-79'
+         WHEN fit_score >= 40 THEN '40-59'
+         ELSE '0-39'
+       END as range,
+       COUNT(*) as total
+     FROM leads
+     GROUP BY range ORDER BY range DESC`
+  ).all();
+
+  res.json({ score_by_feedback: scoreByFeedback, score_ranges: scoreRanges, score_distribution: scoreDistribution });
 });
 
 // ── GET /sources — data source performance ─────────────────────

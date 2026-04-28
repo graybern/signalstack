@@ -49,11 +49,11 @@ Evidence to consider: employee count, engineering team size, office locations, c
 ### 2. Why Now Triggers (0–${w.why_now_triggers} points)
 - ${w.why_now_triggers}: Active VPN replacement project or ZTNA evaluation confirmed
 - ${Math.round(w.why_now_triggers * 0.8)}: Recent trigger event (security incident, compliance mandate, new CTO/CISO, IPO prep)
-- ${Math.round(w.why_now_triggers * 0.6)}: Relevant job postings or RFP signals in last 6 months
-- ${Math.round(w.why_now_triggers * 0.33)}: General growth or modernization signals
+- ${Math.round(w.why_now_triggers * 0.6)}: Relevant job postings, RFP signals, or **multiple compounding growth signals** (e.g., recent funding + hiring surge + geographic expansion together indicate near-term infrastructure needs)
+- ${Math.round(w.why_now_triggers * 0.4)}: At least one growth or modernization signal with plausible urgency
 - 0: No discernible urgency or timing signals
 
-Evidence to consider: job postings, press releases, funding announcements, leadership changes, compliance initiatives.
+Evidence to consider: job postings, press releases, funding announcements, leadership changes, compliance initiatives. **Compound signals**: when 3+ signals from different categories all suggest growing infrastructure needs, score at the upper end even if no single signal is definitive.
 
 ### 3. Remote Access Pain Likelihood (0–${w.remote_access_pain} points)
 - ${w.remote_access_pain}: Confirmed VPN complaints, remote-first with known VPN issues
@@ -66,12 +66,12 @@ Evidence to consider: remote work policies, BYOC/BYOD programs, contractor workf
 
 ### 4. Displacement / Competitive Wedge (0–${w.displacement_wedge} points)
 - ${w.displacement_wedge}: Using a known competitor with documented dissatisfaction
-- ${Math.round(w.displacement_wedge * 0.75)}: Using legacy VPN (Cisco AnyConnect, GlobalProtect, Pulse) with scale pain
-- ${Math.round(w.displacement_wedge * 0.5)}: Likely using a traditional solution based on tech stack signals
-- ${Math.round(w.displacement_wedge * 0.25)}: Unknown current solution but open to evaluation
+- ${Math.round(w.displacement_wedge * 0.75)}: Using legacy VPN (Cisco AnyConnect, GlobalProtect, Pulse) with scale pain, OR company profile **strongly implies VPN usage** (e.g., distributed engineering teams + compliance requirements + large contractor workforce — VPN is near-certain even without naming the product)
+- ${Math.round(w.displacement_wedge * 0.5)}: Likely using a traditional solution based on tech stack signals or industry norms (e.g., gaming studios with Perforce and multi-site builds almost always use VPN for asset access)
+- ${Math.round(w.displacement_wedge * 0.35)}: Unknown current solution but company characteristics suggest remote access needs
 - 0: Recently purchased a competitor or locked into a long contract
 
-Evidence to consider: tech stack signals, G2/TrustRadius reviews, job postings mentioning specific tools, LinkedIn signals.
+Evidence to consider: tech stack signals, G2/TrustRadius reviews, job postings mentioning specific tools, LinkedIn signals. **Important**: Don't require the specific VPN product to be named to score above 50%. Compound evidence from industry, tech stack, and workforce distribution that strongly implies VPN usage should score ${Math.round(w.displacement_wedge * 0.6)}–${Math.round(w.displacement_wedge * 0.75)}.
 
 ### 5. Vertical / Playbook Match (0–${w.vertical_playbook} points)
 - ${w.vertical_playbook}: Core vertical (gaming, developer tools, cloud-native SaaS) with strong pattern match to existing wins
@@ -108,11 +108,11 @@ Apply penalties for any of the following:
 - Negative feedback pattern match (-5 per pattern)
 
 ## Star Rating Map
-- ${scale(90)}–${total} points = 5 stars (Exceptional fit, immediate outreach)
-- ${scale(75)}–${scale(89)} points = 4 stars (Strong fit, prioritize)
-- ${scale(60)}–${scale(74)} points = 3 stars (Good fit, standard cadence)
-- ${scale(40)}–${scale(59)} points = 2 stars (Marginal fit, nurture)
-- Below ${scale(40)} points = 1 star (Poor fit, deprioritize)
+- ${scale(85)}–${total} points = 5 stars (Exceptional fit, immediate outreach)
+- ${scale(70)}–${scale(84)} points = 4 stars (Strong fit, prioritize)
+- ${scale(55)}–${scale(69)} points = 3 stars (Good fit, standard cadence)
+- ${scale(35)}–${scale(54)} points = 2 stars (Marginal fit, nurture)
+- Below ${scale(35)} points = 1 star (Poor fit, deprioritize)
 
 ## Confidence Level
 Assign a confidence level based on data quality:

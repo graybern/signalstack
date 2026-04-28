@@ -116,6 +116,12 @@ export function CampaignDetail() {
   });
   const [globalExclusions, setGlobalExclusions] = useState<{ id: string; company_name: string; domain: string | null }[]>([]);
 
+  // Server timezone for schedule display
+  const [serverTzAbbr, setServerTzAbbr] = useState('');
+  useEffect(() => {
+    api('/settings/timezone').then((data: any) => setServerTzAbbr(data.abbreviation || '')).catch(() => {});
+  }, []);
+
   // Analytics
   const [analytics, setAnalytics] = useState<any>(null);
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
@@ -415,7 +421,7 @@ export function CampaignDetail() {
             ) : '—'}
           </p>
         </div>
-        <StatCard icon={Calendar} label="Schedule" value={campaign.schedule_enabled && campaign.schedule_cron ? describeCron(campaign.schedule_cron) : 'Not scheduled'} small />
+        <StatCard icon={Calendar} label="Schedule" value={campaign.schedule_enabled && campaign.schedule_cron ? `${describeCron(campaign.schedule_cron)}${serverTzAbbr ? ` ${serverTzAbbr}` : ''}` : 'Not scheduled'} small />
       </div>
 
       {/* AI Output Console — live streaming */}
@@ -521,6 +527,7 @@ export function CampaignDetail() {
           canEditExclusions={permissions.canEditExclusions(user?.role)}
           orgICP={orgICP}
           onRunStep={(stepId) => triggerRun([stepId])}
+          serverTzAbbr={serverTzAbbr}
         />
       )}
     </div>
@@ -938,7 +945,7 @@ function ConfigureTab({
   campaign, setCampaign, editConfig, setEditConfig, configTab, setConfigTab,
   configDirty, setConfigDirty, saveConfig, globalExclusions,
   copiedRss, copyRssUrl, campaignId, canEdit, canEditPipeline, canEditSchedule, canEditExclusions,
-  orgICP, onRunStep,
+  orgICP, onRunStep, serverTzAbbr,
 }: {
   campaign: CampaignFull;
   setCampaign: (c: CampaignFull) => void;
@@ -959,6 +966,7 @@ function ConfigureTab({
   canEditExclusions: boolean;
   orgICP?: { verticals: string[]; tech_signals: string[]; competitors: string[] };
   onRunStep?: (stepId: string) => void;
+  serverTzAbbr: string;
 }) {
   const configTabs = [
     { key: 'definition' as const, label: 'Definition', icon: Target },
@@ -989,7 +997,7 @@ function ConfigureTab({
           </div>
           <div>
             <span className="text-xs text-gray-500">Schedule</span>
-            <p className="font-medium text-gray-900">{campaign.schedule_enabled && campaign.schedule_cron ? describeCron(campaign.schedule_cron) : 'Off'}</p>
+            <p className="font-medium text-gray-900">{campaign.schedule_enabled && campaign.schedule_cron ? `${describeCron(campaign.schedule_cron)}${serverTzAbbr ? ` ${serverTzAbbr}` : ''}` : 'Off'}</p>
           </div>
           <div>
             <span className="text-xs text-gray-500">Exclusions</span>
@@ -1055,7 +1063,7 @@ function ConfigureTab({
           {/* Schedule */}
           {configTab === 'schedule' && (
             canEditSchedule ? (
-              <ScheduleTab editConfig={editConfig} setEditConfig={setEditConfig} setConfigDirty={setConfigDirty} />
+              <ScheduleTab editConfig={editConfig} setEditConfig={setEditConfig} setConfigDirty={setConfigDirty} serverTzAbbr={serverTzAbbr} />
             ) : (
               <div className="text-center py-8 text-sm text-gray-400">You don't have permission to edit the schedule.</div>
             )
@@ -1518,7 +1526,7 @@ const DAYS_OF_WEEK = [
   { value: '0', label: 'Sun' },
 ];
 
-function ScheduleTab({ editConfig, setEditConfig, setConfigDirty }: { editConfig: any; setEditConfig: (c: any) => void; setConfigDirty: (d: boolean) => void }) {
+function ScheduleTab({ editConfig, setEditConfig, setConfigDirty, serverTzAbbr }: { editConfig: any; setEditConfig: (c: any) => void; setConfigDirty: (d: boolean) => void; serverTzAbbr: string }) {
   const parseCronParts = (cron: string) => {
     const parts = cron.split(/\s+/);
     if (parts.length < 5) return { minute: '0', hour: '9', days: [] as string[] };
@@ -1597,12 +1605,18 @@ function ScheduleTab({ editConfig, setEditConfig, setConfigDirty }: { editConfig
           <select value={minute} onChange={e => setTime(hour, e.target.value)} className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white">
             {['0', '15', '30', '45'].map(m => <option key={m} value={m}>{m.padStart(2, '0')}</option>)}
           </select>
+          {serverTzAbbr && (
+            <span className="text-xs text-gray-400 font-medium">{serverTzAbbr}</span>
+          )}
         </div>
       </div>
       {editConfig.schedule_cron && (
         <div className="bg-brand-50 border border-brand-100 rounded-lg p-3 flex items-center gap-2">
           <Clock className="w-4 h-4 text-brand-600 flex-shrink-0" />
-          <span className="text-sm text-brand-800 font-medium">{describeCron(editConfig.schedule_cron)}</span>
+          <span className="text-sm text-brand-800 font-medium">
+            {describeCron(editConfig.schedule_cron)}
+            {serverTzAbbr && <span className="text-brand-500 font-normal"> ({serverTzAbbr})</span>}
+          </span>
         </div>
       )}
       <details className="text-xs">

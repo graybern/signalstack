@@ -311,8 +311,8 @@ export async function runCampaign(campaignId: string, triggeredBy: string, reque
         fit_score, fit_score_label, confidence, why_now, score_breakdown,
         pain_hypotheses, tech_stack, competitive_displacement,
         outreach_strategy, source_citations, brief_markdown, signal_count,
-        pipeline_stage, candidate_data, lead_status, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        pipeline_stage, candidate_data, lead_status, scorer_thinking, brief_thinking, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
       ON CONFLICT(id) DO UPDATE SET
         segment = excluded.segment,
         hq_location = excluded.hq_location,
@@ -338,6 +338,8 @@ export async function runCampaign(campaignId: string, triggeredBy: string, reque
         pipeline_stage = excluded.pipeline_stage,
         candidate_data = excluded.candidate_data,
         lead_status = excluded.lead_status,
+        scorer_thinking = COALESCE(excluded.scorer_thinking, leads.scorer_thinking),
+        brief_thinking = COALESCE(excluded.brief_thinking, leads.brief_thinking),
         run_id = excluded.run_id`
     );
 
@@ -348,14 +350,17 @@ export async function runCampaign(campaignId: string, triggeredBy: string, reque
       return leadIdMap.get(companyName)!;
     }
 
-    function persistCandidates(stage: string, candidateList: ResearchCandidate[], scores?: Map<string, ScoringResult>, briefs?: Map<string, BriefResult>) {
+    function persistCandidates(stage: string, candidateList: ResearchCandidate[], scores?: Map<string, ScoringResult>, briefs?: Map<string, BriefResult>, thinkingMap?: Map<string, { scorer?: string; brief?: string }>) {
       const persistTx = db.transaction(() => {
         for (const c of candidateList) {
           const leadId = getLeadId(c.company_name);
           const score = scores?.get(c.company_name);
           const brief = briefs?.get(c.company_name);
+          const thinking = thinkingMap?.get(c.company_name);
           const sourceCitations = brief?.source_citations || [];
-          const signalCount = brief ? (Array.isArray(sourceCitations) ? sourceCitations.length : 0) : (Array.isArray(c.signals) ? c.signals.length : 0);
+          const signalCount = (brief && sourceCitations.length > 0)
+            ? sourceCitations.length
+            : (Array.isArray(c.signals) ? c.signals.length : 0);
           const leadStatus = stage === 'briefed' ? 'scored' : stage;
           const candidateData: Record<string, any> = { signals: c.signals, sources: c.sources, notes: c.notes };
           if (score?.score_breakdown) candidateData.score_breakdown = score.score_breakdown;
@@ -380,7 +385,9 @@ export async function runCampaign(campaignId: string, triggeredBy: string, reque
             signalCount,
             stage,
             JSON.stringify(candidateData),
-            leadStatus
+            leadStatus,
+            thinking?.scorer || null,
+            thinking?.brief || null
           );
         }
       });
@@ -749,7 +756,8 @@ export async function runCampaign(campaignId: string, triggeredBy: string, reque
           scoredCandidates.sort((a, b) => b.score.fit_score - a.score.fit_score);
           // Persist ALL scored candidates before filtering — so every score is saved
           const allScoreMap = new Map(scoredCandidates.map(sc => [sc.candidate.company_name, sc.score]));
-          persistCandidates('scored', scoredCandidates.map(sc => sc.candidate), allScoreMap);
+          const scoreThinkingMap = new Map(scoredCandidates.map(sc => [sc.candidate.company_name, { scorer: sc.score.reasoning || undefined }]));
+          persistCandidates('scored', scoredCandidates.map(sc => sc.candidate), allScoreMap, undefined, scoreThinkingMap);
           // Apply filters to select candidates for brief step
           if (step.min_score_threshold) {
             const before = scoredCandidates.length;
@@ -799,10 +807,11 @@ export async function runCampaign(campaignId: string, triggeredBy: string, reque
             }
           }
           logger.phaseComplete('brief', `Brief generation complete — ${briefResults.length} briefs ready`, { model: stepModel });
-          // Persist briefed leads
+          // Persist briefed leads with thinking
           const briefScoreMap = new Map(briefResults.map(br => [br.candidate.company_name, br.score]));
           const briefMap = new Map(briefResults.map(br => [br.candidate.company_name, br.brief]));
-          persistCandidates('briefed', briefResults.map(br => br.candidate), briefScoreMap, briefMap);
+          const briefThinkingMap = new Map(briefResults.map(br => [br.candidate.company_name, { scorer: br.score.reasoning || undefined, brief: br.brief.thinking || undefined }]));
+          persistCandidates('briefed', briefResults.map(br => br.candidate), briefScoreMap, briefMap, briefThinkingMap);
           break;
         }
       }

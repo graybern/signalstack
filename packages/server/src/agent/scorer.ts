@@ -108,12 +108,14 @@ Score this company using the rubric. Apply the Evidence Density Modifier: ${sign
   } else {
     const response = await client.messages.create({
       model: resolveModel(model || aiConfig.defaultModel, aiConfig.provider),
-      max_tokens: 4096,
+      max_tokens: 12096,
       system: systemPrompt,
       messages: [{ role: 'user', content: userMessage }],
-    });
+      thinking: { type: 'enabled', budget_tokens: 8000 },
+    } as any);
     if (tracker) tracker.addUsage(response);
-    rawText = response.content[0].type === 'text' ? response.content[0].text : '';
+    rawText = response.content.find((b: any) => b.type === 'text')?.text || '';
+    thinkingText = response.content.find((b: any) => b.type === 'thinking')?.thinking || '';
   }
 
   const jsonStr = extractJson(rawText);
@@ -170,10 +172,10 @@ Score this company using the rubric. Apply the Evidence Density Modifier: ${sign
 }
 
 function scoreToLabel(score: number): string {
-  if (score >= 90) return '5 stars';
-  if (score >= 75) return '4 stars';
-  if (score >= 60) return '3 stars';
-  if (score >= 40) return '2 stars';
+  if (score >= 85) return '5 stars';
+  if (score >= 70) return '4 stars';
+  if (score >= 55) return '3 stars';
+  if (score >= 35) return '2 stars';
   return '1 star';
 }
 

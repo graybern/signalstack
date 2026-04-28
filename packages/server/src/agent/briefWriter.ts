@@ -38,6 +38,7 @@ export interface BriefResult {
   source_citations: SourceCitation[];
   why_now: string[];
   brief_markdown: string;
+  thinking?: string;
 }
 
 function extractJson(text: string): string {
@@ -115,6 +116,7 @@ ${icpConfig.success_stories ? `- **Success Stories:** ${JSON.stringify(icpConfig
 Generate the full lead brief as a JSON object.${outreachTone ? `\n\n## Outreach Tone\nWrite all outreach messaging in a ${outreachTone} tone.` : ''}${stepConfig?.persona_types?.length ? `\n\n## Persona Types\nOnly generate personas for these roles: ${stepConfig.persona_types.join(', ')}. Do not include other role types.` : ''}${stepConfig?.brief_depth === 'quick' ? `\n\n## Brief Depth: Quick\nGenerate a snapshot: company overview, 2 pain hypotheses, 1 persona. Skip extended analysis.` : stepConfig?.brief_depth === 'comprehensive' ? `\n\n## Brief Depth: Comprehensive\nGenerate an exhaustive brief with extended analysis, multiple outreach variants per persona, detailed competitive positioning, and thorough why-now analysis.` : ''}${promptInstructions ? `\n\n## Additional Instructions\n${promptInstructions}` : ''}`;
 
   let rawText: string;
+  let thinkingText = '';
 
   if (streamCtx) {
     const result = await streamAICall({
@@ -127,15 +129,20 @@ Generate the full lead brief as a JSON object.${outreachTone ? `\n\n## Outreach 
       context: { ...streamCtx, companyName: candidate.company_name },
     });
     rawText = result.text;
+    thinkingText = result.thinking;
   } else {
-    const response = await client.messages.create({
+    const maxTok = stepConfig?.max_tokens || 16384;
+    const stream = client.messages.stream({
       model: resolveModel(model || aiConfig.defaultModel, aiConfig.provider),
-      max_tokens: stepConfig?.max_tokens || 16384,
+      max_tokens: maxTok + 10000,
       system: systemPrompt,
       messages: [{ role: 'user', content: userMessage }],
-    });
-    if (tracker) tracker.addUsage(response);
-    rawText = response.content[0].type === 'text' ? response.content[0].text : '';
+      thinking: { type: 'enabled', budget_tokens: 10000 },
+    } as any);
+    const finalMessage = await stream.finalMessage();
+    if (tracker) tracker.addUsage(finalMessage);
+    rawText = finalMessage.content.find((b: any) => b.type === 'text')?.text || '';
+    thinkingText = finalMessage.content.find((b: any) => b.type === 'thinking')?.thinking || '';
   }
   const jsonStr = extractJson(rawText);
 
@@ -192,6 +199,7 @@ Generate the full lead brief as a JSON object.${outreachTone ? `\n\n## Outreach 
       source_citations: result.source_citations || [],
       why_now: result.why_now || [],
       brief_markdown: result.brief_markdown || '',
+      thinking: thinkingText || undefined,
     };
   } catch (err) {
     console.error(`[briefWriter] Failed to parse JSON for ${candidate.company_name}:`, err);

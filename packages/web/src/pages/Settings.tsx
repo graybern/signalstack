@@ -33,6 +33,11 @@ import {
   ChevronDown,
   ChevronRight,
   Save,
+  Download,
+  Upload,
+  HardDrive,
+  FileJson,
+  Loader2,
 } from 'lucide-react';
 
 // ── Types ──────────────────────────────────────────────────────
@@ -1011,6 +1016,9 @@ function AppSettingsTab() {
         </div>
       )}
 
+      {/* Backup & Restore */}
+      <BackupRestoreSection />
+
       {/* API Reference */}
       <div className="bg-white border border-gray-200 rounded-lg p-6">
         <h3 className="text-sm font-semibold text-gray-700 mb-4 flex items-center gap-2"><ExternalLink className="w-4 h-4 text-gray-400" /> API Reference</h3>
@@ -1373,6 +1381,318 @@ function ConnectionTester() {
           })}
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Backup & Restore ─────────────────────────────────────────
+
+function BackupRestoreSection() {
+  const [exporting, setExporting] = useState<'config' | 'full' | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [importMode, setImportMode] = useState<'merge' | 'replace'>('merge');
+  const [preview, setPreview] = useState<any>(null);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [message, setMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
+  const [importResult, setImportResult] = useState<any>(null);
+  const [confirmReplace, setConfirmReplace] = useState(false);
+
+  const handleExport = async (mode: 'config' | 'full') => {
+    setExporting(mode);
+    setMessage(null);
+    try {
+      const token = localStorage.getItem('pg_token');
+      const res = await fetch(`/api/config-transfer/export?mode=${mode}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error(err.error || 'Export failed');
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `signalstack-${mode}-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setMessage({ type: 'success', text: `${mode === 'config' ? 'Config' : 'Full'} export downloaded` });
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err.message || 'Export failed' });
+    } finally {
+      setExporting(null);
+    }
+  };
+
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setSelectedFile(file);
+    setImportResult(null);
+    setMessage(null);
+    setConfirmReplace(false);
+
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text);
+      if (!data.metadata) {
+        setMessage({ type: 'error', text: 'Invalid file — not a SignalStack export' });
+        setSelectedFile(null);
+        return;
+      }
+
+      const counts: Record<string, number> = {};
+      for (const [key, value] of Object.entries(data)) {
+        if (key !== 'metadata' && Array.isArray(value)) {
+          counts[key] = value.length;
+        }
+      }
+      setPreview({
+        export_mode: data.metadata.export_mode,
+        exported_at: data.metadata.exported_at,
+        app_version: data.metadata.app_version,
+        table_counts: counts,
+      });
+    } catch {
+      setMessage({ type: 'error', text: 'Invalid JSON file' });
+      setSelectedFile(null);
+    }
+  };
+
+  const handleImport = async () => {
+    if (!selectedFile) return;
+    if (importMode === 'replace' && !confirmReplace) {
+      setConfirmReplace(true);
+      return;
+    }
+
+    setImporting(true);
+    setMessage(null);
+    setImportResult(null);
+
+    try {
+      const text = await selectedFile.text();
+      const data = JSON.parse(text);
+      const token = localStorage.getItem('pg_token');
+      const res = await fetch(`/api/config-transfer/import?mode=${importMode}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify(data),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error(err.error || 'Import failed');
+      }
+
+      const result = await res.json();
+      setImportResult(result);
+      setMessage({ type: 'success', text: `Import complete — ${result.tables_processed.length} tables processed` });
+      setConfirmReplace(false);
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err.message || 'Import failed' });
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const totalRows = preview ? Object.values(preview.table_counts as Record<string, number>).reduce((a, b) => a + b, 0) : 0;
+
+  return (
+    <div className="bg-white border border-gray-200 rounded-lg p-6">
+      <h3 className="text-sm font-semibold text-gray-700 mb-1 flex items-center gap-2">
+        <HardDrive className="w-4 h-4 text-indigo-500" /> Backup & Restore
+      </h3>
+      <p className="text-xs text-gray-500 mb-5">Export your configuration and data for backup, migration, or deploying to a new instance.</p>
+
+      {message && (
+        <div className={`px-3 py-2 rounded-lg text-xs mb-4 flex items-start gap-2 ${
+          message.type === 'success' ? 'bg-green-50 text-green-700 border border-green-200' :
+          message.type === 'error' ? 'bg-red-50 text-red-700 border border-red-200' :
+          'bg-blue-50 text-blue-700 border border-blue-200'
+        }`}>
+          {message.type === 'success' ? <CheckCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" /> :
+           message.type === 'error' ? <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" /> : null}
+          <span>{message.text}</span>
+        </div>
+      )}
+
+      {/* Export Section */}
+      <div className="mb-6">
+        <h4 className="text-xs font-semibold text-gray-600 uppercase tracking-wide mb-3">Export</h4>
+        <div className="grid grid-cols-2 gap-3">
+          <button
+            onClick={() => handleExport('config')}
+            disabled={!!exporting}
+            className="flex items-center gap-3 p-4 border border-gray-200 rounded-lg hover:border-brand-300 hover:bg-brand-50/50 transition-colors text-left disabled:opacity-50"
+          >
+            <div className="p-2 bg-brand-50 rounded-lg">
+              <FileJson className="w-5 h-5 text-brand-600" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium text-gray-900">Config Only</p>
+              <p className="text-xs text-gray-500">Campaigns, ICP, settings, users, exclusions</p>
+            </div>
+            {exporting === 'config' ? <Loader2 className="w-4 h-4 text-brand-500 animate-spin" /> : <Download className="w-4 h-4 text-gray-400" />}
+          </button>
+
+          <button
+            onClick={() => handleExport('full')}
+            disabled={!!exporting}
+            className="flex items-center gap-3 p-4 border border-gray-200 rounded-lg hover:border-indigo-300 hover:bg-indigo-50/50 transition-colors text-left disabled:opacity-50"
+          >
+            <div className="p-2 bg-indigo-50 rounded-lg">
+              <Database className="w-5 h-5 text-indigo-600" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium text-gray-900">Full Backup</p>
+              <p className="text-xs text-gray-500">Everything — config + leads, runs, activity</p>
+            </div>
+            {exporting === 'full' ? <Loader2 className="w-4 h-4 text-indigo-500 animate-spin" /> : <Download className="w-4 h-4 text-gray-400" />}
+          </button>
+        </div>
+      </div>
+
+      {/* Import Section */}
+      <div>
+        <h4 className="text-xs font-semibold text-gray-600 uppercase tracking-wide mb-3">Restore</h4>
+
+        <div className="flex items-center gap-3 mb-3">
+          <label className="flex-1 flex items-center gap-3 px-4 py-3 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:border-brand-400 hover:bg-gray-50 transition-colors">
+            <Upload className="w-5 h-5 text-gray-400" />
+            <div className="flex-1 min-w-0">
+              {selectedFile ? (
+                <div>
+                  <p className="text-sm font-medium text-gray-900 truncate">{selectedFile.name}</p>
+                  <p className="text-xs text-gray-500">{(selectedFile.size / 1024).toFixed(1)} KB</p>
+                </div>
+              ) : (
+                <p className="text-sm text-gray-500">Choose a SignalStack export file (.json)</p>
+              )}
+            </div>
+            <input type="file" accept=".json" onChange={handleFileSelect} className="hidden" />
+          </label>
+        </div>
+
+        {preview && (
+          <div className="border border-gray-200 rounded-lg mb-3">
+            <div className="px-4 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
+              <div>
+                <p className="text-xs font-medium text-gray-700">
+                  {preview.export_mode === 'full' ? 'Full Backup' : 'Config Only'} — exported {new Date(preview.exported_at).toLocaleDateString()}
+                </p>
+                <p className="text-xs text-gray-500">{totalRows} total records across {Object.keys(preview.table_counts).length} tables</p>
+              </div>
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                preview.export_mode === 'full' ? 'bg-indigo-50 text-indigo-700 border border-indigo-200' : 'bg-brand-50 text-brand-700 border border-brand-200'
+              }`}>
+                {preview.export_mode}
+              </span>
+            </div>
+            <div className="px-4 py-3 grid grid-cols-3 gap-2">
+              {Object.entries(preview.table_counts as Record<string, number>)
+                .filter(([, count]) => count > 0)
+                .sort(([, a], [, b]) => b - a)
+                .map(([table, count]) => (
+                  <div key={table} className="flex items-center justify-between text-xs py-1">
+                    <span className="text-gray-600">{table.replace(/_/g, ' ')}</span>
+                    <span className="font-medium text-gray-900">{count}</span>
+                  </div>
+                ))
+              }
+            </div>
+          </div>
+        )}
+
+        {selectedFile && preview && (
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 border border-gray-200 rounded-lg p-1">
+              <button
+                onClick={() => { setImportMode('merge'); setConfirmReplace(false); }}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                  importMode === 'merge' ? 'bg-brand-100 text-brand-700' : 'text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                Merge
+              </button>
+              <button
+                onClick={() => { setImportMode('replace'); setConfirmReplace(false); }}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                  importMode === 'replace' ? 'bg-red-100 text-red-700' : 'text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                Replace
+              </button>
+            </div>
+
+            <p className="text-xs text-gray-500 flex-1">
+              {importMode === 'merge'
+                ? 'Adds new records and updates existing ones. Safe for running instances.'
+                : 'Wipes all existing data and imports fresh. Use for clean deploys.'}
+            </p>
+
+            {confirmReplace ? (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-red-600 font-medium">This will erase all data. Sure?</span>
+                <button
+                  onClick={handleImport}
+                  disabled={importing}
+                  className="px-3 py-1.5 text-xs font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 disabled:opacity-50"
+                >
+                  {importing ? 'Importing...' : 'Yes, Replace'}
+                </button>
+                <button
+                  onClick={() => setConfirmReplace(false)}
+                  className="px-3 py-1.5 text-xs font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={handleImport}
+                disabled={importing}
+                className={`flex items-center gap-2 px-4 py-2 text-sm font-medium text-white rounded-lg disabled:opacity-50 ${
+                  importMode === 'replace' ? 'bg-red-600 hover:bg-red-700' : 'bg-brand-600 hover:bg-brand-700'
+                }`}
+              >
+                {importing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
+                {importing ? 'Importing...' : `Import (${importMode})`}
+              </button>
+            )}
+          </div>
+        )}
+
+        {importResult && (
+          <div className="mt-3 border border-green-200 rounded-lg bg-green-50 p-3">
+            <p className="text-xs font-medium text-green-800 mb-2">Import Results</p>
+            <div className="grid grid-cols-3 gap-1">
+              {Object.entries(importResult.row_counts as Record<string, { inserted: number; updated: number; skipped: number }>)
+                .filter(([, counts]) => counts.inserted > 0 || counts.updated > 0)
+                .map(([table, counts]) => (
+                  <div key={table} className="text-xs text-green-700 py-0.5">
+                    <span className="font-medium">{table.replace(/_/g, ' ')}</span>: {counts.inserted} added
+                  </div>
+                ))
+              }
+            </div>
+            {importResult.warnings?.length > 0 && (
+              <div className="mt-2 pt-2 border-t border-green-200">
+                <p className="text-xs font-medium text-amber-700 mb-1">Warnings ({importResult.warnings.length})</p>
+                {importResult.warnings.slice(0, 5).map((w: string, i: number) => (
+                  <p key={i} className="text-xs text-amber-600">{w}</p>
+                ))}
+                {importResult.warnings.length > 5 && (
+                  <p className="text-xs text-amber-500">...and {importResult.warnings.length - 5} more</p>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

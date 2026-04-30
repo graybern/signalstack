@@ -18,6 +18,7 @@ import eventRoutes from './routes/events.js';
 import analyticsRoutes from './routes/analytics.js';
 import settingsRoutes from './routes/settings.js';
 import activityRoutes from './routes/activity.js';
+import configTransferRoutes from './routes/configTransfer.js';
 import { initScheduler } from './scheduler/cron.js';
 import { initCampaignScheduler } from './scheduler/campaignScheduler.js';
 import { initWebhookDispatcher } from './events/webhookDispatcher.js';
@@ -28,7 +29,7 @@ import { openApiSpec } from './openapi.js';
 const app = express();
 
 app.use(cors());
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '50mb' }));
 
 // API middleware
 app.use('/api', apiVersionHeader);
@@ -51,6 +52,7 @@ const mountRoutes = (prefix: string) => {
   app.use(`${prefix}/analytics`, analyticsRoutes);
   app.use(`${prefix}/settings`, settingsRoutes);
   app.use(`${prefix}/activity`, activityRoutes);
+  app.use(`${prefix}/config-transfer`, configTransferRoutes);
 };
 
 mountRoutes('/api');

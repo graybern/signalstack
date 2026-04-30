@@ -499,6 +499,41 @@ function initSchema(db: Database.Database) {
     `);
   }
 
+  // Migrate pipeline_runs to support 'missed' status
+  const runsTableInfoForMissed = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='pipeline_runs'").get() as { sql: string } | undefined;
+  if (runsTableInfoForMissed && !runsTableInfoForMissed.sql.includes('missed')) {
+    db.pragma('foreign_keys = OFF');
+    const cols = db.prepare("PRAGMA table_info(pipeline_runs)").all() as { name: string }[];
+    const colNames = cols.map(c => c.name);
+    const colList = colNames.join(', ');
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS pipeline_runs_new (
+        id            TEXT PRIMARY KEY,
+        triggered_by  TEXT REFERENCES users(id),
+        status        TEXT DEFAULT 'pending' CHECK(status IN ('pending','running','completed','failed','cancelled','missed')),
+        started_at    TEXT,
+        completed_at  TEXT,
+        lead_count    INTEGER DEFAULT 0,
+        error_message TEXT,
+        created_at    TEXT DEFAULT (datetime('now')),
+        input_tokens  INTEGER DEFAULT 0,
+        output_tokens INTEGER DEFAULT 0,
+        estimated_cost REAL DEFAULT 0,
+        model_used    TEXT,
+        progress_json TEXT,
+        run_type      TEXT DEFAULT 'pipeline',
+        campaign_id   TEXT,
+        steps_run     TEXT
+      );
+      INSERT OR IGNORE INTO pipeline_runs_new(${colList})
+        SELECT ${colList} FROM pipeline_runs;
+      DROP TABLE pipeline_runs;
+      ALTER TABLE pipeline_runs_new RENAME TO pipeline_runs;
+      CREATE INDEX IF NOT EXISTS idx_runs_campaign_id ON pipeline_runs(campaign_id);
+    `);
+    db.pragma('foreign_keys = ON');
+  }
+
   // User activity log — audit trail for all entity changes
   db.exec(`
     CREATE TABLE IF NOT EXISTS activity_log (

@@ -17,6 +17,7 @@ interface RunStats {
   total_runs: number;
   completed_runs: number;
   failed_runs: number;
+  missed_runs: number;
   success_rate: number;
   total_leads: number;
   avg_leads_per_run: number;
@@ -50,6 +51,10 @@ interface UpcomingRun {
   schedule_cron: string;
   last_run_status: string | null;
   last_run_at: string | null;
+  next_run_at: string | null;
+  last_expected_at: string | null;
+  is_overdue: boolean;
+  missed_count: number;
 }
 
 interface ProgressData {
@@ -263,7 +268,16 @@ export function RunHistory() {
         <div className="grid grid-cols-5 gap-3 mb-6">
           <StatCard icon={<Activity className="w-4 h-4 text-blue-600" />} label="Total Runs" value={stats.total_runs} />
           <StatCard icon={<TrendingUp className="w-4 h-4 text-emerald-600" />} label="Success Rate" value={`${stats.success_rate}%`} />
-          <StatCard icon={<Users className="w-4 h-4 text-indigo-600" />} label="Avg Leads/Run" value={stats.avg_leads_per_run} />
+          {(stats.failed_runs > 0 || stats.missed_runs > 0) ? (
+            <StatCard
+              icon={<AlertTriangle className="w-4 h-4 text-red-500" />}
+              label="Failed / Missed"
+              value={`${stats.failed_runs} / ${stats.missed_runs}`}
+              alert
+            />
+          ) : (
+            <StatCard icon={<Users className="w-4 h-4 text-indigo-600" />} label="Avg Leads/Run" value={stats.avg_leads_per_run} />
+          )}
           <StatCard icon={<DollarSign className="w-4 h-4 text-amber-600" />} label="Total Cost" value={`$${stats.total_cost.toFixed(2)}`} />
           <StatCard icon={<DollarSign className="w-4 h-4 text-purple-600" />} label="Avg Cost/Run" value={`$${stats.avg_cost_per_run.toFixed(2)}`} />
         </div>
@@ -287,6 +301,7 @@ export function RunHistory() {
           <option value="">All Statuses</option>
           <option value="completed">Completed</option>
           <option value="failed">Failed</option>
+          <option value="missed">Missed</option>
           <option value="cancelled">Cancelled</option>
           <option value="running">Running</option>
           <option value="pending">Pending</option>
@@ -355,14 +370,43 @@ export function RunHistory() {
           </h2>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             {upcoming.map(u => (
-              <Link key={u.campaign_id} to={`/campaigns/${u.campaign_id}`} className="bg-white border border-gray-200 rounded-lg p-4 hover:border-brand-200 transition-colors">
+              <Link
+                key={u.campaign_id}
+                to={`/campaigns/${u.campaign_id}`}
+                className={`bg-white border rounded-lg p-4 transition-colors ${
+                  u.is_overdue || u.missed_count > 0
+                    ? 'border-red-300 hover:border-red-400 bg-red-50/30'
+                    : 'border-gray-200 hover:border-brand-200'
+                }`}
+              >
                 <div className="flex items-center gap-2 mb-1">
-                  <Target className="w-3.5 h-3.5 text-brand-500" />
+                  {u.is_overdue || u.missed_count > 0 ? (
+                    <AlertTriangle className="w-3.5 h-3.5 text-red-500" />
+                  ) : (
+                    <Target className="w-3.5 h-3.5 text-brand-500" />
+                  )}
                   <span className="text-sm font-medium text-gray-900">{u.campaign_name}</span>
                 </div>
-                <p className="text-xs text-gray-500 font-mono mb-1">{u.schedule_cron}</p>
+                {u.missed_count > 0 && (
+                  <p className="text-xs text-red-600 font-medium mb-1">
+                    {u.missed_count} missed run{u.missed_count !== 1 ? 's' : ''} — server was offline
+                  </p>
+                )}
+                {u.is_overdue && u.missed_count === 0 && (
+                  <p className="text-xs text-red-600 font-medium mb-1">
+                    Overdue — expected {u.last_expected_at ? new Date(u.last_expected_at).toLocaleString() : 'earlier'}
+                  </p>
+                )}
+                <div className="flex items-center justify-between">
+                  <p className="text-xs text-gray-500 font-mono">{u.schedule_cron}</p>
+                  {u.next_run_at && (
+                    <p className="text-[10px] text-gray-500">
+                      Next: {new Date(u.next_run_at).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+                    </p>
+                  )}
+                </div>
                 {u.last_run_at && (
-                  <p className="text-[10px] text-gray-400">Last run: {new Date(u.last_run_at).toLocaleDateString()} ({u.last_run_status})</p>
+                  <p className="text-[10px] text-gray-400 mt-1">Last run: {new Date(u.last_run_at).toLocaleString()} ({u.last_run_status})</p>
                 )}
               </Link>
             ))}
@@ -509,11 +553,11 @@ export function RunHistory() {
 
 // ── Sub-components ──────────────────────────────────────────
 
-function StatCard({ icon, label, value }: { icon: React.ReactNode; label: string; value: string | number }) {
+function StatCard({ icon, label, value, alert }: { icon: React.ReactNode; label: string; value: string | number; alert?: boolean }) {
   return (
-    <div className="bg-white rounded-lg border border-gray-200 px-4 py-3">
-      <div className="flex items-center gap-2 mb-1">{icon}<span className="text-xs text-gray-500">{label}</span></div>
-      <p className="text-lg font-semibold text-gray-900">{value}</p>
+    <div className={`rounded-lg border px-4 py-3 ${alert ? 'bg-red-50 border-red-200' : 'bg-white border-gray-200'}`}>
+      <div className="flex items-center gap-2 mb-1">{icon}<span className={`text-xs ${alert ? 'text-red-600 font-medium' : 'text-gray-500'}`}>{label}</span></div>
+      <p className={`text-lg font-semibold ${alert ? 'text-red-700' : 'text-gray-900'}`}>{value}</p>
     </div>
   );
 }
@@ -611,6 +655,7 @@ function CompletedRunRow({ run, expanded, leads, loadingLeads, onToggle, onViewL
   const totalTokens = (run.input_tokens || 0) + (run.output_tokens || 0);
   const isFailed = run.status === 'failed';
   const isCancelled = run.status === 'cancelled';
+  const isMissed = run.status === 'missed';
 
   let duration = '—';
   if (run.started_at && run.completed_at) {
@@ -620,9 +665,12 @@ function CompletedRunRow({ run, expanded, leads, loadingLeads, onToggle, onViewL
     else duration = `${(ms / 3600000).toFixed(1)}h`;
   }
 
+  const statusColor = isFailed ? 'text-red-600' : isMissed ? 'text-orange-600' : isCancelled ? 'text-gray-500' : 'text-emerald-600';
+  const statusLabel = run.status === 'completed' ? 'Completed' : run.status === 'failed' ? 'Failed' : run.status === 'missed' ? 'Missed' : run.status === 'cancelled' ? 'Cancelled' : run.status;
+
   return (
     <>
-      <tr className={`hover:bg-gray-50 cursor-pointer ${isFailed ? 'bg-red-50/30' : isCancelled ? 'bg-gray-50/50' : ''}`} onClick={onToggle}>
+      <tr className={`hover:bg-gray-50 cursor-pointer ${isFailed ? 'bg-red-50/30' : isMissed ? 'bg-orange-50/30' : isCancelled ? 'bg-gray-50/50' : ''}`} onClick={onToggle}>
         {isSuperAdmin && (
           <td className="px-3 py-3" onClick={e => e.stopPropagation()}>
             <input
@@ -637,11 +685,14 @@ function CompletedRunRow({ run, expanded, leads, loadingLeads, onToggle, onViewL
         <td className="px-3 py-3">
           <div className="flex items-center gap-1.5">
             {statusIcon(run.status)}
-            <span className={`text-xs font-medium ${
-              isFailed ? 'text-red-600' : isCancelled ? 'text-gray-500' : 'text-emerald-600'
-            }`}>
-              {run.status === 'completed' ? 'Completed' : run.status === 'failed' ? 'Failed' : run.status === 'cancelled' ? 'Cancelled' : run.status}
-            </span>
+            <div>
+              <span className={`text-xs font-medium ${statusColor}`}>{statusLabel}</span>
+              {(isFailed || isMissed) && run.error_message && (
+                <p className={`text-[10px] leading-tight mt-0.5 max-w-[200px] truncate ${isFailed ? 'text-red-500' : 'text-orange-500'}`}>
+                  {run.error_message}
+                </p>
+              )}
+            </div>
           </div>
         </td>
         <td className="px-3 py-3"><RunTypeBadge type={run.run_type} /></td>
@@ -676,29 +727,29 @@ function CompletedRunRow({ run, expanded, leads, loadingLeads, onToggle, onViewL
           </div>
         </td>
       </tr>
-      {(isFailed || isCancelled) && expanded && run.error_message && (
+      {(isFailed || isMissed || isCancelled) && expanded && run.error_message && (
         <tr>
-          <td colSpan={colSpan} className={`px-4 py-3 ${isFailed ? 'bg-red-50' : 'bg-gray-50'}`}>
+          <td colSpan={colSpan} className={`px-4 py-3 ${isFailed ? 'bg-red-50' : isMissed ? 'bg-orange-50' : 'bg-gray-50'}`}>
             <div className="flex items-start gap-2">
-              <AlertCircle className={`w-4 h-4 mt-0.5 flex-shrink-0 ${isFailed ? 'text-red-500' : 'text-gray-400'}`} />
+              <AlertCircle className={`w-4 h-4 mt-0.5 flex-shrink-0 ${isFailed ? 'text-red-500' : isMissed ? 'text-orange-500' : 'text-gray-400'}`} />
               <div>
-                <p className={`text-xs font-medium ${isFailed ? 'text-red-700' : 'text-gray-600'}`}>
-                  {isFailed ? 'Run Failed' : 'Run Cancelled'}
+                <p className={`text-xs font-medium ${isFailed ? 'text-red-700' : isMissed ? 'text-orange-700' : 'text-gray-600'}`}>
+                  {isFailed ? 'Run Failed' : isMissed ? 'Scheduled Run Missed' : 'Run Cancelled'}
                 </p>
-                <p className={`text-xs mt-0.5 ${isFailed ? 'text-red-600' : 'text-gray-500'}`}>{run.error_message}</p>
+                <p className={`text-xs mt-0.5 ${isFailed ? 'text-red-600' : isMissed ? 'text-orange-600' : 'text-gray-500'}`}>{run.error_message}</p>
               </div>
             </div>
           </td>
         </tr>
       )}
-      {expanded && !(isFailed && run.error_message) && (
+      {expanded && !((isFailed || isMissed) && run.error_message) && (
         <tr>
           <td colSpan={colSpan} className="px-0">
             {loadingLeads ? (
               <div className="flex justify-center py-4"><Loader2 className="w-5 h-5 animate-spin text-brand-500" /></div>
             ) : leads.length === 0 ? (
               <div className="px-6 py-4 text-xs text-gray-400">
-                {isFailed ? 'Run failed before generating leads.' : isCancelled ? 'Run was cancelled.' : 'No leads in this run.'}
+                {isFailed ? 'Run failed before generating leads.' : isMissed ? 'Scheduled run was missed — server was offline.' : isCancelled ? 'Run was cancelled.' : 'No leads in this run.'}
                 {(isFailed || isCancelled) && (
                   <button onClick={e => { e.stopPropagation(); onViewLog?.(); }} className="ml-2 text-brand-600 hover:underline">
                     View activity log
@@ -760,6 +811,7 @@ function statusIcon(status: string) {
   switch (status) {
     case 'completed': return <CheckCircle className="w-4 h-4 text-emerald-500" />;
     case 'failed': return <XCircle className="w-4 h-4 text-red-500" />;
+    case 'missed': return <AlertTriangle className="w-4 h-4 text-orange-500" />;
     case 'cancelled': return <AlertCircle className="w-4 h-4 text-gray-400" />;
     case 'running': return <Loader2 className="w-4 h-4 text-amber-500 animate-spin" />;
     case 'pending': return <Clock className="w-4 h-4 text-gray-400" />;

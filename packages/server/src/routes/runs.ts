@@ -1,4 +1,5 @@
 import { Router, Response } from 'express';
+import { CronExpressionParser } from 'cron-parser';
 import { getDb } from '../db/schema.js';
 import { authenticate, requireMember, requireSuperAdmin, AuthRequest } from '../auth/middleware.js';
 import { runPipeline } from '../agent/orchestrator.js';
@@ -41,6 +42,7 @@ router.get('/', authenticate, (req: AuthRequest, res: Response) => {
        COUNT(*) as total_runs,
        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_runs,
        SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_runs,
+       SUM(CASE WHEN status = 'missed' THEN 1 ELSE 0 END) as missed_runs,
        SUM(lead_count) as total_leads,
        AVG(CASE WHEN lead_count > 0 THEN lead_count END) as avg_leads_per_run,
        SUM(estimated_cost) as total_cost,
@@ -58,6 +60,7 @@ router.get('/', authenticate, (req: AuthRequest, res: Response) => {
       total_runs: stats.total_runs || 0,
       completed_runs: stats.completed_runs || 0,
       failed_runs: stats.failed_runs || 0,
+      missed_runs: stats.missed_runs || 0,
       success_rate: successRate,
       total_leads: stats.total_leads || 0,
       avg_leads_per_run: Math.round(stats.avg_leads_per_run || 0),
@@ -77,12 +80,35 @@ router.get('/upcoming', authenticate, (_req: AuthRequest, res: Response) => {
      ORDER BY name`
   ).all() as any[];
 
-  // Get last run for each scheduled campaign
   const upcoming = campaigns.map((c: any) => {
     const lastRun = db.prepare(
       `SELECT status, completed_at, created_at FROM pipeline_runs
-       WHERE campaign_id = ? ORDER BY created_at DESC LIMIT 1`
+       WHERE campaign_id = ? AND status != 'missed'
+       ORDER BY created_at DESC LIMIT 1`
     ).get(c.id) as any;
+
+    const missedCount = (db.prepare(
+      `SELECT COUNT(*) as cnt FROM pipeline_runs
+       WHERE campaign_id = ? AND status = 'missed'`
+    ).get(c.id) as any)?.cnt || 0;
+
+    let next_run_at: string | null = null;
+    let last_expected_at: string | null = null;
+    let is_overdue = false;
+
+    try {
+      const expr = CronExpressionParser.parse(c.schedule_cron);
+      next_run_at = expr.next().toISOString();
+      const prevExpr = CronExpressionParser.parse(c.schedule_cron);
+      last_expected_at = prevExpr.prev().toISOString();
+
+      const lastRunTime = lastRun?.completed_at || lastRun?.created_at;
+      if (last_expected_at && lastRunTime) {
+        is_overdue = new Date(last_expected_at) > new Date(lastRunTime + 'Z');
+      } else if (last_expected_at && !lastRunTime) {
+        is_overdue = true;
+      }
+    } catch {}
 
     return {
       campaign_id: c.id,
@@ -90,6 +116,10 @@ router.get('/upcoming', authenticate, (_req: AuthRequest, res: Response) => {
       schedule_cron: c.schedule_cron,
       last_run_status: lastRun?.status || null,
       last_run_at: lastRun?.completed_at || lastRun?.created_at || null,
+      next_run_at,
+      last_expected_at,
+      is_overdue,
+      missed_count: missedCount,
     };
   });
 

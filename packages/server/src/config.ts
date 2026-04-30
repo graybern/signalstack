@@ -17,7 +17,7 @@ export const config = {
     : 'us-east5',
   vertexProjectId: process.env.ANTHROPIC_VERTEX_PROJECT_ID || '',
   defaultModel: process.env.CLAUDE_MODEL || 'claude-opus-4-6@default',
-  dbPath: path.resolve(__dirname, '../data/pipeline.db'),
+  dbPath: process.env.DB_PATH || path.resolve(__dirname, '../data/pipeline.db'),
   webDistPath: path.resolve(__dirname, '../../web/dist'),
   cronEnabled: process.env.CRON_ENABLED !== 'false',
   cronSchedule: process.env.CRON_SCHEDULE || '0 14 * * 1', // Monday 7am MST = 14:00 UTC

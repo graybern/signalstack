@@ -1,0 +1,29 @@
+services:
+  signalstack:
+    build: .
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=production
+      - JWT_SECRET=${JWT_SECRET:-change-me-to-a-random-string}
+      - CLOUD_ML_REGION=${CLOUD_ML_REGION:-us-east5}
+      - ANTHROPIC_VERTEX_PROJECT_ID=${ANTHROPIC_VERTEX_PROJECT_ID}
+      - CRON_ENABLED=${CRON_ENABLED:-true}
+      - CRON_SCHEDULE=${CRON_SCHEDULE:-0 14 * * 1}
+      # Vertex AI auth — points to the mounted service account key
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/secrets/sa-key.json
+      # For direct Anthropic API (alternative to Vertex — no SA key needed):
+      # - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+    volumes:
+      # Persistent SQLite data — survives container rebuilds/restarts
+      - signalstack-data:/app/packages/server/data
+      # Mount GCP service account key for Vertex AI auth
+      # Create a key: gcloud iam service-accounts keys create sa-key.json --iam-account=YOUR_SA@PROJECT.iam.gserviceaccount.com
+      - ${GOOGLE_SA_KEY_PATH:-./sa-key.json}:/app/secrets/sa-key.json:ro
+    env_file:
+      - path: .env
+        required: false
+    restart: unless-stopped
+
+volumes:
+  signalstack-data:

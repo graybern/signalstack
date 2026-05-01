@@ -487,35 +487,91 @@ const templatesList = (_req: AuthRequest, res: Response) => {
 router.get('/templates', authenticate, templatesList);
 router.get('/templates/list', authenticate, templatesList);
 
-// RSS feed for campaign
+// RSS feed for campaign — run-level summaries optimized for Slack
 router.get('/:id/rss', async (req, res: Response) => {
   const db = getDb();
   const campaign = db.prepare('SELECT * FROM campaigns WHERE id = ?').get(req.params.id) as any;
   if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
   if (!campaign.rss_enabled) return res.status(403).json({ error: 'RSS feed not enabled for this campaign' });
 
-  const leads = db.prepare(
-    'SELECT id, company_name, segment, fit_score, fit_score_label, confidence, domain, created_at FROM leads WHERE campaign_id = ? ORDER BY created_at DESC LIMIT 50'
-  ).all(req.params.id) as any[];
-
   const runs = db.prepare(
-    'SELECT id, status, lead_count, completed_at FROM pipeline_runs WHERE campaign_id = ? ORDER BY created_at DESC LIMIT 10'
+    'SELECT id, status, lead_count, started_at, completed_at, error_message FROM pipeline_runs WHERE campaign_id = ? ORDER BY started_at DESC LIMIT 20'
   ).all(req.params.id) as any[];
 
   const baseUrl = `${req.protocol}://${req.get('host')}`;
-  const items = leads.map(l => `    <item>
-      <title>${escapeXml(l.company_name)} (Score: ${l.fit_score})</title>
-      <link>${baseUrl}/leads/${l.id}</link>
-      <description>${escapeXml(l.segment)} | ${escapeXml(l.fit_score_label || '')} | ${escapeXml(l.confidence)} confidence</description>
-      <pubDate>${new Date(l.created_at).toUTCString()}</pubDate>
-      <guid>${l.id}</guid>
-    </item>`).join('\n');
+
+  const statusEmoji: Record<string, string> = {
+    completed: '✅', failed: '❌', cancelled: '🚫', missed: '⏰', running: '🔄',
+  };
+
+  const items = runs.map(run => {
+    const emoji = statusEmoji[run.status] || '❓';
+    const date = run.completed_at || run.started_at || '';
+    const pubDate = date ? new Date(date + 'Z').toUTCString() : new Date().toUTCString();
+    const dateLabel = date.slice(0, 10);
+
+    let title = '';
+    let description = '';
+
+    if (run.status === 'completed') {
+      const leads = db.prepare(
+        'SELECT id, company_name, employee_count, fit_score, fit_score_label, segment, why_now, pain_hypotheses, competitive_displacement, outreach_strategy FROM leads WHERE run_id = ? ORDER BY fit_score DESC'
+      ).all(run.id) as any[];
+      const topLeads = leads.slice(0, Math.max(3, Math.min(5, leads.length)));
+      const avgScore = leads.length > 0 ? Math.round(leads.reduce((s: number, l: any) => s + l.fit_score, 0) / leads.length) : 0;
+      const segments = leads.reduce((acc: Record<string, number>, l: any) => { acc[l.segment] = (acc[l.segment] || 0) + 1; return acc; }, {} as Record<string, number>);
+      const segmentSummary = Object.entries(segments).map(([s, c]) => `${c} ${s}`).join(', ');
+
+      title = `${emoji} Campaign "${campaign.name}" — ${run.lead_count} new leads (${dateLabel})`;
+      const leadDetails = topLeads.map((l: any) => {
+        const whyNow = safeJsonParse(l.why_now, []);
+        const pains = safeJsonParse(l.pain_hypotheses, []);
+        const competitive = safeJsonParse(l.competitive_displacement, {});
+        const outreach = safeJsonParse(l.outreach_strategy, {});
+        const signalCount = whyNow.length + pains.length;
+        const stars = scoreToStars(l.fit_score);
+        const topSignal = whyNow[0] || '';
+        const pitch = outreach.one_line_pitch || '';
+        const displaces = (competitive.likely_current || []).filter(Boolean).join(', ');
+        const empLabel = l.employee_count ? `${l.employee_count.toLocaleString()} emp` : '';
+
+        let detail = `${stars} ${l.company_name} (${l.segment}${empLabel ? ', ' + empLabel : ''}) · ${signalCount} signals`;
+        if (topSignal) detail += `\nWhy now: ${topSignal}`;
+        if (pitch) detail += `\nAngle: ${pitch}`;
+        if (displaces) detail += `\nDisplaces: ${displaces}`;
+        return detail;
+      }).join('\n\n');
+
+      const remaining = leads.length - topLeads.length;
+      description = `Avg ${scoreToStars(avgScore)} | ${segmentSummary}\n\n${leadDetails}${remaining > 0 ? `\n\n+ ${remaining} more → ${baseUrl}/campaigns/${campaign.id}` : ''}`;
+    } else if (run.status === 'failed') {
+      title = `${emoji} Run failed — ${dateLabel}`;
+      description = run.error_message || 'Pipeline run failed. Check the dashboard for details.';
+    } else if (run.status === 'cancelled') {
+      title = `${emoji} Run cancelled — ${dateLabel}`;
+      description = 'Pipeline run was manually cancelled.';
+    } else if (run.status === 'missed') {
+      title = `${emoji} Scheduled run missed — ${dateLabel}`;
+      description = 'Scheduled run did not fire. The server may have been offline during the scheduled window.';
+    } else {
+      title = `${emoji} Run ${run.status} — ${dateLabel}`;
+      description = `Pipeline run is ${run.status}.`;
+    }
+
+    return `    <item>
+      <title>${escapeXml(title)}</title>
+      <link>${baseUrl}/campaigns/${campaign.id}</link>
+      <description>${escapeXml(description)}</description>
+      <pubDate>${pubDate}</pubDate>
+      <guid isPermaLink="false">${escapeXml(run.id)}</guid>
+    </item>`;
+  }).join('\n');
 
   const rss = `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0">
   <channel>
     <title>SignalStack: ${escapeXml(campaign.name)}</title>
-    <description>${escapeXml(campaign.description || campaign.pattern_thesis)}</description>
+    <description>${escapeXml(campaign.description || campaign.pattern_thesis || '')}</description>
     <link>${baseUrl}/campaigns/${campaign.id}</link>
     <lastBuildDate>${new Date().toUTCString()}</lastBuildDate>
     <ttl>60</ttl>
@@ -528,6 +584,19 @@ ${items}
 
 function escapeXml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function scoreToStars(score: number): string {
+  if (score >= 90) return '★★★★★';
+  if (score >= 75) return '★★★★';
+  if (score >= 60) return '★★★';
+  if (score >= 40) return '★★';
+  return '★';
+}
+
+function safeJsonParse(val: string | null, fallback: any): any {
+  if (!val) return fallback;
+  try { return JSON.parse(val); } catch { return fallback; }
 }
 
 // Trigger campaign run

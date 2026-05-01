@@ -22,6 +22,7 @@ import configTransferRoutes from './routes/configTransfer.js';
 import { initScheduler } from './scheduler/cron.js';
 import { initCampaignScheduler } from './scheduler/campaignScheduler.js';
 import { initWebhookDispatcher } from './events/webhookDispatcher.js';
+import { initSlackNotifier } from './services/slackNotifier.js';
 import { apiVersionHeader } from './middleware/apiVersion.js';
 import { defaultRateLimit } from './middleware/rateLimit.js';
 import { openApiSpec } from './openapi.js';
@@ -133,6 +134,7 @@ if (userCount === 0) {
 }
 
 initWebhookDispatcher();
+initSlackNotifier();
 initScheduler();
 initCampaignScheduler();
 

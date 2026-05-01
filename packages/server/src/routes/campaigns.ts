@@ -6,6 +6,7 @@ import { runCampaign } from '../agent/campaignOrchestrator.js';
 import { getSetting, getDefaultPipelineConfig, getDefaultPromptConfig } from './icp.js';
 import { registerCampaignCron, unregisterCampaignCron } from '../scheduler/campaignScheduler.js';
 import { logActivity, computeChanges } from '../services/activityLog.js';
+import { sendTestSlackMessage } from '../services/slackNotifier.js';
 import type { CampaignParsed, CampaignExclusionConfig, Exclusion } from '../types/index.js';
 
 const router = Router();
@@ -247,6 +248,7 @@ router.get('/:id/config', authenticate, (req: AuthRequest, res: Response) => {
     exclusion_config: parsed.exclusion_config,
     rss_enabled: parsed.rss_enabled,
     funnel_config: parsed.funnel_config,
+    slack_webhook_url: (campaign as any).slack_webhook_url || null,
   });
 });
 
@@ -262,6 +264,7 @@ router.put('/:id/config', authenticate, requireOperator, (req: AuthRequest, res:
       icp_overrides = ?, pipeline_overrides = ?, prompt_overrides = ?,
       source_overrides = ?, schedule_cron = ?, schedule_enabled = ?,
       exclusion_config = ?, rss_enabled = ?, funnel_config = ?,
+      slack_webhook_url = ?,
       updated_at = datetime('now')
      WHERE id = ?`
   ).run(
@@ -274,6 +277,7 @@ router.put('/:id/config', authenticate, requireOperator, (req: AuthRequest, res:
     body.exclusion_config ? JSON.stringify(body.exclusion_config) : null,
     body.rss_enabled ? 1 : 0,
     body.funnel_config ? JSON.stringify(body.funnel_config) : null,
+    body.slack_webhook_url || null,
     req.params.id,
   );
 
@@ -598,6 +602,12 @@ function safeJsonParse(val: string | null, fallback: any): any {
   if (!val) return fallback;
   try { return JSON.parse(val); } catch { return fallback; }
 }
+
+// Test Slack webhook
+router.post('/:id/test-slack', authenticate, requireOperator, async (req: AuthRequest, res: Response) => {
+  const result = await sendTestSlackMessage(req.params.id);
+  res.json(result);
+});
 
 // Trigger campaign run
 router.post('/:id/run', authenticate, requireMember, async (req: AuthRequest, res: Response) => {

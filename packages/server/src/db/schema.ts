@@ -332,6 +332,9 @@ function initSchema(db: Database.Database) {
   if (!campColsP2.find(c => c.name === 'funnel_config')) {
     db.exec("ALTER TABLE campaigns ADD COLUMN funnel_config TEXT");
   }
+  if (!campColsP2.find(c => c.name === 'slack_webhook_url')) {
+    db.exec("ALTER TABLE campaigns ADD COLUMN slack_webhook_url TEXT");
+  }
 
   // Indexes on campaign_id and inbound columns (must come after ALTERs)
   db.exec(`

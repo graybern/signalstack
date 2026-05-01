@@ -5,7 +5,7 @@ import { useAuthContext } from '../App';
 import {
   ArrowLeft, Play, Edit, Users, TrendingUp, Target, ChevronDown, ChevronUp,
   Layers, Settings, Clock, Shield, Rss, Copy, Check, Calendar,
-  Search,
+  Search, Send,
   BarChart3, DollarSign, Activity, Eye, ExternalLink,
   ArrowUpDown, ArrowUp, ArrowDown, Filter, X,
 } from 'lucide-react';
@@ -110,9 +110,10 @@ export function CampaignDetail() {
     exclusion_config: { additions: any[]; exemptions: string[] } | null;
     rss_enabled: boolean;
     funnel_config: any | null;
+    slack_webhook_url: string;
   }>({
     schedule_cron: '', schedule_enabled: false, exclusion_config: null, rss_enabled: false,
-    funnel_config: null,
+    funnel_config: null, slack_webhook_url: '',
   });
   const [globalExclusions, setGlobalExclusions] = useState<{ id: string; company_name: string; domain: string | null }[]>([]);
 
@@ -142,6 +143,7 @@ export function CampaignDetail() {
           exclusion_config: data.exclusion_config,
           rss_enabled: !!data.rss_enabled,
           funnel_config: data.funnel_config || null,
+          slack_webhook_url: (data as any).slack_webhook_url || '',
         });
       }).finally(() => setLoading(false));
       api('/exclusions?limit=10000').then((data: any) => {
@@ -277,6 +279,7 @@ export function CampaignDetail() {
           exclusion_config: editConfig.exclusion_config,
           rss_enabled: editConfig.rss_enabled,
           funnel_config: editConfig.funnel_config,
+          slack_webhook_url: editConfig.slack_webhook_url || null,
         }),
       });
       setConfigDirty(false);
@@ -1153,41 +1156,16 @@ function ConfigureTab({
             </div>
           )}
 
-          {/* RSS Feed */}
+          {/* Notifications (Slack + RSS) */}
           {configTab === 'feed' && (
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <h4 className="text-sm font-medium text-gray-900">RSS Feed</h4>
-                <label className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={editConfig.rss_enabled}
-                    onChange={e => { setEditConfig({ ...editConfig, rss_enabled: e.target.checked }); setConfigDirty(true); }}
-                    className="rounded border-gray-300"
-                  />
-                  Enable RSS
-                </label>
-              </div>
-              {editConfig.rss_enabled && (
-                <>
-                  <div className="bg-gray-50 rounded-lg p-3">
-                    <label className="block text-xs text-gray-500 mb-1">Feed URL</label>
-                    <div className="flex items-center gap-2">
-                      <code className="flex-1 text-xs bg-white border border-gray-200 rounded px-3 py-2 text-gray-700 truncate">
-                        {window.location.origin}/api/campaigns/{campaignId}/rss
-                      </code>
-                      <button onClick={copyRssUrl} className="flex items-center gap-1 px-3 py-2 text-xs border border-gray-200 rounded hover:bg-white transition-colors">
-                        {copiedRss ? <Check className="w-3.5 h-3.5 text-green-600" /> : <Copy className="w-3.5 h-3.5" />}
-                        {copiedRss ? 'Copied' : 'Copy'}
-                      </button>
-                    </div>
-                  </div>
-                  <p className="text-xs text-gray-500">
-                    Subscribe to this feed in Slack using <code className="bg-gray-100 px-1 rounded">/feed {window.location.origin}/api/campaigns/{campaignId}/rss</code>
-                  </p>
-                </>
-              )}
-            </div>
+            <FeedTab
+              editConfig={editConfig}
+              setEditConfig={setEditConfig}
+              setConfigDirty={setConfigDirty}
+              copiedRss={copiedRss}
+              copyRssUrl={copyRssUrl}
+              campaignId={campaignId}
+            />
           )}
 
           {/* Save button (for pipeline/schedule/exclusions/feed changes) */}
@@ -1199,6 +1177,114 @@ function ConfigureTab({
             </div>
           )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Feed Tab (Slack + RSS) ────────────────────────────────────────
+
+function FeedTab({
+  editConfig, setEditConfig, setConfigDirty, copiedRss, copyRssUrl, campaignId,
+}: {
+  editConfig: any;
+  setEditConfig: (c: any) => void;
+  setConfigDirty: (d: boolean) => void;
+  copiedRss: boolean;
+  copyRssUrl: () => void;
+  campaignId: string;
+}) {
+  const [slackTesting, setSlackTesting] = useState(false);
+  const [slackTestResult, setSlackTestResult] = useState<{ ok: boolean; error?: string } | null>(null);
+
+  const testSlack = async () => {
+    setSlackTesting(true);
+    setSlackTestResult(null);
+    try {
+      const result = await api<{ ok: boolean; error?: string }>(`/campaigns/${campaignId}/test-slack`, { method: 'POST' });
+      setSlackTestResult(result);
+    } catch (err: any) {
+      setSlackTestResult({ ok: false, error: err.message });
+    } finally {
+      setSlackTesting(false);
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Slack Webhooks */}
+      <div className="space-y-4">
+        <div>
+          <h4 className="text-sm font-medium text-gray-900">Slack Notifications</h4>
+          <p className="text-xs text-gray-500 mt-1">Get notified in Slack when campaign runs complete, fail, or are cancelled.</p>
+        </div>
+        <div>
+          <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Webhook URL</label>
+          <input
+            type="url"
+            value={editConfig.slack_webhook_url || ''}
+            onChange={e => { setEditConfig({ ...editConfig, slack_webhook_url: e.target.value }); setConfigDirty(true); }}
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono"
+            placeholder="https://hooks.slack.com/services/T.../B.../..."
+          />
+          <p className="text-xs text-gray-400 mt-1">
+            Create an <a href="https://api.slack.com/messaging/webhooks" target="_blank" rel="noopener noreferrer" className="text-brand-600 hover:text-brand-700 underline">Incoming Webhook</a> in your Slack workspace and paste the URL here.
+          </p>
+        </div>
+        {editConfig.slack_webhook_url && (
+          <div className="flex items-center gap-3">
+            <button
+              onClick={testSlack}
+              disabled={slackTesting}
+              className="flex items-center gap-2 px-3 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50"
+            >
+              <Send className="w-3.5 h-3.5" />
+              {slackTesting ? 'Sending...' : 'Send Test Message'}
+            </button>
+            {slackTestResult && (
+              <span className={`text-xs px-2.5 py-1 rounded-full ${slackTestResult.ok ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
+                {slackTestResult.ok ? 'Sent successfully!' : slackTestResult.error || 'Failed'}
+              </span>
+            )}
+          </div>
+        )}
+      </div>
+
+      <div className="border-t border-gray-200" />
+
+      {/* RSS Feed */}
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <h4 className="text-sm font-medium text-gray-900">RSS Feed</h4>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={editConfig.rss_enabled}
+              onChange={e => { setEditConfig({ ...editConfig, rss_enabled: e.target.checked }); setConfigDirty(true); }}
+              className="rounded border-gray-300"
+            />
+            Enable RSS
+          </label>
+        </div>
+        {editConfig.rss_enabled && (
+          <>
+            <div className="bg-gray-50 rounded-lg p-3">
+              <label className="block text-xs text-gray-500 mb-1">Feed URL</label>
+              <div className="flex items-center gap-2">
+                <code className="flex-1 text-xs bg-white border border-gray-200 rounded px-3 py-2 text-gray-700 truncate">
+                  {window.location.origin}/api/campaigns/{campaignId}/rss
+                </code>
+                <button onClick={copyRssUrl} className="flex items-center gap-1 px-3 py-2 text-xs border border-gray-200 rounded hover:bg-white transition-colors">
+                  {copiedRss ? <Check className="w-3.5 h-3.5 text-green-600" /> : <Copy className="w-3.5 h-3.5" />}
+                  {copiedRss ? 'Copied' : 'Copy'}
+                </button>
+              </div>
+            </div>
+            <p className="text-xs text-gray-500">
+              Subscribe to this feed in Slack using <code className="bg-gray-100 px-1 rounded">/feed {window.location.origin}/api/campaigns/{campaignId}/rss</code>
+            </p>
+          </>
+        )}
       </div>
     </div>
   );

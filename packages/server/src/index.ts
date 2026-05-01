@@ -124,10 +124,11 @@ console.log(`Database initialized at ${config.dbPath}`);
 const { c: userCount } = db.prepare('SELECT COUNT(*) as c FROM users').get() as any;
 if (userCount === 0) {
   const { v4: uuid } = await import('uuid');
-  const bcrypt = await import('bcryptjs');
+  const bcryptMod = await import('bcryptjs');
+  const hashSync = bcryptMod.default?.hashSync ?? bcryptMod.hashSync;
   db.prepare(
     'INSERT INTO users (id, email, password_hash, display_name, role) VALUES (?,?,?,?,?)'
-  ).run(uuid(), 'admin@example.com', bcrypt.hashSync('admin123', 10), 'Admin', 'superadmin');
+  ).run(uuid(), 'admin@example.com', hashSync('admin123', 10), 'Admin', 'superadmin');
   console.log('Created default admin user (admin@example.com / admin123 — change this immediately)');
 }
 

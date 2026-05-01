@@ -1171,7 +1171,7 @@ function ConfigureTab({
 // ── Feed Tab (Notification Destinations + RSS) ───────────────────
 
 const DEST_TYPES = [
-  { type: 'slack' as const, label: 'Slack', icon: Hash, description: 'Rich Block Kit messages via incoming webhook', color: 'bg-purple-50 text-purple-700 border-purple-200' },
+  { type: 'slack' as const, label: 'Slack', icon: Hash, description: 'Flat key-value payload for Slack workflow webhooks', color: 'bg-purple-50 text-purple-700 border-purple-200' },
   { type: 'webhook' as const, label: 'Generic Webhook', icon: Globe, description: 'Structured JSON payload to any HTTP endpoint', color: 'bg-blue-50 text-blue-700 border-blue-200' },
   { type: 'teams' as const, label: 'Microsoft Teams', icon: Users, description: 'Adaptive Card messages via incoming webhook', color: 'bg-sky-50 text-sky-700 border-sky-200' },
   { type: 'rss' as const, label: 'RSS Feed', icon: Rss, description: 'Pull-based feed for RSS readers and Slack /feed', color: 'bg-orange-50 text-orange-700 border-orange-200' },
@@ -1395,10 +1395,10 @@ function FeedTab({
                           value={dest.config?.webhook_url || ''}
                           onChange={e => updateDest(dest.id, { config: { ...dest.config, webhook_url: e.target.value } })}
                           className="w-full px-3 py-1.5 border border-gray-300 rounded-lg text-sm font-mono"
-                          placeholder="https://hooks.slack.com/services/T.../B.../..."
+                          placeholder="https://hooks.slack.com/triggers/T.../..."
                         />
                         <p className="text-xs text-gray-400 mt-1">
-                          Create an <a href="https://api.slack.com/messaging/webhooks" target="_blank" rel="noopener noreferrer" className="text-brand-600 hover:text-brand-700 underline">Incoming Webhook</a> in Slack.
+                          Create a <a href="https://slack.com/help/articles/360041352714" target="_blank" rel="noopener noreferrer" className="text-brand-600 hover:text-brand-700 underline">Workflow</a> with a webhook trigger. Variables: <code className="bg-gray-100 px-1 rounded">campaign</code>, <code className="bg-gray-100 px-1 rounded">status</code>, <code className="bg-gray-100 px-1 rounded">headline</code>, <code className="bg-gray-100 px-1 rounded">summary</code>, <code className="bg-gray-100 px-1 rounded">lead_count</code>, <code className="bg-gray-100 px-1 rounded">top_leads</code>, <code className="bg-gray-100 px-1 rounded">link</code>
                         </p>
                       </div>
                     )}

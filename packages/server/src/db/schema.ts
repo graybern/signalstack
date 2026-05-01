@@ -336,6 +336,25 @@ function initSchema(db: Database.Database) {
     db.exec("ALTER TABLE campaigns ADD COLUMN slack_webhook_url TEXT");
   }
 
+  // Notification destinations (replaces slack_webhook_url)
+  const campColsNotif = db.prepare("PRAGMA table_info(campaigns)").all() as { name: string }[];
+  if (!campColsNotif.find(c => c.name === 'notification_destinations')) {
+    db.exec("ALTER TABLE campaigns ADD COLUMN notification_destinations TEXT DEFAULT '[]'");
+    const withSlack = db.prepare(
+      "SELECT id, slack_webhook_url FROM campaigns WHERE slack_webhook_url IS NOT NULL AND slack_webhook_url != ''"
+    ).all() as { id: string; slack_webhook_url: string }[];
+    for (const row of withSlack) {
+      const destId = crypto.randomUUID();
+      const dest = [{
+        id: destId, type: 'slack', label: 'Slack', enabled: true,
+        created_at: new Date().toISOString(),
+        config: { webhook_url: row.slack_webhook_url },
+      }];
+      db.prepare("UPDATE campaigns SET notification_destinations = ? WHERE id = ?")
+        .run(JSON.stringify(dest), row.id);
+    }
+  }
+
   // Indexes on campaign_id and inbound columns (must come after ALTERs)
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_leads_campaign_id ON leads(campaign_id);

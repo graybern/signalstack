@@ -207,6 +207,7 @@ export interface Campaign {
   exclusion_config: string | null;
   rss_enabled: number;
   funnel_config: string | null;
+  notification_destinations: string | null;
 }
 
 export type FunnelStepId = 'discover' | 'qualify' | 'enrich' | 'score' | 'brief';
@@ -292,6 +293,40 @@ export interface CampaignExclusionConfig {
   exemptions: string[]; // IDs of global exclusions to exempt
 }
 
+// ── Notification Destinations ──────────────────────────────────────
+
+export type NotificationDestinationType = 'slack' | 'webhook' | 'teams';
+
+export interface NotificationDestinationBase {
+  id: string;
+  type: NotificationDestinationType;
+  label: string;
+  enabled: boolean;
+  created_at: string;
+}
+
+export interface SlackDestination extends NotificationDestinationBase {
+  type: 'slack';
+  config: { webhook_url: string };
+}
+
+export interface WebhookDestination extends NotificationDestinationBase {
+  type: 'webhook';
+  config: {
+    url: string;
+    method?: 'POST' | 'PUT';
+    headers?: Record<string, string>;
+    secret?: string;
+  };
+}
+
+export interface TeamsDestination extends NotificationDestinationBase {
+  type: 'teams';
+  config: { webhook_url: string };
+}
+
+export type NotificationDestination = SlackDestination | WebhookDestination | TeamsDestination;
+
 export interface CampaignParsed {
   id: string;
   name: string;
@@ -317,6 +352,7 @@ export interface CampaignParsed {
   exclusion_config: CampaignExclusionConfig | null;
   rss_enabled: number;
   funnel_config: FunnelConfig | null;
+  notification_destinations: NotificationDestination[];
 }
 
 export interface InboundImport {

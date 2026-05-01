@@ -5,7 +5,7 @@ import { useAuthContext } from '../App';
 import {
   ArrowLeft, Play, Edit, Users, TrendingUp, Target, ChevronDown, ChevronUp,
   Layers, Settings, Clock, Shield, Rss, Copy, Check, Calendar,
-  Search, Send,
+  Search, Send, Globe, Hash, Plus, Trash2, Power,
   BarChart3, DollarSign, Activity, Eye, ExternalLink,
   ArrowUpDown, ArrowUp, ArrowDown, Filter, X,
 } from 'lucide-react';
@@ -110,10 +110,10 @@ export function CampaignDetail() {
     exclusion_config: { additions: any[]; exemptions: string[] } | null;
     rss_enabled: boolean;
     funnel_config: any | null;
-    slack_webhook_url: string;
+    notification_destinations: any[];
   }>({
     schedule_cron: '', schedule_enabled: false, exclusion_config: null, rss_enabled: false,
-    funnel_config: null, slack_webhook_url: '',
+    funnel_config: null, notification_destinations: [],
   });
   const [globalExclusions, setGlobalExclusions] = useState<{ id: string; company_name: string; domain: string | null }[]>([]);
 
@@ -143,7 +143,7 @@ export function CampaignDetail() {
           exclusion_config: data.exclusion_config,
           rss_enabled: !!data.rss_enabled,
           funnel_config: data.funnel_config || null,
-          slack_webhook_url: (data as any).slack_webhook_url || '',
+          notification_destinations: (data as any).notification_destinations || [],
         });
       }).finally(() => setLoading(false));
       api('/exclusions?limit=10000').then((data: any) => {
@@ -279,7 +279,7 @@ export function CampaignDetail() {
           exclusion_config: editConfig.exclusion_config,
           rss_enabled: editConfig.rss_enabled,
           funnel_config: editConfig.funnel_config,
-          slack_webhook_url: editConfig.slack_webhook_url || null,
+          notification_destinations: editConfig.notification_destinations,
         }),
       });
       setConfigDirty(false);
@@ -1182,7 +1182,17 @@ function ConfigureTab({
   );
 }
 
-// ── Feed Tab (Slack + RSS) ────────────────────────────────────────
+// ── Feed Tab (Notification Destinations + RSS) ───────────────────
+
+const DEST_TYPES = [
+  { type: 'slack' as const, label: 'Slack', icon: Hash, description: 'Rich Block Kit messages via incoming webhook', color: 'bg-purple-50 text-purple-700 border-purple-200' },
+  { type: 'webhook' as const, label: 'Generic Webhook', icon: Globe, description: 'Structured JSON payload to any HTTP endpoint', color: 'bg-blue-50 text-blue-700 border-blue-200' },
+  { type: 'teams' as const, label: 'Microsoft Teams', icon: Users, description: 'Adaptive Card messages via incoming webhook', color: 'bg-sky-50 text-sky-700 border-sky-200' },
+];
+
+function destTypeConfig(type: string) {
+  return DEST_TYPES.find(d => d.type === type) || DEST_TYPES[1];
+}
 
 function FeedTab({
   editConfig, setEditConfig, setConfigDirty, copiedRss, copyRssUrl, campaignId,
@@ -1194,60 +1204,274 @@ function FeedTab({
   copyRssUrl: () => void;
   campaignId: string;
 }) {
-  const [slackTesting, setSlackTesting] = useState(false);
-  const [slackTestResult, setSlackTestResult] = useState<{ ok: boolean; error?: string } | null>(null);
+  const [showAddPicker, setShowAddPicker] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [testingId, setTestingId] = useState<string | null>(null);
+  const [testResults, setTestResults] = useState<Record<string, { ok: boolean; error?: string }>>({});
 
-  const testSlack = async () => {
-    setSlackTesting(true);
-    setSlackTestResult(null);
+  const destinations: any[] = editConfig.notification_destinations || [];
+
+  const updateDestinations = (updated: any[]) => {
+    setEditConfig({ ...editConfig, notification_destinations: updated });
+    setConfigDirty(true);
+  };
+
+  const addDestination = (type: 'slack' | 'webhook' | 'teams') => {
+    const id = crypto.randomUUID();
+    const tc = destTypeConfig(type);
+    const dest: any = {
+      id, type, label: tc.label, enabled: true,
+      created_at: new Date().toISOString(),
+      config: type === 'webhook'
+        ? { url: '', method: 'POST', headers: {}, secret: '' }
+        : { webhook_url: '' },
+    };
+    updateDestinations([...destinations, dest]);
+    setEditingId(id);
+    setShowAddPicker(false);
+  };
+
+  const updateDest = (id: string, patch: any) => {
+    updateDestinations(destinations.map(d => d.id === id ? { ...d, ...patch } : d));
+  };
+
+  const removeDest = (id: string) => {
+    updateDestinations(destinations.filter(d => d.id !== id));
+    if (editingId === id) setEditingId(null);
+  };
+
+  const toggleEnabled = (id: string) => {
+    updateDestinations(destinations.map(d => d.id === id ? { ...d, enabled: !d.enabled } : d));
+  };
+
+  const testDest = async (id: string) => {
+    setTestingId(id);
+    setTestResults(prev => { const n = { ...prev }; delete n[id]; return n; });
     try {
-      const result = await api<{ ok: boolean; error?: string }>(`/campaigns/${campaignId}/test-slack`, { method: 'POST' });
-      setSlackTestResult(result);
+      const result = await api<{ ok: boolean; error?: string }>(`/campaigns/${campaignId}/test-notification`, {
+        method: 'POST',
+        body: JSON.stringify({ destination_id: id }),
+      });
+      setTestResults(prev => ({ ...prev, [id]: result }));
     } catch (err: any) {
-      setSlackTestResult({ ok: false, error: err.message });
+      setTestResults(prev => ({ ...prev, [id]: { ok: false, error: err.message } }));
     } finally {
-      setSlackTesting(false);
+      setTestingId(null);
     }
   };
 
   return (
     <div className="space-y-6">
-      {/* Slack Webhooks */}
+      {/* Notification Destinations */}
       <div className="space-y-4">
-        <div>
-          <h4 className="text-sm font-medium text-gray-900">Slack Notifications</h4>
-          <p className="text-xs text-gray-500 mt-1">Get notified in Slack when campaign runs complete, fail, or are cancelled.</p>
+        <div className="flex items-center justify-between">
+          <div>
+            <h4 className="text-sm font-medium text-gray-900">Notification Destinations</h4>
+            <p className="text-xs text-gray-500 mt-0.5">Get notified when campaign runs complete, fail, or are cancelled.</p>
+          </div>
+          <button
+            onClick={() => setShowAddPicker(!showAddPicker)}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-brand-600 border border-brand-300 rounded-lg hover:bg-brand-50"
+          >
+            <Plus className="w-3.5 h-3.5" /> Add
+          </button>
         </div>
-        <div>
-          <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Webhook URL</label>
-          <input
-            type="url"
-            value={editConfig.slack_webhook_url || ''}
-            onChange={e => { setEditConfig({ ...editConfig, slack_webhook_url: e.target.value }); setConfigDirty(true); }}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono"
-            placeholder="https://hooks.slack.com/services/T.../B.../..."
-          />
-          <p className="text-xs text-gray-400 mt-1">
-            Create an <a href="https://api.slack.com/messaging/webhooks" target="_blank" rel="noopener noreferrer" className="text-brand-600 hover:text-brand-700 underline">Incoming Webhook</a> in your Slack workspace and paste the URL here.
-          </p>
-        </div>
-        {editConfig.slack_webhook_url && (
-          <div className="flex items-center gap-3">
-            <button
-              onClick={testSlack}
-              disabled={slackTesting}
-              className="flex items-center gap-2 px-3 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50"
-            >
-              <Send className="w-3.5 h-3.5" />
-              {slackTesting ? 'Sending...' : 'Send Test Message'}
-            </button>
-            {slackTestResult && (
-              <span className={`text-xs px-2.5 py-1 rounded-full ${slackTestResult.ok ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
-                {slackTestResult.ok ? 'Sent successfully!' : slackTestResult.error || 'Failed'}
-              </span>
-            )}
+
+        {/* Type picker */}
+        {showAddPicker && (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            {DEST_TYPES.map(dt => (
+              <button
+                key={dt.type}
+                onClick={() => addDestination(dt.type)}
+                className="flex items-start gap-3 p-4 bg-white border border-gray-200 rounded-xl hover:border-brand-300 hover:shadow-sm transition-all text-left"
+              >
+                <div className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${dt.color}`}>
+                  <dt.icon className="w-4.5 h-4.5" />
+                </div>
+                <div>
+                  <p className="text-sm font-medium text-gray-900">{dt.label}</p>
+                  <p className="text-xs text-gray-500 mt-0.5">{dt.description}</p>
+                </div>
+              </button>
+            ))}
           </div>
         )}
+
+        {/* Destination cards */}
+        {destinations.length === 0 && !showAddPicker && (
+          <div className="text-center py-8 bg-gray-50 rounded-xl border border-dashed border-gray-200">
+            <Send className="w-8 h-8 text-gray-300 mx-auto mb-2" />
+            <p className="text-sm text-gray-500">No destinations configured.</p>
+            <p className="text-xs text-gray-400 mt-1">Add a Slack, Teams, or webhook destination to get notified.</p>
+          </div>
+        )}
+
+        <div className="space-y-3">
+          {destinations.map((dest: any) => {
+            const tc = destTypeConfig(dest.type);
+            const TypeIcon = tc.icon;
+            const isEditing = editingId === dest.id;
+            const isTesting = testingId === dest.id;
+            const testResult = testResults[dest.id];
+            const hasUrl = dest.type === 'webhook' ? dest.config?.url : dest.config?.webhook_url;
+
+            return (
+              <div key={dest.id} className={`bg-white border rounded-xl overflow-hidden ${isEditing ? 'border-brand-300 shadow-sm' : 'border-gray-200'}`}>
+                {/* Card header */}
+                <div className="flex items-center gap-3 px-4 py-3">
+                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${tc.color}`}>
+                    <TypeIcon className="w-4 h-4" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium text-gray-900 truncate">{dest.label}</span>
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${tc.color}`}>{tc.label}</span>
+                    </div>
+                    {hasUrl && (
+                      <p className="text-xs text-gray-400 truncate mt-0.5 font-mono">
+                        {(dest.type === 'webhook' ? dest.config?.url : dest.config?.webhook_url || '').replace(/^(https?:\/\/[^\/]+).*/, '$1/...')}
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-1.5">
+                    {testResult && (
+                      <span className={`text-xs px-2 py-0.5 rounded-full ${testResult.ok ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
+                        {testResult.ok ? 'Sent!' : testResult.error || 'Failed'}
+                      </span>
+                    )}
+                    <button
+                      onClick={() => testDest(dest.id)}
+                      disabled={isTesting || !hasUrl}
+                      className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded disabled:opacity-30"
+                      title="Send test"
+                    >
+                      <Send className={`w-3.5 h-3.5 ${isTesting ? 'animate-pulse' : ''}`} />
+                    </button>
+                    <button
+                      onClick={() => toggleEnabled(dest.id)}
+                      className={`p-1.5 rounded ${dest.enabled ? 'text-green-600 hover:bg-green-50' : 'text-gray-300 hover:bg-gray-100'}`}
+                      title={dest.enabled ? 'Enabled' : 'Disabled'}
+                    >
+                      <Power className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={() => setEditingId(isEditing ? null : dest.id)}
+                      className={`p-1.5 rounded ${isEditing ? 'text-brand-600 bg-brand-50' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'}`}
+                      title="Edit"
+                    >
+                      <Edit className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={() => removeDest(dest.id)}
+                      className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded"
+                      title="Remove"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Inline editor */}
+                {isEditing && (
+                  <div className="px-4 pb-4 pt-2 border-t border-gray-100 space-y-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Label</label>
+                      <input
+                        value={dest.label}
+                        onChange={e => updateDest(dest.id, { label: e.target.value })}
+                        className="w-full px-3 py-1.5 border border-gray-300 rounded-lg text-sm"
+                        placeholder="e.g. #sales-alerts"
+                      />
+                    </div>
+
+                    {dest.type === 'slack' && (
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Webhook URL</label>
+                        <input
+                          type="url"
+                          value={dest.config?.webhook_url || ''}
+                          onChange={e => updateDest(dest.id, { config: { ...dest.config, webhook_url: e.target.value } })}
+                          className="w-full px-3 py-1.5 border border-gray-300 rounded-lg text-sm font-mono"
+                          placeholder="https://hooks.slack.com/services/T.../B.../..."
+                        />
+                        <p className="text-xs text-gray-400 mt-1">
+                          Create an <a href="https://api.slack.com/messaging/webhooks" target="_blank" rel="noopener noreferrer" className="text-brand-600 hover:text-brand-700 underline">Incoming Webhook</a> in Slack.
+                        </p>
+                      </div>
+                    )}
+
+                    {dest.type === 'teams' && (
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Webhook URL</label>
+                        <input
+                          type="url"
+                          value={dest.config?.webhook_url || ''}
+                          onChange={e => updateDest(dest.id, { config: { ...dest.config, webhook_url: e.target.value } })}
+                          className="w-full px-3 py-1.5 border border-gray-300 rounded-lg text-sm font-mono"
+                          placeholder="https://outlook.office.com/webhook/..."
+                        />
+                      </div>
+                    )}
+
+                    {dest.type === 'webhook' && (
+                      <>
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">URL</label>
+                          <input
+                            type="url"
+                            value={dest.config?.url || ''}
+                            onChange={e => updateDest(dest.id, { config: { ...dest.config, url: e.target.value } })}
+                            className="w-full px-3 py-1.5 border border-gray-300 rounded-lg text-sm font-mono"
+                            placeholder="https://your-endpoint.com/webhook"
+                          />
+                        </div>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Method</label>
+                            <select
+                              value={dest.config?.method || 'POST'}
+                              onChange={e => updateDest(dest.id, { config: { ...dest.config, method: e.target.value } })}
+                              className="w-full px-3 py-1.5 border border-gray-300 rounded-lg text-sm bg-white"
+                            >
+                              <option value="POST">POST</option>
+                              <option value="PUT">PUT</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">HMAC Secret</label>
+                            <input
+                              type="password"
+                              value={dest.config?.secret || ''}
+                              onChange={e => updateDest(dest.id, { config: { ...dest.config, secret: e.target.value } })}
+                              className="w-full px-3 py-1.5 border border-gray-300 rounded-lg text-sm font-mono"
+                              placeholder="Optional signing key"
+                            />
+                          </div>
+                        </div>
+                        <details className="text-xs">
+                          <summary className="text-gray-400 cursor-pointer hover:text-gray-600">Custom Headers</summary>
+                          <WebhookHeadersEditor
+                            headers={dest.config?.headers || {}}
+                            onChange={headers => updateDest(dest.id, { config: { ...dest.config, headers } })}
+                          />
+                        </details>
+                      </>
+                    )}
+
+                    <button
+                      onClick={() => setEditingId(null)}
+                      className="text-xs text-brand-600 hover:text-brand-700"
+                    >
+                      Done editing
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
       </div>
 
       <div className="border-t border-gray-200" />
@@ -1285,6 +1509,38 @@ function FeedTab({
             </p>
           </>
         )}
+      </div>
+    </div>
+  );
+}
+
+function WebhookHeadersEditor({ headers, onChange }: { headers: Record<string, string>; onChange: (h: Record<string, string>) => void }) {
+  const [newKey, setNewKey] = useState('');
+  const [newVal, setNewVal] = useState('');
+  const entries = Object.entries(headers);
+
+  const addHeader = () => {
+    if (!newKey.trim()) return;
+    onChange({ ...headers, [newKey.trim()]: newVal });
+    setNewKey('');
+    setNewVal('');
+  };
+
+  return (
+    <div className="mt-2 space-y-1.5">
+      {entries.map(([k, v]) => (
+        <div key={k} className="flex items-center gap-1.5">
+          <code className="text-xs bg-gray-100 px-2 py-0.5 rounded">{k}</code>
+          <code className="text-xs text-gray-500 flex-1 truncate">{v}</code>
+          <button onClick={() => { const h = { ...headers }; delete h[k]; onChange(h); }} className="text-xs text-red-400 hover:text-red-600">
+            <X className="w-3 h-3" />
+          </button>
+        </div>
+      ))}
+      <div className="flex items-center gap-1.5">
+        <input value={newKey} onChange={e => setNewKey(e.target.value)} className="w-36 px-2 py-1 border border-gray-300 rounded text-xs" placeholder="Header name" />
+        <input value={newVal} onChange={e => setNewVal(e.target.value)} className="flex-1 px-2 py-1 border border-gray-300 rounded text-xs" placeholder="Value" onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addHeader(); } }} />
+        <button onClick={addHeader} className="px-2 py-1 text-xs text-brand-600 border border-brand-300 rounded hover:bg-brand-50">Add</button>
       </div>
     </div>
   );

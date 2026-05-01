@@ -6,7 +6,7 @@ import { runCampaign } from '../agent/campaignOrchestrator.js';
 import { getSetting, getDefaultPipelineConfig, getDefaultPromptConfig } from './icp.js';
 import { registerCampaignCron, unregisterCampaignCron } from '../scheduler/campaignScheduler.js';
 import { logActivity, computeChanges } from '../services/activityLog.js';
-import { sendTestSlackMessage } from '../services/slackNotifier.js';
+import { sendTestNotification } from '../services/notificationDispatcher.js';
 import type { CampaignParsed, CampaignExclusionConfig, Exclusion } from '../types/index.js';
 
 const router = Router();
@@ -28,6 +28,7 @@ function parseCampaignRow(row: any): CampaignParsed {
     schedule_enabled: row.schedule_enabled || 0,
     rss_enabled: row.rss_enabled || 0,
     funnel_config: row.funnel_config ? JSON.parse(row.funnel_config) : null,
+    notification_destinations: JSON.parse(row.notification_destinations || '[]'),
   };
 }
 
@@ -248,7 +249,7 @@ router.get('/:id/config', authenticate, (req: AuthRequest, res: Response) => {
     exclusion_config: parsed.exclusion_config,
     rss_enabled: parsed.rss_enabled,
     funnel_config: parsed.funnel_config,
-    slack_webhook_url: (campaign as any).slack_webhook_url || null,
+    notification_destinations: parsed.notification_destinations,
   });
 });
 
@@ -264,7 +265,7 @@ router.put('/:id/config', authenticate, requireOperator, (req: AuthRequest, res:
       icp_overrides = ?, pipeline_overrides = ?, prompt_overrides = ?,
       source_overrides = ?, schedule_cron = ?, schedule_enabled = ?,
       exclusion_config = ?, rss_enabled = ?, funnel_config = ?,
-      slack_webhook_url = ?,
+      notification_destinations = ?,
       updated_at = datetime('now')
      WHERE id = ?`
   ).run(
@@ -277,7 +278,7 @@ router.put('/:id/config', authenticate, requireOperator, (req: AuthRequest, res:
     body.exclusion_config ? JSON.stringify(body.exclusion_config) : null,
     body.rss_enabled ? 1 : 0,
     body.funnel_config ? JSON.stringify(body.funnel_config) : null,
-    body.slack_webhook_url || null,
+    JSON.stringify(body.notification_destinations || []),
     req.params.id,
   );
 
@@ -603,9 +604,11 @@ function safeJsonParse(val: string | null, fallback: any): any {
   try { return JSON.parse(val); } catch { return fallback; }
 }
 
-// Test Slack webhook
-router.post('/:id/test-slack', authenticate, requireOperator, async (req: AuthRequest, res: Response) => {
-  const result = await sendTestSlackMessage(req.params.id);
+// Test notification destination
+router.post('/:id/test-notification', authenticate, requireOperator, async (req: AuthRequest, res: Response) => {
+  const { destination_id } = req.body;
+  if (!destination_id) return res.status(400).json({ ok: false, error: 'destination_id required' });
+  const result = await sendTestNotification(req.params.id, destination_id);
   res.json(result);
 });
 

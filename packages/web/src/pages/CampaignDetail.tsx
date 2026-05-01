@@ -144,7 +144,7 @@ export function CampaignDetail() {
           funnel_config: data.funnel_config || null,
         });
       }).finally(() => setLoading(false));
-      api('/exclusions?limit=500').then((data: any) => {
+      api('/exclusions?limit=10000').then((data: any) => {
         setGlobalExclusions((data.exclusions || []).map((e: any) => ({ id: e.id, company_name: e.company_name, domain: e.domain })));
       }).catch(() => {});
     }

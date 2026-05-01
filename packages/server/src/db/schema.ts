@@ -374,6 +374,38 @@ function initSchema(db: Database.Database) {
     }
   }
 
+  // Base URL for notification links
+  const campColsBaseUrl = db.prepare("PRAGMA table_info(campaigns)").all() as { name: string }[];
+  if (!campColsBaseUrl.find(c => c.name === 'notification_base_url')) {
+    db.exec("ALTER TABLE campaigns ADD COLUMN notification_base_url TEXT");
+    // Migrate: move RSS base_url into campaign-level field, consolidate slack/teams into webhook type
+    const allCampaigns = db.prepare(
+      "SELECT id, notification_destinations FROM campaigns WHERE notification_destinations IS NOT NULL AND notification_destinations != '[]'"
+    ).all() as { id: string; notification_destinations: string }[];
+    for (const row of allCampaigns) {
+      const dests = JSON.parse(row.notification_destinations) as any[];
+      let baseUrl = '';
+      const migrated = dests.map((d: any) => {
+        if (d.type === 'rss' && d.config?.base_url) {
+          baseUrl = d.config.base_url;
+          return { ...d, config: {} };
+        }
+        if (d.type === 'slack') {
+          return { ...d, type: 'webhook', config: { url: d.config?.webhook_url || '', format: 'slack' } };
+        }
+        if (d.type === 'teams') {
+          return { ...d, type: 'webhook', config: { url: d.config?.webhook_url || '', format: 'teams' } };
+        }
+        if (d.type === 'webhook' && !d.config?.format) {
+          return { ...d, config: { ...d.config, format: 'json' } };
+        }
+        return d;
+      });
+      db.prepare("UPDATE campaigns SET notification_destinations = ?, notification_base_url = ? WHERE id = ?")
+        .run(JSON.stringify(migrated), baseUrl || null, row.id);
+    }
+  }
+
   // Indexes on campaign_id and inbound columns (must come after ALTERs)
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_leads_campaign_id ON leads(campaign_id);

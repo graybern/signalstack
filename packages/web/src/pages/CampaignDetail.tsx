@@ -110,9 +110,10 @@ export function CampaignDetail() {
     rss_enabled: boolean;
     funnel_config: any | null;
     notification_destinations: any[];
+    notification_base_url: string;
   }>({
     schedule_cron: '', schedule_enabled: false, exclusion_config: null, rss_enabled: false,
-    funnel_config: null, notification_destinations: [],
+    funnel_config: null, notification_destinations: [], notification_base_url: '',
   });
   const [globalExclusions, setGlobalExclusions] = useState<{ id: string; company_name: string; domain: string | null }[]>([]);
 
@@ -143,6 +144,7 @@ export function CampaignDetail() {
           rss_enabled: !!data.rss_enabled,
           funnel_config: data.funnel_config || null,
           notification_destinations: (data as any).notification_destinations || [],
+          notification_base_url: (data as any).notification_base_url || '',
         });
       }).finally(() => setLoading(false));
       api('/exclusions?limit=10000').then((data: any) => {
@@ -279,6 +281,7 @@ export function CampaignDetail() {
           rss_enabled: editConfig.rss_enabled,
           funnel_config: editConfig.funnel_config,
           notification_destinations: editConfig.notification_destinations,
+          notification_base_url: editConfig.notification_base_url || null,
         }),
       });
       setConfigDirty(false);
@@ -1171,14 +1174,18 @@ function ConfigureTab({
 // ── Feed Tab (Notification Destinations + RSS) ───────────────────
 
 const DEST_TYPES = [
-  { type: 'slack' as const, label: 'Slack', icon: Hash, description: 'Flat key-value payload for Slack workflow webhooks', color: 'bg-purple-50 text-purple-700 border-purple-200' },
-  { type: 'webhook' as const, label: 'Generic Webhook', icon: Globe, description: 'Structured JSON payload to any HTTP endpoint', color: 'bg-blue-50 text-blue-700 border-blue-200' },
-  { type: 'teams' as const, label: 'Microsoft Teams', icon: Users, description: 'Adaptive Card messages via incoming webhook', color: 'bg-sky-50 text-sky-700 border-sky-200' },
+  { type: 'webhook' as const, label: 'Webhook', icon: Globe, description: 'Push notifications via HTTP webhook (Slack, Teams, or JSON)', color: 'bg-blue-50 text-blue-700 border-blue-200' },
   { type: 'rss' as const, label: 'RSS Feed', icon: Rss, description: 'Pull-based feed for RSS readers and Slack /feed', color: 'bg-orange-50 text-orange-700 border-orange-200' },
 ];
 
+const FORMAT_OPTIONS = [
+  { value: 'slack', label: 'Slack', description: 'Flat key-value for Workflow Builder' },
+  { value: 'teams', label: 'Teams', description: 'Adaptive Card via incoming webhook' },
+  { value: 'json', label: 'JSON', description: 'Structured JSON for generic endpoints' },
+];
+
 function destTypeConfig(type: string) {
-  return DEST_TYPES.find(d => d.type === type) || DEST_TYPES[1];
+  return DEST_TYPES.find(d => d.type === type) || DEST_TYPES[0];
 }
 
 function FeedTab({
@@ -1201,14 +1208,13 @@ function FeedTab({
     setConfigDirty(true);
   };
 
-  const addDestination = (type: 'slack' | 'webhook' | 'teams' | 'rss') => {
+  const addDestination = (type: 'webhook' | 'rss') => {
     if (type === 'rss' && destinations.some((d: any) => d.type === 'rss')) return;
     const id = crypto.randomUUID();
     const tc = destTypeConfig(type);
     let config: any;
-    if (type === 'webhook') config = { url: '', method: 'POST', headers: {}, secret: '' };
-    else if (type === 'rss') config = { base_url: '' };
-    else config = { webhook_url: '' };
+    if (type === 'webhook') config = { url: '', format: 'json', method: 'POST', headers: {}, secret: '' };
+    else config = {};
     const dest: any = {
       id, type, label: tc.label, enabled: true,
       created_at: new Date().toISOString(), config,
@@ -1247,8 +1253,26 @@ function FeedTab({
     }
   };
 
+  const baseUrl = editConfig.notification_base_url || '';
+  const effectiveBaseUrl = baseUrl || window.location.origin;
+
   return (
     <div className="space-y-6">
+      {/* Campaign Base URL */}
+      <div className="bg-white border border-gray-200 rounded-xl p-4 space-y-2">
+        <label className="block text-sm font-medium text-gray-900">Dashboard Base URL</label>
+        <input
+          type="url"
+          value={baseUrl}
+          onChange={e => { setEditConfig({ ...editConfig, notification_base_url: e.target.value }); setConfigDirty(true); }}
+          className="w-full px-3 py-1.5 border border-gray-300 rounded-lg text-sm font-mono"
+          placeholder={window.location.origin}
+        />
+        <p className="text-xs text-gray-400">
+          Used for links in webhook payloads and RSS feeds. Set to your server's IP or DNS (e.g. <code className="bg-gray-100 px-1 rounded">http://192.168.1.50:5173</code>). Leave blank to auto-detect.
+        </p>
+      </div>
+
       {/* Notification Destinations */}
       <div className="space-y-4">
         <div className="flex items-center justify-between">
@@ -1266,7 +1290,7 @@ function FeedTab({
 
         {/* Type picker */}
         {showAddPicker && (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {DEST_TYPES.filter(dt => dt.type !== 'rss' || !destinations.some((d: any) => d.type === 'rss')).map(dt => (
               <button
                 key={dt.type}
@@ -1290,7 +1314,7 @@ function FeedTab({
           <div className="text-center py-8 bg-gray-50 rounded-xl border border-dashed border-gray-200">
             <Send className="w-8 h-8 text-gray-300 mx-auto mb-2" />
             <p className="text-sm text-gray-500">No destinations configured.</p>
-            <p className="text-xs text-gray-400 mt-1">Add Slack, Teams, webhook, or RSS destinations.</p>
+            <p className="text-xs text-gray-400 mt-1">Add webhook or RSS destinations to get notified.</p>
           </div>
         )}
 
@@ -1302,12 +1326,12 @@ function FeedTab({
             const isTesting = testingId === dest.id;
             const testResult = testResults[dest.id];
             const isRss = dest.type === 'rss';
-            const hasUrl = isRss || (dest.type === 'webhook' ? dest.config?.url : dest.config?.webhook_url);
-            const rssBaseUrl = isRss ? (dest.config?.base_url || window.location.origin) : '';
-            const rssUrl = isRss ? `${rssBaseUrl}/api/campaigns/${campaignId}/rss` : '';
+            const hasUrl = isRss || dest.config?.url;
+            const rssUrl = isRss ? `${effectiveBaseUrl}/api/campaigns/${campaignId}/rss` : '';
+            const formatLabel = !isRss && dest.config?.format ? FORMAT_OPTIONS.find(f => f.value === dest.config.format)?.label || dest.config.format : '';
             const displayUrl = isRss
               ? rssUrl
-              : (dest.type === 'webhook' ? dest.config?.url : dest.config?.webhook_url || '').replace(/^(https?:\/\/[^\/]+).*/, '$1/...');
+              : (dest.config?.url || '').replace(/^(https?:\/\/[^\/]+).*/, '$1/...');
 
             return (
               <div key={dest.id} className={`bg-white border rounded-xl overflow-hidden ${isEditing ? 'border-brand-300 shadow-sm' : 'border-gray-200'}`}>
@@ -1319,6 +1343,7 @@ function FeedTab({
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-medium text-gray-900 truncate">{dest.label}</span>
+                      {formatLabel && <span className="text-[10px] px-1.5 py-0.5 rounded font-medium bg-gray-100 text-gray-600">{formatLabel}</span>}
                       <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${tc.color}`}>{tc.label}</span>
                     </div>
                     {displayUrl && (
@@ -1387,78 +1412,41 @@ function FeedTab({
                       />
                     </div>
 
-                    {dest.type === 'slack' && (
-                      <div>
-                        <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Webhook URL</label>
-                        <input
-                          type="url"
-                          value={dest.config?.webhook_url || ''}
-                          onChange={e => updateDest(dest.id, { config: { ...dest.config, webhook_url: e.target.value } })}
-                          className="w-full px-3 py-1.5 border border-gray-300 rounded-lg text-sm font-mono"
-                          placeholder="https://hooks.slack.com/triggers/T.../..."
-                        />
-                        <p className="text-xs text-gray-400 mt-1">
-                          Create a <a href="https://slack.com/help/articles/360041352714" target="_blank" rel="noopener noreferrer" className="text-brand-600 hover:text-brand-700 underline">Workflow</a> with a webhook trigger. Variables: <code className="bg-gray-100 px-1 rounded">campaign</code>, <code className="bg-gray-100 px-1 rounded">status</code>, <code className="bg-gray-100 px-1 rounded">headline</code>, <code className="bg-gray-100 px-1 rounded">summary</code>, <code className="bg-gray-100 px-1 rounded">lead_count</code>, <code className="bg-gray-100 px-1 rounded">top_leads</code>, <code className="bg-gray-100 px-1 rounded">link</code>
-                        </p>
-                      </div>
-                    )}
-
-                    {dest.type === 'teams' && (
-                      <div>
-                        <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Webhook URL</label>
-                        <input
-                          type="url"
-                          value={dest.config?.webhook_url || ''}
-                          onChange={e => updateDest(dest.id, { config: { ...dest.config, webhook_url: e.target.value } })}
-                          className="w-full px-3 py-1.5 border border-gray-300 rounded-lg text-sm font-mono"
-                          placeholder="https://outlook.office.com/webhook/..."
-                        />
-                      </div>
-                    )}
-
-                    {dest.type === 'rss' && (
-                      <div className="space-y-3">
-                        <div>
-                          <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Base URL</label>
-                          <input
-                            type="url"
-                            value={dest.config?.base_url || ''}
-                            onChange={e => updateDest(dest.id, { config: { ...dest.config, base_url: e.target.value } })}
-                            className="w-full px-3 py-1.5 border border-gray-300 rounded-lg text-sm font-mono"
-                            placeholder={window.location.origin}
-                          />
-                          <p className="text-xs text-gray-400 mt-1">
-                            Override the base URL used in feed links. Leave blank to auto-detect from request. Useful when DNS changes or accessing via IP.
-                          </p>
-                        </div>
-                        <div className="bg-gray-50 rounded-lg p-3">
-                          <label className="block text-xs text-gray-500 mb-1">Feed URL</label>
-                          <div className="flex items-center gap-2">
-                            <code className="flex-1 text-xs bg-white border border-gray-200 rounded px-3 py-2 text-gray-700 truncate">
-                              {(dest.config?.base_url || window.location.origin)}/api/campaigns/{campaignId}/rss
-                            </code>
-                            <button
-                              onClick={() => navigator.clipboard.writeText(`${dest.config?.base_url || window.location.origin}/api/campaigns/${campaignId}/rss`)}
-                              className="flex items-center gap-1 px-3 py-2 text-xs border border-gray-200 rounded hover:bg-white transition-colors"
-                            >
-                              <Copy className="w-3.5 h-3.5" /> Copy
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-
                     {dest.type === 'webhook' && (
                       <>
                         <div>
-                          <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">URL</label>
+                          <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Payload Format</label>
+                          <div className="grid grid-cols-3 gap-2">
+                            {FORMAT_OPTIONS.map(f => (
+                              <button
+                                key={f.value}
+                                onClick={() => updateDest(dest.id, { config: { ...dest.config, format: f.value } })}
+                                className={`px-3 py-2 rounded-lg border text-sm text-left transition-all ${
+                                  dest.config?.format === f.value
+                                    ? 'border-brand-300 bg-brand-50 text-brand-700'
+                                    : 'border-gray-200 hover:border-gray-300 text-gray-700'
+                                }`}
+                              >
+                                <p className="font-medium text-xs">{f.label}</p>
+                                <p className="text-[10px] text-gray-400 mt-0.5">{f.description}</p>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Webhook URL</label>
                           <input
                             type="url"
                             value={dest.config?.url || ''}
                             onChange={e => updateDest(dest.id, { config: { ...dest.config, url: e.target.value } })}
                             className="w-full px-3 py-1.5 border border-gray-300 rounded-lg text-sm font-mono"
-                            placeholder="https://your-endpoint.com/webhook"
+                            placeholder={dest.config?.format === 'slack' ? 'https://hooks.slack.com/triggers/T.../...' : dest.config?.format === 'teams' ? 'https://outlook.office.com/webhook/...' : 'https://your-endpoint.com/webhook'}
                           />
+                          {dest.config?.format === 'slack' && (
+                            <p className="text-xs text-gray-400 mt-1">
+                              Create a <a href="https://slack.com/help/articles/360041352714" target="_blank" rel="noopener noreferrer" className="text-brand-600 hover:text-brand-700 underline">Workflow</a> with a webhook trigger. Variables: <code className="bg-gray-100 px-1 rounded">campaign</code>, <code className="bg-gray-100 px-1 rounded">status</code>, <code className="bg-gray-100 px-1 rounded">headline</code>, <code className="bg-gray-100 px-1 rounded">summary</code>, <code className="bg-gray-100 px-1 rounded">lead_count</code>, <code className="bg-gray-100 px-1 rounded">top_leads</code>, <code className="bg-gray-100 px-1 rounded">link</code>
+                            </p>
+                          )}
                         </div>
                         <div className="grid grid-cols-2 gap-3">
                           <div>
@@ -1491,6 +1479,24 @@ function FeedTab({
                           />
                         </details>
                       </>
+                    )}
+
+                    {isRss && (
+                      <div className="bg-gray-50 rounded-lg p-3">
+                        <label className="block text-xs text-gray-500 mb-1">Feed URL</label>
+                        <div className="flex items-center gap-2">
+                          <code className="flex-1 text-xs bg-white border border-gray-200 rounded px-3 py-2 text-gray-700 truncate">
+                            {effectiveBaseUrl}/api/campaigns/{campaignId}/rss
+                          </code>
+                          <button
+                            onClick={() => navigator.clipboard.writeText(`${effectiveBaseUrl}/api/campaigns/${campaignId}/rss`)}
+                            className="flex items-center gap-1 px-3 py-2 text-xs border border-gray-200 rounded hover:bg-white transition-colors"
+                          >
+                            <Copy className="w-3.5 h-3.5" /> Copy
+                          </button>
+                        </div>
+                        <p className="text-xs text-gray-400 mt-2">Uses the Dashboard Base URL configured above for link generation.</p>
+                      </div>
                     )}
 
                     <button

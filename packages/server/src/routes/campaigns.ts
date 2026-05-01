@@ -29,6 +29,7 @@ function parseCampaignRow(row: any): CampaignParsed {
     rss_enabled: row.rss_enabled || 0,
     funnel_config: row.funnel_config ? JSON.parse(row.funnel_config) : null,
     notification_destinations: JSON.parse(row.notification_destinations || '[]'),
+    notification_base_url: row.notification_base_url || null,
   };
 }
 
@@ -250,6 +251,7 @@ router.get('/:id/config', authenticate, (req: AuthRequest, res: Response) => {
     rss_enabled: parsed.rss_enabled,
     funnel_config: parsed.funnel_config,
     notification_destinations: parsed.notification_destinations,
+    notification_base_url: parsed.notification_base_url,
   });
 });
 
@@ -265,7 +267,7 @@ router.put('/:id/config', authenticate, requireOperator, (req: AuthRequest, res:
       icp_overrides = ?, pipeline_overrides = ?, prompt_overrides = ?,
       source_overrides = ?, schedule_cron = ?, schedule_enabled = ?,
       exclusion_config = ?, rss_enabled = ?, funnel_config = ?,
-      notification_destinations = ?,
+      notification_destinations = ?, notification_base_url = ?,
       updated_at = datetime('now')
      WHERE id = ?`
   ).run(
@@ -279,6 +281,7 @@ router.put('/:id/config', authenticate, requireOperator, (req: AuthRequest, res:
     body.rss_enabled ? 1 : 0,
     body.funnel_config ? JSON.stringify(body.funnel_config) : null,
     JSON.stringify(body.notification_destinations || []),
+    body.notification_base_url || null,
     req.params.id,
   );
 
@@ -507,8 +510,8 @@ router.get('/:id/rss', async (req, res: Response) => {
     'SELECT id, status, lead_count, started_at, completed_at, error_message FROM pipeline_runs WHERE campaign_id = ? ORDER BY started_at DESC LIMIT 20'
   ).all(req.params.id) as any[];
 
-  const configuredBaseUrl = rssDest?.config?.base_url;
-  const baseUrl = configuredBaseUrl || `${req.protocol}://${req.get('host')}`;
+  const configuredBaseUrl = campaign.notification_base_url;
+  const baseUrl = (configuredBaseUrl || `${req.protocol}://${req.get('host')}`).replace(/\/$/, '');
 
   const statusEmoji: Record<string, string> = {
     completed: '✅', failed: '❌', cancelled: '🚫', missed: '⏰', running: '🔄',

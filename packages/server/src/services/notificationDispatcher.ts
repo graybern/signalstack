@@ -27,12 +27,9 @@ function getEnabledDestinations(campaignId: string): NotificationDestination[] {
 }
 
 function getCampaignBaseUrl(campaignId: string): string {
-  const dests = getDestinations(campaignId);
-  for (const d of dests) {
-    const cfg = d.config as any;
-    if (cfg?.base_url) return cfg.base_url.replace(/\/$/, '');
-  }
-  return '';
+  const db = getDb();
+  const row = db.prepare('SELECT notification_base_url FROM campaigns WHERE id = ?').get(campaignId) as any;
+  return (row?.notification_base_url || '').replace(/\/$/, '');
 }
 
 function campaignLink(baseUrl: string, campaignId: string): string {
@@ -77,13 +74,34 @@ function getLeadSummaries(runId: string): LeadSummary[] {
   });
 }
 
+function stripMarkdown(text: string): string {
+  return text.replace(/\*\*([^*]+)\*\*/g, '$1').replace(/\*([^*]+)\*/g, '$1');
+}
+
+function truncate(text: string, maxLen: number): string {
+  const clean = stripMarkdown(text);
+  if (clean.length <= maxLen) return clean;
+  const cut = clean.slice(0, maxLen);
+  const lastBreak = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf(' — '));
+  if (lastBreak > maxLen * 0.4) return cut.slice(0, lastBreak + 1).trim();
+  return cut.trim() + '…';
+}
+
+function shortDisplaces(displaces: string): string {
+  return displaces
+    .split(',')
+    .map(s => s.replace(/\s*\([^)]*\)/g, '').replace(/\s*—\s*.*/g, '').trim())
+    .filter(Boolean)
+    .slice(0, 3)
+    .join(', ');
+}
+
 function formatLeadLine(l: LeadSummary): string {
   const stars = scoreToStars(l.fit_score);
   const empLabel = l.employee_count ? `, ${l.employee_count.toLocaleString()} emp` : '';
   let line = `${stars} ${l.company_name} (${l.segment}${empLabel}) · ${l.signal_count} signals`;
-  if (l.top_signal) line += `\n  Why now: ${l.top_signal}`;
-  if (l.pitch) line += `\n  Angle: ${l.pitch}`;
-  if (l.displaces) line += `\n  Displaces: ${l.displaces}`;
+  if (l.top_signal) line += `\nWhy now: ${truncate(l.top_signal, 120)}`;
+  if (l.displaces) line += `\nDisplaces: ${shortDisplaces(l.displaces)}`;
   return line;
 }
 
@@ -91,7 +109,7 @@ function formatLeadLine(l: LeadSummary): string {
 
 function buildSlackCompleted(campaignName: string, campaignId: string, runId: string, link: string): any {
   const leads = getLeadSummaries(runId);
-  const topLeads = leads.slice(0, Math.max(3, Math.min(5, leads.length)));
+  const topLeads = leads.slice(0, 5);
   const avgScore = leads.length > 0 ? Math.round(leads.reduce((s, l) => s + l.fit_score, 0) / leads.length) : 0;
   const segments = leads.reduce((acc: Record<string, number>, l) => { acc[l.segment] = (acc[l.segment] || 0) + 1; return acc; }, {});
   const segmentSummary = Object.entries(segments).map(([s, c]) => `${c} ${s}`).join(', ');
@@ -100,8 +118,8 @@ function buildSlackCompleted(campaignName: string, campaignId: string, runId: st
   return {
     status: 'completed',
     campaign: campaignName,
-    headline: `✅ ${leads.length} new leads`,
-    summary: `Avg ${scoreToStars(avgScore)} | ${segmentSummary}`,
+    headline: `✅ ${leads.length} new leads · Avg ${scoreToStars(avgScore)} · ${segmentSummary}`,
+    summary: link || '',
     lead_count: String(leads.length),
     top_leads: topLeads.map(formatLeadLine).join('\n\n') + (remaining > 0 ? `\n\n+ ${remaining} more in dashboard` : ''),
     link,
@@ -262,23 +280,14 @@ async function deliver(dest: NotificationDestination, payload: any): Promise<{ o
   if (dest.type === 'rss') return { ok: false, error: 'RSS is pull-based, not deliverable' };
 
   try {
-    let url: string;
-    let method = 'POST';
+    const url = dest.config.url;
+    const method = dest.config.method || 'POST';
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-
-    if (dest.type === 'slack') {
-      url = dest.config.webhook_url;
-    } else if (dest.type === 'teams') {
-      url = dest.config.webhook_url;
-    } else {
-      url = dest.config.url;
-      method = dest.config.method || 'POST';
-      if (dest.config.headers) Object.assign(headers, dest.config.headers);
-      if (dest.config.secret) {
-        const body = JSON.stringify(payload);
-        const sig = crypto.createHmac('sha256', dest.config.secret).update(body).digest('hex');
-        headers['X-SignalStack-Signature'] = sig;
-      }
+    if (dest.config.headers) Object.assign(headers, dest.config.headers);
+    if (dest.config.secret) {
+      const body = JSON.stringify(payload);
+      const sig = crypto.createHmac('sha256', dest.config.secret).update(body).digest('hex');
+      headers['X-SignalStack-Signature'] = sig;
     }
 
     const body = JSON.stringify(payload);
@@ -294,21 +303,23 @@ async function deliver(dest: NotificationDestination, payload: any): Promise<{ o
 type EventType = 'completed' | 'failed' | 'cancelled';
 
 function buildPayload(dest: NotificationDestination, eventType: EventType, data: any, link: string): any {
+  if (dest.type === 'rss') return null;
   const { campaign_name, campaign_id, run_id } = data;
+  const format = dest.config.format || 'json';
 
-  if (dest.type === 'slack') {
+  if (format === 'slack') {
     if (eventType === 'completed') return buildSlackCompleted(campaign_name, campaign_id, run_id, link);
     if (eventType === 'failed') return buildSlackFailed(campaign_name, data.error, link);
     return buildSlackCancelled(campaign_name, link);
   }
 
-  if (dest.type === 'teams') {
+  if (format === 'teams') {
     if (eventType === 'completed') return buildTeamsCompleted(campaign_name, run_id, link);
     if (eventType === 'failed') return buildTeamsFailed(campaign_name, data.error, link);
     return buildTeamsCancelled(campaign_name, link);
   }
 
-  // webhook
+  // json format
   if (eventType === 'completed') return buildWebhookCompleted(campaign_name, campaign_id, run_id, data.lead_count, data.estimated_cost, link);
   if (eventType === 'failed') return buildWebhookFailed(campaign_name, campaign_id, run_id, data.error, link);
   return buildWebhookCancelled(campaign_name, campaign_id, run_id, link);
@@ -371,10 +382,11 @@ export async function sendTestNotification(campaignId: string, destinationId: st
     "SELECT id FROM pipeline_runs WHERE campaign_id = ? AND status = 'completed' ORDER BY completed_at DESC LIMIT 1"
   ).get(campaignId) as any;
 
+  const format = dest.type === 'webhook' ? (dest.config.format || 'json') : 'json';
   let payload: any;
-  if (dest.type === 'slack') {
+  if (format === 'slack') {
     payload = buildSlackTest(campaign.name, campaignId, link, lastRun?.id);
-  } else if (dest.type === 'teams') {
+  } else if (format === 'teams') {
     payload = buildTeamsTest(campaign.name, link, lastRun?.id);
   } else {
     payload = buildWebhookTest(campaign.name, campaignId, link, lastRun?.id);

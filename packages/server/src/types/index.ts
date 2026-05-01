@@ -208,6 +208,7 @@ export interface Campaign {
   rss_enabled: number;
   funnel_config: string | null;
   notification_destinations: string | null;
+  notification_base_url: string | null;
 }
 
 export type FunnelStepId = 'discover' | 'qualify' | 'enrich' | 'score' | 'brief';
@@ -295,7 +296,8 @@ export interface CampaignExclusionConfig {
 
 // ── Notification Destinations ──────────────────────────────────────
 
-export type NotificationDestinationType = 'slack' | 'webhook' | 'teams' | 'rss';
+export type NotificationDestinationType = 'webhook' | 'rss';
+export type WebhookPayloadFormat = 'slack' | 'teams' | 'json';
 
 export interface NotificationDestinationBase {
   id: string;
@@ -305,32 +307,23 @@ export interface NotificationDestinationBase {
   created_at: string;
 }
 
-export interface SlackDestination extends NotificationDestinationBase {
-  type: 'slack';
-  config: { webhook_url: string };
-}
-
 export interface WebhookDestination extends NotificationDestinationBase {
   type: 'webhook';
   config: {
     url: string;
+    format: WebhookPayloadFormat;
     method?: 'POST' | 'PUT';
     headers?: Record<string, string>;
     secret?: string;
   };
 }
 
-export interface TeamsDestination extends NotificationDestinationBase {
-  type: 'teams';
-  config: { webhook_url: string };
-}
-
 export interface RssDestination extends NotificationDestinationBase {
   type: 'rss';
-  config: { base_url: string };
+  config: Record<string, never>;
 }
 
-export type NotificationDestination = SlackDestination | WebhookDestination | TeamsDestination | RssDestination;
+export type NotificationDestination = WebhookDestination | RssDestination;
 
 export interface CampaignParsed {
   id: string;
@@ -358,6 +351,7 @@ export interface CampaignParsed {
   rss_enabled: number;
   funnel_config: FunnelConfig | null;
   notification_destinations: NotificationDestination[];
+  notification_base_url: string | null;
 }
 
 export interface InboundImport {

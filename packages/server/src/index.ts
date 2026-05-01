@@ -117,9 +117,15 @@ if (config.nodeEnv === 'production') {
   });
 }
 
-// Initialize DB and start
-getDb();
+// Initialize DB and auto-seed on first run
+const db = getDb();
 console.log(`Database initialized at ${config.dbPath}`);
+
+const { c: userCount } = db.prepare('SELECT COUNT(*) as c FROM users').get() as any;
+if (userCount === 0) {
+  console.log('Empty database detected — running seed...');
+  await import('./db/seed.js');
+}
 
 initWebhookDispatcher();
 initScheduler();

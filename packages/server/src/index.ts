@@ -127,8 +127,8 @@ if (userCount === 0) {
   const bcrypt = await import('bcryptjs');
   db.prepare(
     'INSERT INTO users (id, email, password_hash, display_name, role) VALUES (?,?,?,?,?)'
-  ).run(uuid(), 'admin@pipeline-gen.local', bcrypt.hashSync('admin123', 10), 'Admin', 'superadmin');
-  console.log('Created default admin user (admin@pipeline-gen.local)');
+  ).run(uuid(), 'admin@example.com', bcrypt.hashSync('admin123', 10), 'Admin', 'superadmin');
+  console.log('Created default admin user (admin@example.com / admin123 — change this immediately)');
 }
 
 initWebhookDispatcher();

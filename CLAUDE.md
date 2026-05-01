@@ -74,7 +74,6 @@ npm install              # Install all workspaces
 npm run dev              # Start both server (:3001) and web (:5173) via concurrently
 npm run build            # Production build (tsc + vite)
 npm start                # Run production server
-npm run seed             # Seed database with initial data
 ```
 
 No test suite or linter configured yet.
@@ -84,7 +83,7 @@ No test suite or linter configured yet.
 - `ANTHROPIC_VERTEX_PROJECT_ID` — GCP project ID
 - `JWT_SECRET` — for auth tokens
 
-Seed credentials: `admin@pipeline-gen.local` / `admin123`
+Default credentials (auto-created on first run): `admin@example.com` / `admin123` — **change immediately**
 
 ## Twingate ICP — Domain Context
 

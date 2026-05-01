@@ -403,7 +403,13 @@ npm run dev -w packages/web
 
 ### First Run
 
-1. Register an admin account at `/login`
+A default admin account is created automatically on first start:
+- **Email:** `admin@example.com`
+- **Password:** `admin123`
+
+> **⚠️ Change the default password immediately** after first login via Settings > Users.
+
+1. Log in with the default credentials
 2. Go to **Settings** to configure your ICP (company context, segments, verticals, competitors)
 3. Check **Data Sources** — 5 free sources are enabled by default
 4. Create a **Campaign** with your research thesis

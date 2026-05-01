@@ -16,20 +16,15 @@ import {
   Eye,
   Wrench,
   UserCog,
-  Mail,
   Plus,
   Trash2,
-  Copy,
   ShieldCheck,
   X,
-  Globe,
   Database,
   Cloud,
   Zap,
-  ExternalLink,
   Play,
   AlertCircle,
-  RefreshCw,
   ChevronDown,
   ChevronRight,
   Save,
@@ -38,6 +33,7 @@ import {
   HardDrive,
   FileJson,
   Loader2,
+  EyeOff,
 } from 'lucide-react';
 
 // ── Types ──────────────────────────────────────────────────────
@@ -52,15 +48,6 @@ interface TeamUser {
   display_name: string;
   role: string;
   created_at: string;
-}
-
-interface Invite {
-  id: string;
-  email: string;
-  role: string;
-  token: string;
-  expires_at: string;
-  accepted_at: string | null;
 }
 
 interface DataSourceConfig {
@@ -458,7 +445,7 @@ function GlobalExclusionsSection() {
   const loadExclusions = async () => {
     try {
       const data = await api('/exclusions');
-      setExclusions(data);
+      setExclusions(data.exclusions || []);
     } catch (err) {
       console.error(err);
     } finally {
@@ -557,234 +544,307 @@ function GlobalExclusionsSection() {
 }
 
 // ── Team Section ───────────────────────────────────────────────
-// (Extracted from Profile.tsx TeamTab — full team & role management)
+
+interface TeamUserExtended extends TeamUser {
+  status?: string;
+  must_change_password?: number;
+  last_login_at?: string | null;
+}
 
 function TeamSection() {
   const { user } = useAuthContext();
-  const [users, setUsers] = useState<TeamUser[]>([]);
-  const [invites, setInvites] = useState<Invite[]>([]);
+  const [users, setUsers] = useState<TeamUserExtended[]>([]);
   const [loading, setLoading] = useState(true);
-  const [showInviteForm, setShowInviteForm] = useState(false);
-  const [inviteEmail, setInviteEmail] = useState('');
-  const [inviteRole, setInviteRole] = useState('member');
-  const [inviting, setInviting] = useState(false);
-  const [inviteMessage, setInviteMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
-  const [copiedToken, setCopiedToken] = useState<string | null>(null);
-  const [selfRegEnabled, setSelfRegEnabled] = useState(false);
-  const [savingSelfReg, setSavingSelfReg] = useState(false);
+  const [search, setSearch] = useState('');
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  // Add user form
+  const [newEmail, setNewEmail] = useState('');
+  const [newName, setNewName] = useState('');
+  const [newRole, setNewRole] = useState('member');
+  const [newPassword, setNewPassword] = useState('');
+  const [adding, setAdding] = useState(false);
+
+  // Reset password
+  const [resetUserId, setResetUserId] = useState<string | null>(null);
+  const [resetPassword, setResetPw] = useState('');
 
   const isSuperAdmin = user?.role === 'superadmin';
+  const getAssignableRoles = () => isSuperAdmin ? ['admin', 'operator', 'member', 'viewer'] : ['operator', 'member', 'viewer'];
+  const canModifyUser = (targetRole: string) => isSuperAdmin ? true : targetRole !== 'superadmin' && targetRole !== 'admin';
 
   const loadData = async () => {
     try {
-      const [usersData, invitesData, regSettings] = await Promise.all([
-        api('/users'),
-        api('/users/invites'),
-        api('/users/settings/registration').catch(() => ({ allow_self_registration: false })),
-      ]);
+      const usersData = await api('/users');
       setUsers(usersData);
-      setInvites(invitesData);
-      setSelfRegEnabled((regSettings as any).allow_self_registration);
     } catch (err) {
-      console.error('Failed to load team data:', err);
-    } finally {
-      setLoading(false);
-    }
+      console.error('Failed to load team:', err);
+    } finally { setLoading(false); }
   };
 
   useEffect(() => { loadData(); }, []);
+
+  const generatePassword = () => {
+    const chars = 'abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    let pw = '';
+    for (let i = 0; i < 12; i++) pw += chars[Math.floor(Math.random() * chars.length)];
+    setNewPassword(pw);
+  };
+
+  const handleAddUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAdding(true);
+    setMessage(null);
+    try {
+      await api('/users', { method: 'POST', body: JSON.stringify({
+        email: newEmail, display_name: newName, role: newRole, password: newPassword,
+      })});
+      setMessage({ type: 'success', text: `${newName} added. Share their temporary password — they'll be required to change it on first login.` });
+      setNewEmail(''); setNewName(''); setNewRole('member'); setNewPassword('');
+      setShowAddForm(false);
+      loadData();
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err.message || 'Failed to create user' });
+    } finally { setAdding(false); }
+  };
 
   const handleRoleChange = async (userId: string, newRole: string) => {
     try {
       await api(`/users/${userId}/role`, { method: 'PATCH', body: JSON.stringify({ role: newRole }) });
       loadData();
-    } catch (err: any) { alert(err.message || 'Failed to change role'); }
+    } catch (err: any) { setMessage({ type: 'error', text: err.message || 'Failed to change role' }); }
   };
 
-  const handleInvite = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setInviting(true);
-    setInviteMessage(null);
+  const handleStatusToggle = async (userId: string, currentStatus: string) => {
+    const newStatus = currentStatus === 'suspended' ? 'active' : 'suspended';
     try {
-      const result = await api('/users/invites', { method: 'POST', body: JSON.stringify({ email: inviteEmail, role: inviteRole }) }) as any;
-      setInviteMessage({ type: 'success', text: `Invite sent! Share this link: ${window.location.origin}/register?invite=${result.token}` });
-      setInviteEmail(''); setInviteRole('member');
+      await api(`/users/${userId}/status`, { method: 'PATCH', body: JSON.stringify({ status: newStatus }) });
       loadData();
-    } catch (err: any) {
-      setInviteMessage({ type: 'error', text: err.message || 'Failed to create invite' });
-    } finally { setInviting(false); }
+    } catch (err: any) { setMessage({ type: 'error', text: err.message || 'Failed to update status' }); }
   };
 
-  const handleRevokeInvite = async (id: string) => {
-    try { await api(`/users/invites/${id}`, { method: 'DELETE' }); loadData(); }
-    catch (err: any) { alert(err.message || 'Failed to revoke invite'); }
+  const handleResetPassword = async (userId: string) => {
+    if (!resetPassword || resetPassword.length < 6) {
+      setMessage({ type: 'error', text: 'Password must be at least 6 characters' });
+      return;
+    }
+    try {
+      await api(`/users/${userId}/reset-password`, { method: 'POST', body: JSON.stringify({ new_password: resetPassword }) });
+      setMessage({ type: 'success', text: 'Password reset. User will be required to change it on next login.' });
+      setResetUserId(null); setResetPw('');
+    } catch (err: any) { setMessage({ type: 'error', text: err.message || 'Failed to reset password' }); }
   };
 
   const handleRemoveUser = async (userId: string, name: string) => {
     if (!confirm(`Remove ${name} from the team? This cannot be undone.`)) return;
-    try { await api(`/users/${userId}`, { method: 'DELETE' }); loadData(); }
-    catch (err: any) { alert(err.message || 'Failed to remove user'); }
-  };
-
-  const copyInviteLink = (token: string) => {
-    navigator.clipboard.writeText(`${window.location.origin}/register?invite=${token}`);
-    setCopiedToken(token);
-    setTimeout(() => setCopiedToken(null), 2000);
-  };
-
-  const toggleSelfRegistration = async () => {
-    setSavingSelfReg(true);
     try {
-      await api('/users/settings/registration', { method: 'PUT', body: JSON.stringify({ allow_self_registration: !selfRegEnabled }) });
-      setSelfRegEnabled(!selfRegEnabled);
-    } catch (err: any) { alert(err.message || 'Failed to update setting'); }
-    finally { setSavingSelfReg(false); }
+      await api(`/users/${userId}`, { method: 'DELETE' });
+      setMessage({ type: 'success', text: `${name} removed from team.` });
+      loadData();
+    } catch (err: any) { setMessage({ type: 'error', text: err.message || 'Failed to remove user' }); }
   };
-
-  const getAssignableRoles = () => isSuperAdmin ? ['admin', 'operator', 'member', 'viewer'] : ['operator', 'member', 'viewer'];
-  const canModifyUser = (targetRole: string) => isSuperAdmin ? true : targetRole !== 'superadmin' && targetRole !== 'admin';
 
   if (loading) return <div className="text-gray-500 text-sm">Loading team...</div>;
 
-  const pendingInvites = invites.filter(i => !i.accepted_at && new Date(i.expires_at) > new Date());
+  const filtered = users.filter(u =>
+    u.display_name.toLowerCase().includes(search.toLowerCase()) ||
+    u.email.toLowerCase().includes(search.toLowerCase())
+  );
 
   return (
     <div className="space-y-6">
-      {/* Role reference */}
-      <div className="bg-white border border-gray-200 rounded-lg p-6">
-        <h3 className="text-sm font-semibold text-gray-700 mb-3">Role Permissions</h3>
-        <div className="grid grid-cols-2 gap-3">
-          {Object.entries(ROLE_META).map(([role, meta]) => {
-            const Icon = meta.icon;
-            return (
-              <div key={role} className={`border rounded-lg p-3 ${meta.bg}`}>
-                <div className="flex items-center gap-2 mb-1">
-                  <Icon className={`w-4 h-4 ${meta.color}`} />
-                  <span className={`text-sm font-medium ${meta.color}`}>{meta.label}</span>
-                </div>
-                <p className="text-xs text-gray-600">{meta.description}</p>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Self-registration toggle (superadmin only) */}
-      {isSuperAdmin && (
-        <div className="bg-white border border-gray-200 rounded-lg p-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-gray-900">Allow Self-Registration</p>
-              <p className="text-xs text-gray-500 mt-0.5">When disabled, only invited users can join.</p>
-            </div>
-            <button onClick={toggleSelfRegistration} disabled={savingSelfReg}
-              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${selfRegEnabled ? 'bg-brand-600' : 'bg-gray-300'}`}>
-              <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${selfRegEnabled ? 'translate-x-6' : 'translate-x-1'}`} />
-            </button>
-          </div>
+      {message && (
+        <div className={`px-4 py-3 rounded-lg text-sm flex items-start gap-2 ${
+          message.type === 'success' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'
+        }`}>
+          {message.type === 'success' ? <CheckCircle className="w-4 h-4 mt-0.5 shrink-0" /> : <X className="w-4 h-4 mt-0.5 shrink-0" />}
+          <span>{message.text}</span>
+          <button onClick={() => setMessage(null)} className="ml-auto shrink-0 text-current opacity-50 hover:opacity-100"><X className="w-3.5 h-3.5" /></button>
         </div>
       )}
 
-      {/* Invite form */}
-      <div className="bg-white border border-gray-200 rounded-lg">
-        <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
-          <h3 className="font-medium text-gray-900">Invite Team Members</h3>
-          <button onClick={() => setShowInviteForm(!showInviteForm)} className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-white bg-brand-600 rounded-lg hover:bg-brand-700">
-            {showInviteForm ? <X className="w-3.5 h-3.5" /> : <Plus className="w-3.5 h-3.5" />}
-            {showInviteForm ? 'Cancel' : 'New Invite'}
-          </button>
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-lg font-semibold text-gray-900">Team Members</h3>
+          <p className="text-sm text-gray-500">{users.length} member{users.length !== 1 ? 's' : ''} across {new Set(users.map(u => u.role)).size} roles</p>
         </div>
-        {showInviteForm && (
-          <form onSubmit={handleInvite} className="px-6 py-4 border-b border-gray-100 bg-gray-50">
-            {inviteMessage && (
-              <div className={`mb-3 px-4 py-3 rounded-lg text-sm ${inviteMessage.type === 'success' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>
-                {inviteMessage.text}
-              </div>
-            )}
-            <div className="flex gap-3">
-              <div className="flex-1">
-                <label className="block text-xs font-medium text-gray-600 mb-1">Email</label>
-                <input type="email" value={inviteEmail} onChange={e => setInviteEmail(e.target.value)} placeholder="colleague@company.com" required className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg" />
-              </div>
-              <div className="w-40">
-                <label className="block text-xs font-medium text-gray-600 mb-1">Role</label>
-                <select value={inviteRole} onChange={e => setInviteRole(e.target.value)} className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg bg-white">
-                  {getAssignableRoles().map(r => <option key={r} value={r}>{ROLE_META[r]?.label || r}</option>)}
-                </select>
-              </div>
-              <div className="flex items-end">
-                <button type="submit" disabled={inviting} className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-white bg-brand-600 rounded-lg hover:bg-brand-700 disabled:opacity-50">
-                  <Mail className="w-3.5 h-3.5" />{inviting ? 'Sending...' : 'Send Invite'}
-                </button>
-              </div>
-            </div>
-          </form>
-        )}
-        {pendingInvites.length > 0 && (
-          <div className="px-6 py-3 border-b border-gray-100">
-            <p className="text-xs font-semibold text-gray-500 uppercase mb-2">Pending Invites ({pendingInvites.length})</p>
-            {pendingInvites.map(invite => {
-              const meta = ROLE_META[invite.role] || ROLE_META.viewer;
-              return (
-                <div key={invite.id} className="flex items-center justify-between py-2">
-                  <div className="flex items-center gap-3">
-                    <Mail className="w-3.5 h-3.5 text-yellow-500" />
-                    <div>
-                      <p className="text-sm font-medium text-gray-900">{invite.email}</p>
-                      <p className="text-xs text-gray-500">As <span className={meta.color}>{meta.label}</span> · Expires {new Date(invite.expires_at).toLocaleDateString()}</p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button onClick={() => copyInviteLink(invite.token)} className="flex items-center gap-1 px-2 py-1 text-xs text-gray-600 border border-gray-200 rounded hover:text-gray-900">
-                      {copiedToken === invite.token ? <><CheckCircle className="w-3 h-3 text-green-500" /> Copied</> : <><Copy className="w-3 h-3" /> Copy Link</>}
-                    </button>
-                    <button onClick={() => handleRevokeInvite(invite.id)} className="p-1 text-gray-400 hover:text-red-500"><Trash2 className="w-3.5 h-3.5" /></button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
+        <button onClick={() => setShowAddForm(!showAddForm)}
+          className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-white bg-brand-600 rounded-lg hover:bg-brand-700">
+          {showAddForm ? <X className="w-3.5 h-3.5" /> : <Plus className="w-3.5 h-3.5" />}
+          {showAddForm ? 'Cancel' : 'Add User'}
+        </button>
       </div>
 
-      {/* User list */}
-      <div className="bg-white border border-gray-200 rounded-lg">
-        <div className="px-6 py-4 border-b border-gray-100">
-          <h3 className="font-medium text-gray-900">Team Members ({users.length})</h3>
-        </div>
-        <div className="divide-y divide-gray-100">
-          {users.map(u => {
-            const meta = ROLE_META[u.role] || ROLE_META.member;
-            const isCurrentUser = u.id === user?.id;
-            const canModify = !isCurrentUser && canModifyUser(u.role);
-            return (
-              <div key={u.id} className="flex items-center justify-between px-6 py-3">
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center">
-                    <span className="text-xs font-medium text-gray-500">{u.display_name.charAt(0).toUpperCase()}</span>
-                  </div>
-                  <div>
-                    <p className="text-sm font-medium text-gray-900">{u.display_name}{isCurrentUser && <span className="text-xs text-gray-400 ml-1">(you)</span>}</p>
-                    <p className="text-xs text-gray-500">{u.email}</p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  {isCurrentUser || !canModify ? (
-                    <span className={`text-xs px-2.5 py-1 rounded-full border font-medium ${meta.bg} ${meta.color}`}>{meta.label}</span>
-                  ) : (
-                    <select value={u.role} onChange={e => handleRoleChange(u.id, e.target.value)} className={`text-xs px-2.5 py-1 rounded-lg border font-medium cursor-pointer ${meta.bg} ${meta.color}`}>
-                      {isSuperAdmin && <option value="superadmin">Super Admin</option>}
-                      {getAssignableRoles().map(r => <option key={r} value={r}>{ROLE_META[r]?.label || r}</option>)}
-                    </select>
-                  )}
-                  <span className="text-xs text-gray-400">Joined {new Date(u.created_at).toLocaleDateString()}</span>
-                  {canModify && (
-                    <button onClick={() => handleRemoveUser(u.id, u.display_name)} className="p-1 text-gray-300 hover:text-red-500"><Trash2 className="w-3.5 h-3.5" /></button>
-                  )}
-                </div>
+      {/* Add user form */}
+      {showAddForm && (
+        <form onSubmit={handleAddUser} className="bg-white border border-gray-200 rounded-lg p-5">
+          <h4 className="text-sm font-semibold text-gray-700 mb-4">Create New User</h4>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Email *</label>
+              <input type="email" value={newEmail} onChange={e => setNewEmail(e.target.value)} required
+                placeholder="user@company.com" className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Display Name *</label>
+              <input type="text" value={newName} onChange={e => setNewName(e.target.value)} required
+                placeholder="Jane Smith" className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Role</label>
+              <select value={newRole} onChange={e => setNewRole(e.target.value)}
+                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg bg-white">
+                {getAssignableRoles().map(r => <option key={r} value={r}>{ROLE_META[r]?.label || r}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Temporary Password *</label>
+              <div className="flex gap-2">
+                <input type="text" value={newPassword} onChange={e => setNewPassword(e.target.value)} required minLength={6}
+                  placeholder="Min 6 characters" className="flex-1 px-3 py-2 text-sm border border-gray-300 rounded-lg font-mono" />
+                <button type="button" onClick={generatePassword}
+                  className="px-3 py-2 text-xs font-medium text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 whitespace-nowrap">
+                  Generate
+                </button>
               </div>
-            );
-          })}
+              <p className="text-[11px] text-gray-400 mt-1">User must change this on first login</p>
+            </div>
+          </div>
+          <div className="mt-4 flex justify-end">
+            <button type="submit" disabled={adding}
+              className="flex items-center gap-1.5 px-5 py-2 text-sm font-medium text-white bg-brand-600 rounded-lg hover:bg-brand-700 disabled:opacity-50">
+              <Plus className="w-3.5 h-3.5" />{adding ? 'Creating...' : 'Create User'}
+            </button>
+          </div>
+        </form>
+      )}
+
+      {/* Search */}
+      {users.length > 5 && (
+        <input type="text" value={search} onChange={e => setSearch(e.target.value)}
+          placeholder="Search by name or email..." className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg" />
+      )}
+
+      {/* User list */}
+      <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+        <table className="w-full">
+          <thead>
+            <tr className="border-b border-gray-100 bg-gray-50">
+              <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">User</th>
+              <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Role</th>
+              <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
+              <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Last Login</th>
+              <th className="text-right px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100">
+            {filtered.map(u => {
+              const meta = ROLE_META[u.role] || ROLE_META.member;
+              const isCurrentUser = u.id === user?.id;
+              const canModify = !isCurrentUser && canModifyUser(u.role);
+              const status = u.status || 'active';
+              const isResetting = resetUserId === u.id;
+
+              return (
+                <tr key={u.id} className={`${status === 'suspended' ? 'opacity-60' : ''} hover:bg-gray-50`}>
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center shrink-0">
+                        <span className="text-xs font-medium text-gray-500">{u.display_name.charAt(0).toUpperCase()}</span>
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-gray-900 truncate">
+                          {u.display_name}
+                          {isCurrentUser && <span className="text-xs text-gray-400 ml-1">(you)</span>}
+                        </p>
+                        <p className="text-xs text-gray-500 truncate">{u.email}</p>
+                      </div>
+                    </div>
+                  </td>
+                  <td className="px-4 py-3">
+                    {isCurrentUser || !canModify ? (
+                      <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${meta.bg} ${meta.color}`}>{meta.label}</span>
+                    ) : (
+                      <select value={u.role} onChange={e => handleRoleChange(u.id, e.target.value)}
+                        className={`text-xs px-2 py-1 rounded-lg border font-medium cursor-pointer ${meta.bg} ${meta.color}`}>
+                        {isSuperAdmin && <option value="superadmin">Super Admin</option>}
+                        {getAssignableRoles().map(r => <option key={r} value={r}>{ROLE_META[r]?.label || r}</option>)}
+                      </select>
+                    )}
+                  </td>
+                  <td className="px-4 py-3">
+                    {u.must_change_password ? (
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 font-medium">Pending Setup</span>
+                    ) : status === 'suspended' ? (
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-red-50 text-red-600 border border-red-200 font-medium">Suspended</span>
+                    ) : (
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-green-50 text-green-700 border border-green-200 font-medium">Active</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3">
+                    <span className="text-xs text-gray-500">
+                      {u.last_login_at ? new Date(u.last_login_at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : 'Never'}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3">
+                    {canModify && (
+                      <div className="flex items-center justify-end gap-1">
+                        {isResetting ? (
+                          <div className="flex items-center gap-1">
+                            <input type="text" value={resetPassword} onChange={e => setResetPw(e.target.value)}
+                              placeholder="New password" className="w-32 px-2 py-1 text-xs border border-gray-300 rounded font-mono" autoFocus />
+                            <button onClick={() => handleResetPassword(u.id)}
+                              className="px-2 py-1 text-xs font-medium text-white bg-brand-600 rounded hover:bg-brand-700">Set</button>
+                            <button onClick={() => { setResetUserId(null); setResetPw(''); }}
+                              className="px-2 py-1 text-xs text-gray-500 hover:text-gray-700">Cancel</button>
+                          </div>
+                        ) : (
+                          <>
+                            <button onClick={() => { setResetUserId(u.id); setResetPw(''); }}
+                              title="Reset password" className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded">
+                              <Key className="w-3.5 h-3.5" />
+                            </button>
+                            <button onClick={() => handleStatusToggle(u.id, status)}
+                              title={status === 'suspended' ? 'Activate user' : 'Suspend user'}
+                              className={`p-1.5 rounded ${status === 'suspended' ? 'text-green-500 hover:text-green-700 hover:bg-green-50' : 'text-gray-400 hover:text-amber-600 hover:bg-amber-50'}`}>
+                              {status === 'suspended' ? <CheckCircle className="w-3.5 h-3.5" /> : <Shield className="w-3.5 h-3.5" />}
+                            </button>
+                            <button onClick={() => handleRemoveUser(u.id, u.display_name)}
+                              title="Remove user" className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded">
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Identity & Provisioning */}
+      <div className="bg-white border border-gray-200 rounded-lg p-6">
+        <h3 className="text-sm font-semibold text-gray-700 mb-1">Identity & Provisioning</h3>
+        <p className="text-xs text-gray-500 mb-4">Current authentication: <span className="font-medium text-gray-700">Local passwords</span></p>
+        <div className="grid grid-cols-3 gap-3">
+          {[
+            { name: 'Google Workspace', desc: 'SSO via OpenID Connect' },
+            { name: 'SAML 2.0', desc: 'Enterprise SSO federation' },
+            { name: 'SCIM', desc: 'Automated user provisioning' },
+          ].map(opt => (
+            <div key={opt.name} className="border border-dashed border-gray-200 rounded-lg p-3 opacity-60">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-sm font-medium text-gray-700">{opt.name}</span>
+                <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500 font-medium">Planned</span>
+              </div>
+              <p className="text-xs text-gray-400">{opt.desc}</p>
+            </div>
+          ))}
         </div>
       </div>
     </div>
@@ -884,169 +944,28 @@ function ProfileTab() {
 // ── App Settings Tab ───────────────────────────────────────────
 
 function AppSettingsTab() {
-  const [pipelineConfig, setPipelineConfig] = useState<any>(null);
-  const [promptConfig, setPromptConfig] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
-
-  useEffect(() => {
-    Promise.all([
-      api('/icp/pipeline'),
-      api('/icp/prompts'),
-    ]).then(([pipeline, prompts]) => {
-      setPipelineConfig(pipeline);
-      setPromptConfig(prompts);
-      setLoading(false);
-    }).catch(() => setLoading(false));
-  }, []);
-
-  const handleSavePipeline = async () => {
-    setSaving(true);
-    setMessage(null);
-    try {
-      await api('/icp/pipeline', { method: 'PUT', body: JSON.stringify(pipelineConfig) });
-      setMessage({ type: 'success', text: 'Pipeline configuration saved' });
-    } catch (err: any) {
-      setMessage({ type: 'error', text: err.message || 'Failed to save' });
-    } finally { setSaving(false); }
-  };
-
-  if (loading) return <div className="text-gray-500 text-sm">Loading app settings...</div>;
-
   return (
     <div className="space-y-6">
-      {message && (
-        <div className={`px-4 py-3 rounded-lg text-sm ${message.type === 'success' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>{message.text}</div>
-      )}
-
-      {/* App Info */}
-      <div className="bg-white border border-gray-200 rounded-lg p-6">
-        <h3 className="text-sm font-semibold text-gray-700 mb-4 flex items-center gap-2"><Zap className="w-4 h-4 text-brand-500" /> SignalStack</h3>
-        <div className="grid grid-cols-2 gap-4 text-sm">
-          <div>
-            <p className="text-gray-500">Version</p>
-            <p className="font-medium text-gray-900">1.0.0</p>
-          </div>
-          <div>
-            <p className="text-gray-500">AI Provider</p>
-            <p className="font-medium text-gray-900">Claude via Google Vertex AI</p>
-          </div>
-          <div>
-            <p className="text-gray-500">Database</p>
-            <p className="font-medium text-gray-900">SQLite (local)</p>
-          </div>
-          <div>
-            <p className="text-gray-500">Environment</p>
-            <p className="font-medium text-gray-900">development</p>
-          </div>
+      {/* App Info — compact */}
+      <div className="bg-white border border-gray-200 rounded-lg px-6 py-3 flex items-center gap-6 text-sm">
+        <div className="flex items-center gap-2">
+          <Zap className="w-4 h-4 text-brand-500" />
+          <span className="font-medium text-gray-900">SignalStack</span>
+          <span className="text-gray-400">v1.0.0</span>
         </div>
+        <span className="text-gray-300">|</span>
+        <span className="text-gray-500">Claude via Vertex AI</span>
+        <span className="text-gray-300">|</span>
+        <span className="text-gray-500">SQLite</span>
       </div>
 
-      {/* Vertex AI Configuration */}
       <VertexAISettings />
-
-      {/* API Keys */}
-      <div className="bg-white border border-gray-200 rounded-lg p-6">
-        <h3 className="text-sm font-semibold text-gray-700 mb-4 flex items-center gap-2"><Key className="w-4 h-4 text-amber-500" /> API Keys</h3>
-        <p className="text-xs text-gray-500 mb-4">Manage API keys for external services. Keys are stored securely and never displayed in full.</p>
-        <ApiKeysManager />
-      </div>
-
-      {/* Connection Testing */}
-      <div className="bg-white border border-gray-200 rounded-lg p-6">
-        <h3 className="text-sm font-semibold text-gray-700 mb-4 flex items-center gap-2"><RefreshCw className="w-4 h-4 text-emerald-500" /> Connection Testing</h3>
-        <p className="text-xs text-gray-500 mb-4">Test connections to verify your configuration is working.</p>
-        <ConnectionTester />
-      </div>
-
-      {/* Claude Agent Configuration */}
-      {pipelineConfig && (
-        <div className="bg-white border border-gray-200 rounded-lg p-6">
-          <h3 className="text-sm font-semibold text-gray-700 mb-4">Pipeline Defaults</h3>
-          <p className="text-xs text-gray-500 mb-4">Default settings used when campaigns don't specify their own. Each campaign's Pipeline tab can override these.</p>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="text-xs text-gray-500 block mb-1">Default Model</label>
-              <select value={pipelineConfig.model} onChange={e => setPipelineConfig({ ...pipelineConfig, model: e.target.value })} className="w-full px-3 py-2 text-sm border border-gray-200 rounded">
-                <option value="claude-sonnet-4-6@default">Claude Sonnet 4.6 (fast, cost-effective)</option>
-                <option value="claude-opus-4-6@default">Claude Opus 4.6 (highest quality)</option>
-                <option value="claude-haiku-4-5@20251001">Claude Haiku 4.5 (fastest, lowest cost)</option>
-              </select>
-            </div>
-            <div>
-              <label className="text-xs text-gray-500 block mb-1">Max Tokens (Research)</label>
-              <input type="number" value={pipelineConfig.max_tokens_research} onChange={e => setPipelineConfig({ ...pipelineConfig, max_tokens_research: parseInt(e.target.value) })} className="w-full px-3 py-2 text-sm border border-gray-200 rounded" />
-            </div>
-          </div>
-          <button onClick={handleSavePipeline} disabled={saving} className="mt-4 flex items-center gap-2 px-5 py-2 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700 disabled:opacity-50">
-            <Save className="w-4 h-4" />{saving ? 'Saving...' : 'Save Pipeline Defaults'}
-          </button>
-        </div>
-      )}
-
-      {/* Outreach Tone */}
-      {promptConfig && (
-        <div className="bg-white border border-gray-200 rounded-lg p-6">
-          <h3 className="text-sm font-semibold text-gray-700 mb-4">Outreach & Prompt Defaults</h3>
-          <div className="space-y-4">
-            <div>
-              <label className="text-xs text-gray-500 block mb-1">Outreach Tone</label>
-              <select value={promptConfig.outreach_tone} onChange={e => setPromptConfig({ ...promptConfig, outreach_tone: e.target.value })} className="w-full px-3 py-2 text-sm border border-gray-200 rounded">
-                <option value="consultative">Consultative</option>
-                <option value="direct">Direct</option>
-                <option value="technical">Technical</option>
-                <option value="executive">Executive</option>
-                <option value="casual">Casual</option>
-              </select>
-            </div>
-            <div>
-              <label className="text-xs text-gray-500 block mb-1">Research Preamble</label>
-              <textarea value={promptConfig.research_preamble || ''} onChange={e => setPromptConfig({ ...promptConfig, research_preamble: e.target.value })} rows={3} className="w-full px-3 py-2 text-sm border border-gray-200 rounded" placeholder="Additional context for the AI research agent..." />
-            </div>
-          </div>
-          <button onClick={async () => {
-            try {
-              await api('/icp/prompts', { method: 'PUT', body: JSON.stringify(promptConfig) });
-              setMessage({ type: 'success', text: 'Prompt configuration saved' });
-            } catch (err: any) { setMessage({ type: 'error', text: err.message || 'Failed to save' }); }
-          }} className="mt-4 flex items-center gap-2 px-5 py-2 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700">
-            <Save className="w-4 h-4" /> Save Prompt Config
-          </button>
-        </div>
-      )}
-
-      {/* Backup & Restore */}
       <BackupRestoreSection />
-
-      {/* API Reference */}
-      <div className="bg-white border border-gray-200 rounded-lg p-6">
-        <h3 className="text-sm font-semibold text-gray-700 mb-4 flex items-center gap-2"><ExternalLink className="w-4 h-4 text-gray-400" /> API Reference</h3>
-        <div className="space-y-2 text-sm">
-          {[
-            { method: 'GET', path: '/api/leads', desc: 'List leads with filters' },
-            { method: 'GET', path: '/api/leads/:id', desc: 'Get lead detail' },
-            { method: 'GET', path: '/api/campaigns', desc: 'List campaigns' },
-            { method: 'POST', path: '/api/campaigns/:id/run', desc: 'Trigger campaign run' },
-            { method: 'GET', path: '/api/runs', desc: 'List pipeline runs' },
-            { method: 'POST', path: '/api/inbound/webhook', desc: 'Inbound lead webhook' },
-            { method: 'GET', path: '/api/events/stream', desc: 'SSE real-time events' },
-            { method: 'GET', path: '/api/exports/csv/detailed', desc: 'Export leads as CSV' },
-          ].map(ep => (
-            <div key={ep.path} className="flex items-center gap-3 py-1.5 border-b border-gray-50">
-              <span className={`text-xs font-mono px-1.5 py-0.5 rounded ${ep.method === 'GET' ? 'bg-green-50 text-green-700' : 'bg-blue-50 text-blue-700'}`}>{ep.method}</span>
-              <code className="text-xs text-gray-700 font-mono">{ep.path}</code>
-              <span className="text-xs text-gray-400 ml-auto">{ep.desc}</span>
-            </div>
-          ))}
-        </div>
-        <p className="text-xs text-gray-400 mt-3">Full OpenAPI spec available at <code className="text-xs">/api/docs/openapi.json</code></p>
-      </div>
     </div>
   );
 }
 
-// ── Vertex AI Configuration ───────────────────────────────────
+// ── AI Provider Configuration ────────────────────────────────
 
 const VERTEX_REGIONS = [
   { value: 'us-east5', label: 'us-east5 (Ohio)' },
@@ -1062,15 +981,21 @@ const VERTEX_MODELS = [
   { value: 'claude-haiku-4-5@20251001', label: 'Claude Haiku 4.5 (fastest, cheapest)' },
 ];
 
-interface VertexFieldConfig {
-  value: string;
-  source: 'database' | 'env' | 'default';
-  env_present: boolean;
+type AIProvider = 'vertex' | 'anthropic';
+
+interface AIConfigResponse {
+  provider: { value: AIProvider; source: string; auto_detected: AIProvider };
+  api_key: { masked: string; source: string } | null;
+  env_api_key_present: boolean;
+  vertex: Record<string, { value: string; source: string; env_present: boolean }>;
 }
 
 function VertexAISettings() {
-  const [fields, setFields] = useState<Record<string, VertexFieldConfig>>({});
-  const [form, setForm] = useState<Record<string, string>>({});
+  const [aiConfig, setAiConfig] = useState<AIConfigResponse | null>(null);
+  const [provider, setProvider] = useState<AIProvider>('vertex');
+  const [apiKey, setApiKey] = useState('');
+  const [apiKeyTouched, setApiKeyTouched] = useState(false);
+  const [vertexForm, setVertexForm] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [clearing, setClearing] = useState<string | null>(null);
@@ -1080,15 +1005,26 @@ function VertexAISettings() {
 
   const loadConfig = async () => {
     try {
-      const data = await api('/settings/vertex');
-      setFields(data);
-      setForm({
-        project_id: data.project_id?.value || '',
-        region: data.region?.value || 'us-east5',
-        default_model: data.default_model?.value || 'claude-sonnet-4-6@default',
+      const data: AIConfigResponse = await api('/settings/ai');
+      setAiConfig(data);
+      setProvider(data.provider.value);
+      setApiKey('');
+      setApiKeyTouched(false);
+      setVertexForm({
+        project_id: data.vertex.project_id?.value || '',
+        region: data.vertex.region?.value || 'us-east5',
+        default_model: data.vertex.default_model?.value || 'claude-sonnet-4-6@default',
       });
     } catch {
-      // Endpoint may not exist yet
+      try {
+        const data = await api('/settings/vertex');
+        setAiConfig(null);
+        setVertexForm({
+          project_id: data.project_id?.value || '',
+          region: data.region?.value || 'us-east5',
+          default_model: data.default_model?.value || 'claude-sonnet-4-6@default',
+        });
+      } catch { /* endpoint may not exist */ }
     } finally { setLoading(false); }
   };
 
@@ -1098,8 +1034,16 @@ function VertexAISettings() {
     setSaving(true);
     setMessage(null);
     try {
-      await api('/settings/vertex', { method: 'PUT', body: JSON.stringify(form) });
-      setMessage({ type: 'success', text: 'Vertex AI configuration saved' });
+      const body: Record<string, string> = { provider };
+      if (provider === 'anthropic' && apiKeyTouched) {
+        body.api_key = apiKey;
+      }
+      if (provider === 'vertex') {
+        Object.assign(body, vertexForm);
+      }
+      body.default_model = vertexForm.default_model || 'claude-opus-4-6@default';
+      await api('/settings/ai', { method: 'PUT', body: JSON.stringify(body) });
+      setMessage({ type: 'success', text: `AI provider updated to ${provider === 'vertex' ? 'Vertex AI' : 'Anthropic API'}` });
       await loadConfig();
     } catch (err: any) {
       setMessage({ type: 'error', text: err.message || 'Failed to save' });
@@ -1110,8 +1054,8 @@ function VertexAISettings() {
     setClearing(field);
     setMessage(null);
     try {
-      await api(`/settings/vertex/${field}`, { method: 'DELETE' });
-      setMessage({ type: 'success', text: `${field} cleared — using ${fields[field]?.env_present ? '.env' : 'default'} value` });
+      await api(`/settings/ai/${field}`, { method: 'DELETE' });
+      setMessage({ type: 'success', text: `${field.replace('_', ' ')} cleared` });
       await loadConfig();
     } catch (err: any) {
       setMessage({ type: 'error', text: err.message || 'Failed to clear' });
@@ -1122,11 +1066,15 @@ function VertexAISettings() {
     setTesting(true);
     setTestResult(null);
     try {
-      const result = await api('/health/vertex');
-      setTestResult(result.ok
-        ? { ok: true, message: `Connected (${result.latency_ms}ms) — ${result.model} in ${result.region}`, latency_ms: result.latency_ms }
-        : { ok: false, message: result.error || 'Connection failed' }
-      );
+      const result = await api('/health/ai');
+      if (result.ok) {
+        const details = result.provider === 'vertex'
+          ? `${result.model} in ${result.region}`
+          : `${result.model}`;
+        setTestResult({ ok: true, message: `Connected via ${result.provider} (${result.latency_ms}ms) — ${details}`, latency_ms: result.latency_ms });
+      } else {
+        setTestResult({ ok: false, message: result.error || 'Connection failed' });
+      }
     } catch (err: any) {
       setTestResult({ ok: false, message: err.message || 'Connection failed' });
     } finally { setTesting(false); }
@@ -1134,76 +1082,147 @@ function VertexAISettings() {
 
   if (loading) return null;
 
+  const vertexFields = aiConfig?.vertex || {};
+
   return (
     <div className="bg-white border border-gray-200 rounded-lg p-6">
       <h3 className="text-sm font-semibold text-gray-700 mb-1 flex items-center gap-2">
-        <Cloud className="w-4 h-4 text-blue-500" /> Vertex AI Configuration
+        <Zap className="w-4 h-4 text-amber-500" /> AI Provider
       </h3>
-      <p className="text-xs text-gray-500 mb-4">Configure Claude API access via Google Cloud Vertex AI. Override .env values or clear to fall back.</p>
+      <p className="text-xs text-gray-500 mb-4">Choose how SignalStack connects to Claude — via Google Cloud Vertex AI or a direct Anthropic API key.</p>
 
       {message && (
         <div className={`px-3 py-2 rounded-lg text-xs mb-4 ${message.type === 'success' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>{message.text}</div>
       )}
 
-      <div className="space-y-4">
-        {/* Project ID */}
-        <div>
-          <div className="flex items-center gap-2 mb-1">
-            <label className="text-xs font-medium text-gray-700">Project ID</label>
-            <SourceBadge source={fields.project_id?.source} />
-            {fields.project_id?.source === 'database' && (
-              <button onClick={() => handleClear('project_id')} disabled={clearing === 'project_id'} className="text-[10px] text-gray-400 hover:text-red-500 flex items-center gap-0.5">
-                <X className="w-3 h-3" /> Clear
-              </button>
-            )}
-          </div>
-          <input
-            type="text"
-            value={form.project_id || ''}
-            onChange={e => setForm({ ...form, project_id: e.target.value })}
-            placeholder="your-gcp-project-id"
-            className="w-full px-3 py-2 text-sm border border-gray-200 rounded"
-          />
-        </div>
-
-        {/* Region */}
-        <div>
-          <div className="flex items-center gap-2 mb-1">
-            <label className="text-xs font-medium text-gray-700">Region</label>
-            <SourceBadge source={fields.region?.source} />
-            {fields.region?.source === 'database' && (
-              <button onClick={() => handleClear('region')} disabled={clearing === 'region'} className="text-[10px] text-gray-400 hover:text-red-500 flex items-center gap-0.5">
-                <X className="w-3 h-3" /> Clear
-              </button>
-            )}
-          </div>
-          <select
-            value={form.region || 'us-east5'}
-            onChange={e => setForm({ ...form, region: e.target.value })}
-            className="w-full px-3 py-2 text-sm border border-gray-200 rounded bg-white"
+      {/* Provider Toggle */}
+      <div className="mb-5">
+        <label className="text-xs font-medium text-gray-700 mb-2 block">Provider</label>
+        <div className="flex rounded-lg border border-gray-200 p-1 bg-gray-50 w-fit">
+          <button
+            onClick={() => { setProvider('vertex'); setTestResult(null); }}
+            className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+              provider === 'vertex'
+                ? 'bg-white text-blue-700 shadow-sm border border-blue-200'
+                : 'text-gray-500 hover:text-gray-700'
+            }`}
           >
-            {VERTEX_REGIONS.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
-          </select>
+            <Cloud className="w-4 h-4" />
+            Vertex AI
+          </button>
+          <button
+            onClick={() => { setProvider('anthropic'); setTestResult(null); }}
+            className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+              provider === 'anthropic'
+                ? 'bg-white text-orange-700 shadow-sm border border-orange-200'
+                : 'text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            <Key className="w-4 h-4" />
+            Anthropic API
+          </button>
         </div>
+        {aiConfig?.provider.source === 'auto' && (
+          <p className="text-[10px] text-gray-400 mt-1">Auto-detected from environment. Save to lock your choice.</p>
+        )}
+      </div>
 
-        {/* Default Model */}
+      <div className="space-y-4">
+        {/* Anthropic API Key — shown when anthropic is selected */}
+        {provider === 'anthropic' && (
+          <div className="p-4 rounded-lg border border-orange-100 bg-orange-50/30">
+            <div className="flex items-center gap-2 mb-1">
+              <label className="text-xs font-medium text-gray-700">API Key</label>
+              {aiConfig?.api_key && <SourceBadge source={aiConfig.api_key.source} />}
+              {aiConfig?.api_key?.source === 'database' && (
+                <button onClick={() => handleClear('api_key')} disabled={clearing === 'api_key'} className="text-[10px] text-gray-400 hover:text-red-500 flex items-center gap-0.5">
+                  <X className="w-3 h-3" /> Clear
+                </button>
+              )}
+            </div>
+            <div className="relative">
+              <input
+                type="password"
+                value={apiKeyTouched ? apiKey : (aiConfig?.api_key?.masked || '')}
+                onChange={e => { setApiKey(e.target.value); setApiKeyTouched(true); }}
+                onFocus={() => { if (!apiKeyTouched) { setApiKey(''); setApiKeyTouched(true); } }}
+                placeholder="sk-ant-api03-..."
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded pr-8 font-mono"
+              />
+              <EyeOff className="absolute right-2.5 top-2.5 w-4 h-4 text-gray-300" />
+            </div>
+            {aiConfig?.env_api_key_present && !aiConfig?.api_key && (
+              <p className="text-[10px] text-gray-400 mt-1">Using ANTHROPIC_API_KEY from environment. Enter a key here to override.</p>
+            )}
+            {aiConfig?.env_api_key_present && aiConfig?.api_key?.source === 'database' && (
+              <p className="text-[10px] text-gray-400 mt-1">Overriding ANTHROPIC_API_KEY from .env. Clear to fall back.</p>
+            )}
+            <p className="text-[10px] text-amber-600 mt-1">Stored in the database. Ensure your SQLite file is protected.</p>
+          </div>
+        )}
+
+        {/* Vertex fields — shown when vertex is selected */}
+        {provider === 'vertex' && (
+          <div className="p-4 rounded-lg border border-blue-100 bg-blue-50/30 space-y-4">
+            <div>
+              <div className="flex items-center gap-2 mb-1">
+                <label className="text-xs font-medium text-gray-700">Project ID</label>
+                <SourceBadge source={vertexFields.project_id?.source} />
+                {vertexFields.project_id?.source === 'database' && (
+                  <button onClick={() => handleClear('project_id')} disabled={clearing === 'project_id'} className="text-[10px] text-gray-400 hover:text-red-500 flex items-center gap-0.5">
+                    <X className="w-3 h-3" /> Clear
+                  </button>
+                )}
+              </div>
+              <input
+                type="text"
+                value={vertexForm.project_id || ''}
+                onChange={e => setVertexForm({ ...vertexForm, project_id: e.target.value })}
+                placeholder="your-gcp-project-id"
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded"
+              />
+            </div>
+
+            <div>
+              <div className="flex items-center gap-2 mb-1">
+                <label className="text-xs font-medium text-gray-700">Region</label>
+                <SourceBadge source={vertexFields.region?.source} />
+                {vertexFields.region?.source === 'database' && (
+                  <button onClick={() => handleClear('region')} disabled={clearing === 'region'} className="text-[10px] text-gray-400 hover:text-red-500 flex items-center gap-0.5">
+                    <X className="w-3 h-3" /> Clear
+                  </button>
+                )}
+              </div>
+              <select
+                value={vertexForm.region || 'us-east5'}
+                onChange={e => setVertexForm({ ...vertexForm, region: e.target.value })}
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded bg-white"
+              >
+                {VERTEX_REGIONS.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
+              </select>
+            </div>
+          </div>
+        )}
+
+        {/* Default Model — always visible */}
         <div>
           <div className="flex items-center gap-2 mb-1">
             <label className="text-xs font-medium text-gray-700">Default Model</label>
-            <SourceBadge source={fields.default_model?.source} />
-            {fields.default_model?.source === 'database' && (
+            <SourceBadge source={vertexFields.default_model?.source} />
+            {vertexFields.default_model?.source === 'database' && (
               <button onClick={() => handleClear('default_model')} disabled={clearing === 'default_model'} className="text-[10px] text-gray-400 hover:text-red-500 flex items-center gap-0.5">
                 <X className="w-3 h-3" /> Clear
               </button>
             )}
           </div>
           <select
-            value={form.default_model || 'claude-sonnet-4-6@default'}
-            onChange={e => setForm({ ...form, default_model: e.target.value })}
+            value={vertexForm.default_model || 'claude-sonnet-4-6@default'}
+            onChange={e => setVertexForm({ ...vertexForm, default_model: e.target.value })}
             className="w-full px-3 py-2 text-sm border border-gray-200 rounded bg-white"
           >
             {VERTEX_MODELS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
           </select>
+          <p className="text-[10px] text-gray-400 mt-1">Model IDs are automatically converted between Vertex and Anthropic formats.</p>
         </div>
       </div>
 
@@ -1242,146 +1261,6 @@ function SourceBadge({ source }: { source?: string }) {
     <span className={`text-[10px] px-1.5 py-0.5 rounded-full border font-medium ${styles[source] || styles.default}`}>
       {labels[source] || source}
     </span>
-  );
-}
-
-// ── API Keys Manager ──────────────────────────────────────────
-
-const API_KEY_DEFS = [
-  { id: 'webhook_signing_secret', label: 'Webhook Signing Secret', description: 'Secret for verifying inbound webhook signatures', sensitive: true },
-];
-
-function ApiKeysManager() {
-  const [keys, setKeys] = useState<Record<string, string>>({});
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState<string | null>(null);
-  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
-
-  useEffect(() => {
-    api('/settings/keys')
-      .then(data => { setKeys(data || {}); setLoading(false); })
-      .catch(() => {
-        // Endpoint may not exist yet — degrade gracefully
-        setLoading(false);
-      });
-  }, []);
-
-  const handleSaveKey = async (id: string, value: string) => {
-    setSaving(id);
-    setMessage(null);
-    try {
-      await api('/settings/keys', { method: 'PUT', body: JSON.stringify({ key: id, value }) });
-      setKeys(prev => ({ ...prev, [id]: value }));
-      setMessage({ type: 'success', text: `${id} saved` });
-    } catch (err: any) {
-      setMessage({ type: 'error', text: err.message || 'Failed to save' });
-    } finally {
-      setSaving(null);
-    }
-  };
-
-  if (loading) return <p className="text-sm text-gray-400">Loading API keys...</p>;
-
-  return (
-    <div className="space-y-3">
-      {message && (
-        <div className={`px-3 py-2 rounded-lg text-xs ${message.type === 'success' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>{message.text}</div>
-      )}
-      {API_KEY_DEFS.map(def => (
-        <div key={def.id} className="flex items-center gap-3">
-          <div className="flex-1 min-w-0">
-            <label className="text-xs font-medium text-gray-700 block mb-0.5">{def.label}</label>
-            <p className="text-[10px] text-gray-400">{def.description}</p>
-            <input
-              type={def.sensitive ? 'password' : 'text'}
-              defaultValue={keys[def.id] || ''}
-              placeholder={def.sensitive ? '••••••••' : 'Not set'}
-              className="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-lg mt-1"
-              onBlur={e => {
-                if (e.target.value && e.target.value !== keys[def.id]) {
-                  handleSaveKey(def.id, e.target.value);
-                }
-              }}
-            />
-          </div>
-          {saving === def.id && <Loader className="w-4 h-4 text-brand-500 animate-spin mt-5" />}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-// ── Connection Tester ─────────────────────────────────────────
-
-function Loader({ className }: { className?: string }) {
-  return <RefreshCw className={className} />;
-}
-
-const CONNECTION_TESTS = [
-  { id: 'vertex_ai', label: 'Vertex AI (Claude)', endpoint: '/health/vertex' },
-  { id: 'database', label: 'Database', endpoint: '/health/db' },
-  { id: 'data_sources', label: 'Data Sources', endpoint: '/data-sources/health' },
-];
-
-function ConnectionTester() {
-  const [results, setResults] = useState<Record<string, { status: 'pending' | 'success' | 'error'; message: string }>>({});
-  const [testing, setTesting] = useState(false);
-
-  const runTests = async () => {
-    setTesting(true);
-    const newResults: typeof results = {};
-
-    for (const test of CONNECTION_TESTS) {
-      newResults[test.id] = { status: 'pending', message: 'Testing...' };
-      setResults({ ...newResults });
-
-      try {
-        const result = await api(test.endpoint, { method: 'GET' }).catch(() => null);
-        newResults[test.id] = result
-          ? { status: 'success', message: 'Connected' }
-          : { status: 'error', message: 'Unreachable' };
-      } catch {
-        newResults[test.id] = { status: 'error', message: 'Failed' };
-      }
-      setResults({ ...newResults });
-    }
-
-    setTesting(false);
-  };
-
-  return (
-    <div className="space-y-3">
-      <button
-        onClick={runTests}
-        disabled={testing}
-        className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-emerald-600 rounded-lg hover:bg-emerald-700 disabled:opacity-50"
-      >
-        <Play className="w-3.5 h-3.5" />
-        {testing ? 'Testing...' : 'Run All Tests'}
-      </button>
-
-      {Object.keys(results).length > 0 && (
-        <div className="space-y-2">
-          {CONNECTION_TESTS.map(test => {
-            const r = results[test.id];
-            if (!r) return null;
-            return (
-              <div key={test.id} className="flex items-center justify-between px-3 py-2 bg-gray-50 rounded-lg">
-                <span className="text-sm text-gray-700">{test.label}</span>
-                <span className={`flex items-center gap-1 text-xs font-medium ${
-                  r.status === 'success' ? 'text-emerald-600' : r.status === 'error' ? 'text-red-600' : 'text-amber-600'
-                }`}>
-                  {r.status === 'success' ? <CheckCircle className="w-3.5 h-3.5" /> :
-                   r.status === 'error' ? <AlertCircle className="w-3.5 h-3.5" /> :
-                   <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
-                  {r.message}
-                </span>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
   );
 }
 

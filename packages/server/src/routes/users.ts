@@ -27,9 +27,118 @@ function getSetting(key: string, defaultValue: any): any {
 // GET / — List all users (admin+ only)
 router.get('/', authenticate, requireAdmin, (_req: AuthRequest, res: Response) => {
   const users = getDb().prepare(
-    'SELECT id, email, display_name, role, created_at FROM users ORDER BY created_at'
+    'SELECT id, email, display_name, role, status, must_change_password, last_login_at, created_at FROM users ORDER BY created_at'
   ).all();
   res.json(users);
+});
+
+// POST / — Create a user directly (admin+ only)
+router.post('/', authenticate, requireAdmin, (req: AuthRequest, res: Response) => {
+  const { email, display_name, role = 'member', password } = req.body;
+  const actor = req.user!;
+
+  if (!email || !display_name || !password) {
+    return res.status(400).json({ error: 'email, display_name, and password are required' });
+  }
+  if (password.length < 6) {
+    return res.status(400).json({ error: 'Password must be at least 6 characters' });
+  }
+  if (!ASSIGNABLE_ROLES.includes(role) && role !== 'superadmin') {
+    return res.status(400).json({ error: `Role must be one of: ${ASSIGNABLE_ROLES.join(', ')}` });
+  }
+  if (role === 'superadmin' || (role === 'admin' && actor.role !== 'superadmin')) {
+    return res.status(403).json({ error: 'Insufficient permissions to assign this role' });
+  }
+
+  const db = getDb();
+  const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(email.toLowerCase());
+  if (existing) return res.status(409).json({ error: 'Email already registered' });
+
+  const id = uuid();
+  const password_hash = bcrypt.hashSync(password, 10);
+  db.prepare(
+    'INSERT INTO users (id, email, password_hash, display_name, role, must_change_password, status) VALUES (?,?,?,?,?,1,?)'
+  ).run(id, email.toLowerCase(), password_hash, display_name.trim(), role, 'active');
+
+  logActivity({
+    userId: actor.id,
+    entityType: 'user',
+    entityId: id,
+    entityTitle: display_name,
+    action: 'created',
+    snapshot: { email, role },
+  });
+
+  res.status(201).json({ id, email: email.toLowerCase(), display_name: display_name.trim(), role, status: 'active' });
+});
+
+// POST /:id/reset-password — Admin resets a user's password (admin+ only)
+router.post('/:id/reset-password', authenticate, requireAdmin, (req: AuthRequest, res: Response) => {
+  const { new_password } = req.body;
+  const targetId = req.params.id;
+  const actor = req.user!;
+
+  if (!new_password || new_password.length < 6) {
+    return res.status(400).json({ error: 'Password must be at least 6 characters' });
+  }
+
+  const db = getDb();
+  const target = db.prepare('SELECT id, role, display_name FROM users WHERE id = ?').get(targetId) as any;
+  if (!target) return res.status(404).json({ error: 'User not found' });
+
+  if ((target.role === 'superadmin' || target.role === 'admin') && actor.role !== 'superadmin') {
+    return res.status(403).json({ error: 'Only superadmins can reset admin passwords' });
+  }
+
+  const password_hash = bcrypt.hashSync(new_password, 10);
+  db.prepare('UPDATE users SET password_hash = ?, must_change_password = 1 WHERE id = ?')
+    .run(password_hash, targetId);
+
+  logActivity({
+    userId: actor.id,
+    entityType: 'user',
+    entityId: targetId,
+    entityTitle: target.display_name,
+    action: 'updated',
+    changes: { password: { old: '[redacted]', new: '[reset]' } },
+  });
+
+  res.json({ success: true });
+});
+
+// PATCH /:id/status — Suspend or activate a user (admin+ only)
+router.patch('/:id/status', authenticate, requireAdmin, (req: AuthRequest, res: Response) => {
+  const { status } = req.body;
+  const targetId = req.params.id;
+  const actor = req.user!;
+
+  if (!['active', 'suspended'].includes(status)) {
+    return res.status(400).json({ error: 'Status must be active or suspended' });
+  }
+  if (targetId === actor.id) {
+    return res.status(400).json({ error: 'Cannot change your own status' });
+  }
+
+  const db = getDb();
+  const target = db.prepare('SELECT id, role, display_name, status FROM users WHERE id = ?').get(targetId) as any;
+  if (!target) return res.status(404).json({ error: 'User not found' });
+
+  if (target.role === 'superadmin' && actor.role !== 'superadmin') {
+    return res.status(403).json({ error: 'Only superadmins can modify superadmin status' });
+  }
+
+  db.prepare('UPDATE users SET status = ? WHERE id = ?').run(status, targetId);
+
+  logActivity({
+    userId: actor.id,
+    entityType: 'user',
+    entityId: targetId,
+    entityTitle: target.display_name,
+    action: 'updated',
+    changes: { status: { old: target.status || 'active', new: status } },
+  });
+
+  res.json({ success: true });
 });
 
 // PATCH /:id/role — Change user role (admin+ only, with superadmin protections)

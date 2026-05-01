@@ -10,13 +10,8 @@ import {
   Settings,
   LogOut,
   Zap,
-  User,
-  Building2,
-  AppWindow,
-  ChevronDown,
   ClipboardList,
 } from 'lucide-react';
-import { useState, useRef, useEffect } from 'react';
 import { permissions } from '../utils/permissions';
 
 type NavItem = { to: string; icon: typeof LayoutDashboard; label: string; end?: boolean };
@@ -54,20 +49,6 @@ export function Layout() {
       ],
     }] : []),
   ];
-  const [showUserMenu, setShowUserMenu] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
-
-  // Close menu on outside click
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setShowUserMenu(false);
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, []);
-
   const roleInfo = ROLE_LABELS[user?.role] || ROLE_LABELS.member;
 
   return (
@@ -115,12 +96,9 @@ export function Layout() {
           ))}
         </nav>
 
-        {/* User section — fixed bottom, never scrolls away */}
-        <div className="border-t border-gray-800 p-3 shrink-0" ref={menuRef}>
-          <button
-            onClick={() => setShowUserMenu(!showUserMenu)}
-            className="w-full flex items-center gap-3 px-2 py-2 rounded-lg hover:bg-gray-800 transition-colors text-left"
-          >
+        {/* User section — fixed bottom */}
+        <div className="border-t border-gray-800 p-3 shrink-0">
+          <div className="flex items-center gap-3 px-2 py-2">
             <div className="w-8 h-8 rounded-full bg-gray-700 flex items-center justify-center shrink-0">
               <span className="text-xs font-medium text-gray-300">
                 {(user?.display_name || 'U').charAt(0).toUpperCase()}
@@ -130,57 +108,27 @@ export function Layout() {
               <p className="text-sm font-medium truncate text-gray-200">
                 {user?.display_name}
               </p>
-              <div className="flex items-center gap-1.5">
-                <span className={`text-[10px] px-1.5 py-0 rounded-full font-medium ${roleInfo.color}`}>
-                  {roleInfo.label}
-                </span>
-              </div>
+              <span className={`text-[10px] px-1.5 py-0 rounded-full font-medium ${roleInfo.color}`}>
+                {roleInfo.label}
+              </span>
             </div>
-            <ChevronDown className={`w-3.5 h-3.5 text-gray-500 transition-transform ${showUserMenu ? 'rotate-180' : ''}`} />
-          </button>
-
-          {/* User dropdown menu */}
-          {showUserMenu && (
-            <div className="mt-1 bg-gray-800 border border-gray-700 rounded-lg overflow-hidden shadow-lg">
-              <div className="px-3 py-2 border-b border-gray-700">
-                <p className="text-xs text-gray-400 truncate">{user?.email}</p>
-              </div>
-              {permissions.canAccessSettings(role) && (
-                <button
-                  onClick={() => { navigate('/settings/org'); setShowUserMenu(false); }}
-                  className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-300 hover:bg-gray-700 transition-colors"
-                >
-                  <Building2 className="w-3.5 h-3.5" />
-                  Org Settings
-                </button>
-              )}
-              <button
-                onClick={() => { navigate('/settings/profile'); setShowUserMenu(false); }}
-                className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-300 hover:bg-gray-700 transition-colors"
-              >
-                <User className="w-3.5 h-3.5" />
-                Profile
-              </button>
-              {permissions.canAccessSettings(role) && (
-                <button
-                  onClick={() => { navigate('/settings/app'); setShowUserMenu(false); }}
-                  className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-300 hover:bg-gray-700 transition-colors"
-                >
-                  <AppWindow className="w-3.5 h-3.5" />
-                  App Settings
-                </button>
-              )}
-              <div className="border-t border-gray-700">
-                <button
-                  onClick={() => { logout(); setShowUserMenu(false); }}
-                  className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-300 hover:bg-gray-700 transition-colors"
-                >
-                  <LogOut className="w-3.5 h-3.5" />
-                  Sign Out
-                </button>
-              </div>
-            </div>
-          )}
+          </div>
+          <div className="flex gap-1 mt-1">
+            <button
+              onClick={() => navigate('/settings')}
+              className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs text-gray-400 hover:bg-gray-800 hover:text-gray-200 transition-colors"
+            >
+              <Settings className="w-3.5 h-3.5" />
+              Settings
+            </button>
+            <button
+              onClick={() => logout()}
+              className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs text-gray-400 hover:bg-gray-800 hover:text-gray-200 transition-colors"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              Sign Out
+            </button>
+          </div>
         </div>
       </aside>
 

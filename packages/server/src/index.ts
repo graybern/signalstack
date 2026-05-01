@@ -81,6 +81,9 @@ app.get('/api/health/ai', async (_req, res) => {
     if (aiConfig.provider === 'vertex' && !aiConfig.projectId) {
       return res.json({ ok: false, error: 'No Vertex AI project ID configured' });
     }
+    if (aiConfig.provider === 'anthropic' && !aiConfig.apiKey) {
+      return res.json({ ok: false, error: 'No Anthropic API key configured — set ANTHROPIC_API_KEY or add one in Settings' });
+    }
 
     const start = Date.now();
     const client = await createAIClient();
@@ -128,9 +131,9 @@ if (userCount === 0) {
   const bcryptMod = await import('bcryptjs');
   const hashSync = bcryptMod.default?.hashSync ?? bcryptMod.hashSync;
   db.prepare(
-    'INSERT INTO users (id, email, password_hash, display_name, role) VALUES (?,?,?,?,?)'
-  ).run(uuid(), 'admin@example.com', hashSync('admin123', 10), 'Admin', 'superadmin');
-  console.log('Created default admin user (admin@example.com / admin123 — change this immediately)');
+    'INSERT INTO users (id, email, password_hash, display_name, role, must_change_password) VALUES (?,?,?,?,?,?)'
+  ).run(uuid(), 'admin@example.com', hashSync('admin123', 10), 'Admin', 'superadmin', 1);
+  console.log('Created default admin user (admin@example.com / admin123 — must change on first login)');
 }
 
 initWebhookDispatcher();

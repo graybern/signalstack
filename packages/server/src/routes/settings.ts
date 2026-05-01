@@ -4,6 +4,7 @@ import { getSetting, saveSetting } from './icp.js';
 import { logActivity } from '../services/activityLog.js';
 import { config } from '../config.js';
 import { getDb } from '../db/schema.js';
+import type { AIProvider } from '../config/aiClient.js';
 
 const router = Router();
 
@@ -31,15 +32,129 @@ function getDefault(field: VertexField): string {
   }
 }
 
-// GET /settings/vertex — Returns current vertex config with source info
-router.get('/vertex', authenticate, requireAdmin, (_req: AuthRequest, res: Response) => {
-  const result: Record<string, { value: string; source: string; env_present: boolean }> = {};
+function maskApiKey(key: string): string {
+  if (key.length <= 12) return '••••••••';
+  return key.slice(0, 7) + '••••••••' + key.slice(-4);
+}
 
+// GET /settings/ai — Returns full AI provider config with source info
+router.get('/ai', authenticate, requireAdmin, (_req: AuthRequest, res: Response) => {
+  const dbProvider = getSetting('ai.provider', null) as AIProvider | null;
+  const dbApiKey = getSetting('ai.api_key', null) as string | null;
+  const envApiKey = process.env.ANTHROPIC_API_KEY || null;
+  const projectId = getSetting('vertex.project_id', null) || config.vertexProjectId;
+
+  const autoDetected: AIProvider = envApiKey && !projectId ? 'anthropic' : 'vertex';
+
+  const vertexFields: Record<string, { value: string; source: string; env_present: boolean }> = {};
   for (const field of VERTEX_FIELDS) {
     const dbValue = getSetting(getSettingKey(field), null);
     const envValue = getEnvValue(field);
     const defaultValue = getDefault(field);
 
+    if (dbValue !== null) {
+      vertexFields[field] = { value: dbValue, source: 'database', env_present: !!envValue };
+    } else if (envValue) {
+      vertexFields[field] = { value: envValue, source: 'env', env_present: true };
+    } else {
+      vertexFields[field] = { value: defaultValue, source: 'default', env_present: false };
+    }
+  }
+
+  let apiKeyInfo: { masked: string; source: string } | null = null;
+  if (dbApiKey) {
+    apiKeyInfo = { masked: maskApiKey(dbApiKey), source: 'database' };
+  } else if (envApiKey) {
+    apiKeyInfo = { masked: maskApiKey(envApiKey), source: 'env' };
+  }
+
+  res.json({
+    provider: {
+      value: dbProvider || autoDetected,
+      source: dbProvider ? 'database' : 'auto',
+      auto_detected: autoDetected,
+    },
+    api_key: apiKeyInfo,
+    env_api_key_present: !!envApiKey,
+    vertex: vertexFields,
+  });
+});
+
+// PUT /settings/ai — Save AI provider config (provider, API key, vertex fields)
+router.put('/ai', authenticate, requireAdmin, (req: AuthRequest, res: Response) => {
+  const { provider, api_key, ...vertexBody } = req.body;
+  const changedFields: Record<string, { old: unknown; new: unknown }> = {};
+
+  if (provider && (provider === 'vertex' || provider === 'anthropic')) {
+    const oldProvider = getSetting('ai.provider', null);
+    if (oldProvider !== provider) {
+      saveSetting('ai.provider', provider, req.user!.id);
+      changedFields.provider = { old: oldProvider || '(auto)', new: provider };
+    }
+  }
+
+  if (api_key !== undefined) {
+    if (api_key === '') {
+      getDb().prepare("DELETE FROM app_settings WHERE key = 'ai.api_key'").run();
+      changedFields.api_key = { old: '(set)', new: '(cleared)' };
+    } else {
+      saveSetting('ai.api_key', api_key, req.user!.id);
+      changedFields.api_key = { old: '(previous)', new: maskApiKey(api_key) };
+    }
+  }
+
+  for (const field of VERTEX_FIELDS) {
+    if (vertexBody[field] !== undefined && vertexBody[field] !== null && vertexBody[field] !== '') {
+      const oldVal = getSetting(getSettingKey(field), getEnvValue(field) || getDefault(field));
+      saveSetting(getSettingKey(field), vertexBody[field], req.user!.id);
+      if (String(oldVal) !== String(vertexBody[field])) {
+        changedFields[field] = { old: oldVal, new: vertexBody[field] };
+      }
+    }
+  }
+
+  if (Object.keys(changedFields).length > 0) {
+    logActivity({
+      userId: req.user!.id,
+      entityType: 'setting',
+      entityId: 'ai-provider',
+      entityTitle: 'AI Provider Config',
+      action: 'updated',
+      changes: changedFields,
+    });
+  }
+
+  res.json({ success: true });
+});
+
+// DELETE /settings/ai/:field — Clear a specific AI setting
+router.delete('/ai/:field', authenticate, requireAdmin, (req: AuthRequest, res: Response) => {
+  const field = req.params.field;
+
+  if (field === 'provider') {
+    getDb().prepare("DELETE FROM app_settings WHERE key = 'ai.provider'").run();
+    return res.json({ success: true, field, fallback: 'auto-detect' });
+  }
+  if (field === 'api_key') {
+    getDb().prepare("DELETE FROM app_settings WHERE key = 'ai.api_key'").run();
+    return res.json({ success: true, field, fallback: process.env.ANTHROPIC_API_KEY ? 'env' : 'none' });
+  }
+
+  const vertexField = field as VertexField;
+  if (!VERTEX_FIELDS.includes(vertexField)) {
+    return res.status(400).json({ error: `Invalid field: ${field}` });
+  }
+  getDb().prepare('DELETE FROM app_settings WHERE key = ?').run(getSettingKey(vertexField));
+  res.json({ success: true, field, fallback_source: getEnvValue(vertexField) ? 'env' : 'default' });
+});
+
+// Backward-compatible: GET /settings/vertex → redirects to /settings/ai
+router.get('/vertex', authenticate, requireAdmin, (_req: AuthRequest, res: Response) => {
+  const result: Record<string, { value: string; source: string; env_present: boolean }> = {};
+  for (const field of VERTEX_FIELDS) {
+    const dbValue = getSetting(getSettingKey(field), null);
+    const envValue = getEnvValue(field);
+    const defaultValue = getDefault(field);
     if (dbValue !== null) {
       result[field] = { value: dbValue, source: 'database', env_present: !!envValue };
     } else if (envValue) {
@@ -48,14 +163,12 @@ router.get('/vertex', authenticate, requireAdmin, (_req: AuthRequest, res: Respo
       result[field] = { value: defaultValue, source: 'default', env_present: false };
     }
   }
-
   res.json(result);
 });
 
-// PUT /settings/vertex — Save vertex config overrides
+// Backward-compatible: PUT /settings/vertex
 router.put('/vertex', authenticate, requireAdmin, (req: AuthRequest, res: Response) => {
   const body = req.body;
-
   const changedFields: Record<string, { old: unknown; new: unknown }> = {};
   for (const field of VERTEX_FIELDS) {
     if (body[field] !== undefined && body[field] !== null && body[field] !== '') {
@@ -66,7 +179,6 @@ router.put('/vertex', authenticate, requireAdmin, (req: AuthRequest, res: Respon
       }
     }
   }
-
   if (Object.keys(changedFields).length > 0) {
     logActivity({
       userId: req.user!.id,
@@ -77,17 +189,15 @@ router.put('/vertex', authenticate, requireAdmin, (req: AuthRequest, res: Respon
       changes: changedFields,
     });
   }
-
   res.json({ success: true });
 });
 
-// DELETE /settings/vertex/:field — Clear a specific override (fall back to env)
+// Backward-compatible: DELETE /settings/vertex/:field
 router.delete('/vertex/:field', authenticate, requireAdmin, (req: AuthRequest, res: Response) => {
   const field = req.params.field as VertexField;
   if (!VERTEX_FIELDS.includes(field)) {
     return res.status(400).json({ error: `Invalid field: ${field}. Valid fields: ${VERTEX_FIELDS.join(', ')}` });
   }
-
   getDb().prepare('DELETE FROM app_settings WHERE key = ?').run(getSettingKey(field));
   res.json({ success: true, field, fallback_source: getEnvValue(field) ? 'env' : 'default' });
 });

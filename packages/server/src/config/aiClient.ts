@@ -9,22 +9,31 @@ export interface AIConfig {
   // Vertex-specific
   region?: string;
   projectId?: string;
+  // Anthropic-specific
+  apiKey?: string;
 }
 
 export function getAIConfig(): AIConfig {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const dbProvider = getSetting('ai.provider', null) as AIProvider | null;
+  const dbApiKey = getSetting('ai.api_key', null) as string | null;
+  const envApiKey = process.env.ANTHROPIC_API_KEY || null;
   const projectId = getSetting('vertex.project_id', null) || config.vertexProjectId;
+  const defaultModel = getSetting('vertex.default_model', null) || config.defaultModel;
 
-  if (apiKey && !projectId) {
+  const effectiveProvider = dbProvider
+    || (envApiKey && !projectId ? 'anthropic' : 'vertex');
+
+  if (effectiveProvider === 'anthropic') {
     return {
       provider: 'anthropic',
-      defaultModel: getSetting('vertex.default_model', null) || config.defaultModel,
+      defaultModel,
+      apiKey: dbApiKey || envApiKey || undefined,
     };
   }
 
   return {
     provider: 'vertex',
-    defaultModel: getSetting('vertex.default_model', null) || config.defaultModel,
+    defaultModel,
     region: getSetting('vertex.region', null) || config.vertexRegion,
     projectId,
   };
@@ -60,7 +69,9 @@ export async function createAIClient(): Promise<AIClientLike> {
 
   if (aiConfig.provider === 'anthropic') {
     const { default: Anthropic } = await import('@anthropic-ai/sdk');
-    return new Anthropic();
+    return new Anthropic({
+      ...(aiConfig.apiKey ? { apiKey: aiConfig.apiKey } : {}),
+    });
   }
 
   const { AnthropicVertex } = await import('@anthropic-ai/vertex-sdk');

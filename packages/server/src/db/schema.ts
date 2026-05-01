@@ -276,6 +276,18 @@ function initSchema(db: Database.Database) {
     db.pragma('foreign_keys = ON');
   }
 
+  // User management columns: status, forced password change, last login
+  const userMgmtCols = db.prepare("PRAGMA table_info(users)").all() as { name: string }[];
+  if (!userMgmtCols.find(c => c.name === 'must_change_password')) {
+    db.exec("ALTER TABLE users ADD COLUMN must_change_password INTEGER DEFAULT 0");
+  }
+  if (!userMgmtCols.find(c => c.name === 'last_login_at')) {
+    db.exec("ALTER TABLE users ADD COLUMN last_login_at TEXT");
+  }
+  if (!userMgmtCols.find(c => c.name === 'status')) {
+    db.exec("ALTER TABLE users ADD COLUMN status TEXT DEFAULT 'active'");
+  }
+
   // Add search_patterns column to campaigns (safe to run repeatedly)
   const campCols = db.prepare("PRAGMA table_info(campaigns)").all() as { name: string }[];
   if (!campCols.find(c => c.name === 'search_patterns')) {

@@ -96,13 +96,42 @@ router.post('/login', (req: AuthRequest, res: Response) => {
     return res.status(401).json({ error: 'Invalid credentials' });
   }
 
+  if (user.status === 'suspended') {
+    return res.status(403).json({ error: 'Account suspended. Contact your administrator.' });
+  }
+
+  db.prepare("UPDATE users SET last_login_at = datetime('now') WHERE id = ?").run(user.id);
+
   const token = jwt.sign({ userId: user.id }, config.jwtSecret, { expiresIn: '7d' });
-  res.json({ token, user: { id: user.id, email: user.email, display_name: user.display_name, role: user.role } });
+  res.json({
+    token,
+    user: {
+      id: user.id, email: user.email, display_name: user.display_name,
+      role: user.role, must_change_password: !!user.must_change_password,
+    },
+  });
 });
 
 router.get('/me', authenticate, (req: AuthRequest, res: Response) => {
   const u = req.user!;
-  res.json({ id: u.id, email: u.email, display_name: u.display_name, role: u.role });
+  res.json({
+    id: u.id, email: u.email, display_name: u.display_name,
+    role: u.role, must_change_password: !!u.must_change_password,
+  });
+});
+
+router.post('/force-change-password', authenticate, (req: AuthRequest, res: Response) => {
+  const { new_password } = req.body;
+  if (!new_password || new_password.length < 6) {
+    return res.status(400).json({ error: 'Password must be at least 6 characters' });
+  }
+
+  const db = getDb();
+  const password_hash = bcrypt.hashSync(new_password, 10);
+  db.prepare('UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?')
+    .run(password_hash, req.user!.id);
+
+  res.json({ success: true });
 });
 
 /** GET /auth/registration-info — public endpoint to check if self-registration is allowed */

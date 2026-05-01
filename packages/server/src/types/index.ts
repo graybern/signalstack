@@ -6,6 +6,9 @@ export interface User {
   password_hash: string;
   display_name: string;
   role: UserRole;
+  status: 'active' | 'suspended';
+  must_change_password: number;
+  last_login_at: string | null;
   created_at: string;
 }
 

@@ -6,6 +6,7 @@ interface User {
   email: string;
   display_name: string;
   role: 'superadmin' | 'admin' | 'operator' | 'member' | 'viewer';
+  must_change_password?: boolean;
 }
 
 export function useAuth() {
@@ -47,5 +48,9 @@ export function useAuth() {
     setUser(null);
   }, []);
 
-  return { user, loading, login, register, logout };
+  const updateUser = useCallback((updates: Partial<User>) => {
+    setUser(prev => prev ? { ...prev, ...updates } : null);
+  }, []);
+
+  return { user, loading, login, register, logout, updateUser };
 }

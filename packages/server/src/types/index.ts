@@ -295,7 +295,7 @@ export interface CampaignExclusionConfig {
 
 // ── Notification Destinations ──────────────────────────────────────
 
-export type NotificationDestinationType = 'slack' | 'webhook' | 'teams';
+export type NotificationDestinationType = 'slack' | 'webhook' | 'teams' | 'rss';
 
 export interface NotificationDestinationBase {
   id: string;
@@ -325,7 +325,12 @@ export interface TeamsDestination extends NotificationDestinationBase {
   config: { webhook_url: string };
 }
 
-export type NotificationDestination = SlackDestination | WebhookDestination | TeamsDestination;
+export interface RssDestination extends NotificationDestinationBase {
+  type: 'rss';
+  config: { base_url: string };
+}
+
+export type NotificationDestination = SlackDestination | WebhookDestination | TeamsDestination | RssDestination;
 
 export interface CampaignParsed {
   id: string;

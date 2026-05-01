@@ -497,13 +497,18 @@ router.get('/:id/rss', async (req, res: Response) => {
   const db = getDb();
   const campaign = db.prepare('SELECT * FROM campaigns WHERE id = ?').get(req.params.id) as any;
   if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
-  if (!campaign.rss_enabled) return res.status(403).json({ error: 'RSS feed not enabled for this campaign' });
+
+  const destinations = JSON.parse(campaign.notification_destinations || '[]');
+  const rssDest = destinations.find((d: any) => d.type === 'rss' && d.enabled);
+  // Backward compat: also check legacy rss_enabled column
+  if (!rssDest && !campaign.rss_enabled) return res.status(403).json({ error: 'RSS feed not enabled for this campaign' });
 
   const runs = db.prepare(
     'SELECT id, status, lead_count, started_at, completed_at, error_message FROM pipeline_runs WHERE campaign_id = ? ORDER BY started_at DESC LIMIT 20'
   ).all(req.params.id) as any[];
 
-  const baseUrl = `${req.protocol}://${req.get('host')}`;
+  const configuredBaseUrl = rssDest?.config?.base_url;
+  const baseUrl = configuredBaseUrl || `${req.protocol}://${req.get('host')}`;
 
   const statusEmoji: Record<string, string> = {
     completed: '✅', failed: '❌', cancelled: '🚫', missed: '⏰', running: '🔄',

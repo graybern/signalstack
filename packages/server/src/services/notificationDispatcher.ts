@@ -23,7 +23,7 @@ function getDestinations(campaignId: string): NotificationDestination[] {
 }
 
 function getEnabledDestinations(campaignId: string): NotificationDestination[] {
-  return getDestinations(campaignId).filter(d => d.enabled);
+  return getDestinations(campaignId).filter(d => d.enabled && d.type !== 'rss');
 }
 
 // ── Lead data helpers ────────────────────────────────────────────
@@ -261,6 +261,8 @@ function buildTeamsTest(campaignName: string, runId?: string): any {
 // ── Delivery ─────────────────────────────────────────────────────
 
 async function deliver(dest: NotificationDestination, payload: any): Promise<{ ok: boolean; error?: string }> {
+  if (dest.type === 'rss') return { ok: false, error: 'RSS is pull-based, not deliverable' };
+
   try {
     let url: string;
     let method = 'POST';
@@ -365,6 +367,8 @@ export async function sendTestNotification(campaignId: string, destinationId: st
   ).get(campaignId) as any;
 
   let payload: any;
+  if (dest.type === 'rss') return { ok: true };
+
   if (dest.type === 'slack') {
     payload = buildSlackTest(campaign.name, lastRun?.id);
   } else if (dest.type === 'teams') {

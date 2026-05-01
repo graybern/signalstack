@@ -341,17 +341,36 @@ function initSchema(db: Database.Database) {
   if (!campColsNotif.find(c => c.name === 'notification_destinations')) {
     db.exec("ALTER TABLE campaigns ADD COLUMN notification_destinations TEXT DEFAULT '[]'");
     const withSlack = db.prepare(
-      "SELECT id, slack_webhook_url FROM campaigns WHERE slack_webhook_url IS NOT NULL AND slack_webhook_url != ''"
-    ).all() as { id: string; slack_webhook_url: string }[];
+      "SELECT id, slack_webhook_url, rss_enabled FROM campaigns WHERE slack_webhook_url IS NOT NULL AND slack_webhook_url != ''"
+    ).all() as { id: string; slack_webhook_url: string; rss_enabled: number }[];
     for (const row of withSlack) {
-      const destId = crypto.randomUUID();
-      const dest = [{
-        id: destId, type: 'slack', label: 'Slack', enabled: true,
+      const dests: any[] = [{
+        id: crypto.randomUUID(), type: 'slack', label: 'Slack', enabled: true,
         created_at: new Date().toISOString(),
         config: { webhook_url: row.slack_webhook_url },
       }];
+      if (row.rss_enabled) {
+        dests.push({
+          id: crypto.randomUUID(), type: 'rss', label: 'RSS Feed', enabled: true,
+          created_at: new Date().toISOString(),
+          config: { base_url: '' },
+        });
+      }
       db.prepare("UPDATE campaigns SET notification_destinations = ? WHERE id = ?")
-        .run(JSON.stringify(dest), row.id);
+        .run(JSON.stringify(dests), row.id);
+    }
+    // Migrate RSS-only campaigns (no slack webhook but rss_enabled)
+    const rssOnly = db.prepare(
+      "SELECT id FROM campaigns WHERE rss_enabled = 1 AND (slack_webhook_url IS NULL OR slack_webhook_url = '')"
+    ).all() as { id: string }[];
+    for (const row of rssOnly) {
+      const dests = [{
+        id: crypto.randomUUID(), type: 'rss', label: 'RSS Feed', enabled: true,
+        created_at: new Date().toISOString(),
+        config: { base_url: '' },
+      }];
+      db.prepare("UPDATE campaigns SET notification_destinations = ? WHERE id = ?")
+        .run(JSON.stringify(dests), row.id);
     }
   }
 

@@ -102,7 +102,6 @@ export function CampaignDetail() {
 
   // Configure state
   const [configTab, setConfigTab] = useState<'definition' | 'funnel' | 'schedule' | 'exclusions' | 'feed'>('definition');
-  const [copiedRss, setCopiedRss] = useState(false);
   const [configDirty, setConfigDirty] = useState(false);
   const [editConfig, setEditConfig] = useState<{
     schedule_cron: string;
@@ -288,13 +287,6 @@ export function CampaignDetail() {
     } catch (err: any) {
       alert(err.message);
     }
-  };
-
-  const copyRssUrl = () => {
-    const url = `${window.location.origin}/api/campaigns/${id}/rss`;
-    navigator.clipboard.writeText(url);
-    setCopiedRss(true);
-    setTimeout(() => setCopiedRss(false), 2000);
   };
 
   // Filtered and sorted leads
@@ -521,8 +513,6 @@ export function CampaignDetail() {
           setConfigDirty={setConfigDirty}
           saveConfig={saveConfig}
           globalExclusions={globalExclusions}
-          copiedRss={copiedRss}
-          copyRssUrl={copyRssUrl}
           campaignId={id!}
           canEdit={permissions.canEditCampaign(user?.role)}
           canEditPipeline={permissions.canEditFunnelConfig(user?.role)}
@@ -947,7 +937,7 @@ function AnalyticsTab({ analytics, loading }: { analytics: any; loading: boolean
 function ConfigureTab({
   campaign, setCampaign, editConfig, setEditConfig, configTab, setConfigTab,
   configDirty, setConfigDirty, saveConfig, globalExclusions,
-  copiedRss, copyRssUrl, campaignId, canEdit, canEditPipeline, canEditSchedule, canEditExclusions,
+  campaignId, canEdit, canEditPipeline, canEditSchedule, canEditExclusions,
   orgICP, onRunStep, serverTzAbbr,
 }: {
   campaign: CampaignFull;
@@ -960,8 +950,6 @@ function ConfigureTab({
   setConfigDirty: (d: boolean) => void;
   saveConfig: () => void;
   globalExclusions: any[];
-  copiedRss: boolean;
-  copyRssUrl: () => void;
   campaignId: string;
   canEdit: boolean;
   canEditPipeline: boolean;
@@ -1162,8 +1150,6 @@ function ConfigureTab({
               editConfig={editConfig}
               setEditConfig={setEditConfig}
               setConfigDirty={setConfigDirty}
-              copiedRss={copiedRss}
-              copyRssUrl={copyRssUrl}
               campaignId={campaignId}
             />
           )}
@@ -1188,6 +1174,7 @@ const DEST_TYPES = [
   { type: 'slack' as const, label: 'Slack', icon: Hash, description: 'Rich Block Kit messages via incoming webhook', color: 'bg-purple-50 text-purple-700 border-purple-200' },
   { type: 'webhook' as const, label: 'Generic Webhook', icon: Globe, description: 'Structured JSON payload to any HTTP endpoint', color: 'bg-blue-50 text-blue-700 border-blue-200' },
   { type: 'teams' as const, label: 'Microsoft Teams', icon: Users, description: 'Adaptive Card messages via incoming webhook', color: 'bg-sky-50 text-sky-700 border-sky-200' },
+  { type: 'rss' as const, label: 'RSS Feed', icon: Rss, description: 'Pull-based feed for RSS readers and Slack /feed', color: 'bg-orange-50 text-orange-700 border-orange-200' },
 ];
 
 function destTypeConfig(type: string) {
@@ -1195,13 +1182,11 @@ function destTypeConfig(type: string) {
 }
 
 function FeedTab({
-  editConfig, setEditConfig, setConfigDirty, copiedRss, copyRssUrl, campaignId,
+  editConfig, setEditConfig, setConfigDirty, campaignId,
 }: {
   editConfig: any;
   setEditConfig: (c: any) => void;
   setConfigDirty: (d: boolean) => void;
-  copiedRss: boolean;
-  copyRssUrl: () => void;
   campaignId: string;
 }) {
   const [showAddPicker, setShowAddPicker] = useState(false);
@@ -1216,15 +1201,17 @@ function FeedTab({
     setConfigDirty(true);
   };
 
-  const addDestination = (type: 'slack' | 'webhook' | 'teams') => {
+  const addDestination = (type: 'slack' | 'webhook' | 'teams' | 'rss') => {
+    if (type === 'rss' && destinations.some((d: any) => d.type === 'rss')) return;
     const id = crypto.randomUUID();
     const tc = destTypeConfig(type);
+    let config: any;
+    if (type === 'webhook') config = { url: '', method: 'POST', headers: {}, secret: '' };
+    else if (type === 'rss') config = { base_url: '' };
+    else config = { webhook_url: '' };
     const dest: any = {
       id, type, label: tc.label, enabled: true,
-      created_at: new Date().toISOString(),
-      config: type === 'webhook'
-        ? { url: '', method: 'POST', headers: {}, secret: '' }
-        : { webhook_url: '' },
+      created_at: new Date().toISOString(), config,
     };
     updateDestinations([...destinations, dest]);
     setEditingId(id);
@@ -1279,8 +1266,8 @@ function FeedTab({
 
         {/* Type picker */}
         {showAddPicker && (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            {DEST_TYPES.map(dt => (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+            {DEST_TYPES.filter(dt => dt.type !== 'rss' || !destinations.some((d: any) => d.type === 'rss')).map(dt => (
               <button
                 key={dt.type}
                 onClick={() => addDestination(dt.type)}
@@ -1303,7 +1290,7 @@ function FeedTab({
           <div className="text-center py-8 bg-gray-50 rounded-xl border border-dashed border-gray-200">
             <Send className="w-8 h-8 text-gray-300 mx-auto mb-2" />
             <p className="text-sm text-gray-500">No destinations configured.</p>
-            <p className="text-xs text-gray-400 mt-1">Add a Slack, Teams, or webhook destination to get notified.</p>
+            <p className="text-xs text-gray-400 mt-1">Add Slack, Teams, webhook, or RSS destinations.</p>
           </div>
         )}
 
@@ -1314,7 +1301,13 @@ function FeedTab({
             const isEditing = editingId === dest.id;
             const isTesting = testingId === dest.id;
             const testResult = testResults[dest.id];
-            const hasUrl = dest.type === 'webhook' ? dest.config?.url : dest.config?.webhook_url;
+            const isRss = dest.type === 'rss';
+            const hasUrl = isRss || (dest.type === 'webhook' ? dest.config?.url : dest.config?.webhook_url);
+            const rssBaseUrl = isRss ? (dest.config?.base_url || window.location.origin) : '';
+            const rssUrl = isRss ? `${rssBaseUrl}/api/campaigns/${campaignId}/rss` : '';
+            const displayUrl = isRss
+              ? rssUrl
+              : (dest.type === 'webhook' ? dest.config?.url : dest.config?.webhook_url || '').replace(/^(https?:\/\/[^\/]+).*/, '$1/...');
 
             return (
               <div key={dest.id} className={`bg-white border rounded-xl overflow-hidden ${isEditing ? 'border-brand-300 shadow-sm' : 'border-gray-200'}`}>
@@ -1328,10 +1321,8 @@ function FeedTab({
                       <span className="text-sm font-medium text-gray-900 truncate">{dest.label}</span>
                       <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${tc.color}`}>{tc.label}</span>
                     </div>
-                    {hasUrl && (
-                      <p className="text-xs text-gray-400 truncate mt-0.5 font-mono">
-                        {(dest.type === 'webhook' ? dest.config?.url : dest.config?.webhook_url || '').replace(/^(https?:\/\/[^\/]+).*/, '$1/...')}
-                      </p>
+                    {displayUrl && (
+                      <p className="text-xs text-gray-400 truncate mt-0.5 font-mono">{displayUrl}</p>
                     )}
                   </div>
 
@@ -1341,14 +1332,24 @@ function FeedTab({
                         {testResult.ok ? 'Sent!' : testResult.error || 'Failed'}
                       </span>
                     )}
-                    <button
-                      onClick={() => testDest(dest.id)}
-                      disabled={isTesting || !hasUrl}
-                      className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded disabled:opacity-30"
-                      title="Send test"
-                    >
-                      <Send className={`w-3.5 h-3.5 ${isTesting ? 'animate-pulse' : ''}`} />
-                    </button>
+                    {isRss ? (
+                      <button
+                        onClick={() => { navigator.clipboard.writeText(rssUrl); setTestResults(prev => ({ ...prev, [dest.id]: { ok: true, error: undefined } })); setTimeout(() => setTestResults(prev => { const n = { ...prev }; delete n[dest.id]; return n; }), 2000); }}
+                        className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded"
+                        title="Copy feed URL"
+                      >
+                        <Copy className="w-3.5 h-3.5" />
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => testDest(dest.id)}
+                        disabled={isTesting || !hasUrl}
+                        className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded disabled:opacity-30"
+                        title="Send test"
+                      >
+                        <Send className={`w-3.5 h-3.5 ${isTesting ? 'animate-pulse' : ''}`} />
+                      </button>
+                    )}
                     <button
                       onClick={() => toggleEnabled(dest.id)}
                       className={`p-1.5 rounded ${dest.enabled ? 'text-green-600 hover:bg-green-50' : 'text-gray-300 hover:bg-gray-100'}`}
@@ -1415,6 +1416,38 @@ function FeedTab({
                       </div>
                     )}
 
+                    {dest.type === 'rss' && (
+                      <div className="space-y-3">
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Base URL</label>
+                          <input
+                            type="url"
+                            value={dest.config?.base_url || ''}
+                            onChange={e => updateDest(dest.id, { config: { ...dest.config, base_url: e.target.value } })}
+                            className="w-full px-3 py-1.5 border border-gray-300 rounded-lg text-sm font-mono"
+                            placeholder={window.location.origin}
+                          />
+                          <p className="text-xs text-gray-400 mt-1">
+                            Override the base URL used in feed links. Leave blank to auto-detect from request. Useful when DNS changes or accessing via IP.
+                          </p>
+                        </div>
+                        <div className="bg-gray-50 rounded-lg p-3">
+                          <label className="block text-xs text-gray-500 mb-1">Feed URL</label>
+                          <div className="flex items-center gap-2">
+                            <code className="flex-1 text-xs bg-white border border-gray-200 rounded px-3 py-2 text-gray-700 truncate">
+                              {(dest.config?.base_url || window.location.origin)}/api/campaigns/{campaignId}/rss
+                            </code>
+                            <button
+                              onClick={() => navigator.clipboard.writeText(`${dest.config?.base_url || window.location.origin}/api/campaigns/${campaignId}/rss`)}
+                              className="flex items-center gap-1 px-3 py-2 text-xs border border-gray-200 rounded hover:bg-white transition-colors"
+                            >
+                              <Copy className="w-3.5 h-3.5" /> Copy
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
                     {dest.type === 'webhook' && (
                       <>
                         <div>
@@ -1474,42 +1507,6 @@ function FeedTab({
         </div>
       </div>
 
-      <div className="border-t border-gray-200" />
-
-      {/* RSS Feed */}
-      <div className="space-y-4">
-        <div className="flex items-center justify-between">
-          <h4 className="text-sm font-medium text-gray-900">RSS Feed</h4>
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={editConfig.rss_enabled}
-              onChange={e => { setEditConfig({ ...editConfig, rss_enabled: e.target.checked }); setConfigDirty(true); }}
-              className="rounded border-gray-300"
-            />
-            Enable RSS
-          </label>
-        </div>
-        {editConfig.rss_enabled && (
-          <>
-            <div className="bg-gray-50 rounded-lg p-3">
-              <label className="block text-xs text-gray-500 mb-1">Feed URL</label>
-              <div className="flex items-center gap-2">
-                <code className="flex-1 text-xs bg-white border border-gray-200 rounded px-3 py-2 text-gray-700 truncate">
-                  {window.location.origin}/api/campaigns/{campaignId}/rss
-                </code>
-                <button onClick={copyRssUrl} className="flex items-center gap-1 px-3 py-2 text-xs border border-gray-200 rounded hover:bg-white transition-colors">
-                  {copiedRss ? <Check className="w-3.5 h-3.5 text-green-600" /> : <Copy className="w-3.5 h-3.5" />}
-                  {copiedRss ? 'Copied' : 'Copy'}
-                </button>
-              </div>
-            </div>
-            <p className="text-xs text-gray-500">
-              Subscribe to this feed in Slack using <code className="bg-gray-100 px-1 rounded">/feed {window.location.origin}/api/campaigns/{campaignId}/rss</code>
-            </p>
-          </>
-        )}
-      </div>
     </div>
   );
 }

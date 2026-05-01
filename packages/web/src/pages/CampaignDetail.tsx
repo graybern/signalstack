@@ -1266,10 +1266,10 @@ function FeedTab({
           value={baseUrl}
           onChange={e => { setEditConfig({ ...editConfig, notification_base_url: e.target.value }); setConfigDirty(true); }}
           className="w-full px-3 py-1.5 border border-gray-300 rounded-lg text-sm font-mono"
-          placeholder={window.location.origin}
+          placeholder="https://your-server.example.com"
         />
         <p className="text-xs text-gray-400">
-          Used for links in webhook payloads and RSS feeds. Set to your server's IP or DNS (e.g. <code className="bg-gray-100 px-1 rounded">http://192.168.1.50:5173</code>). Leave blank to auto-detect.
+          Used for links in webhook payloads and RSS feeds. Set to your server's public URL or IP. Leave blank to auto-detect.
         </p>
       </div>
 

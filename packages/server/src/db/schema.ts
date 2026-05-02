@@ -287,6 +287,9 @@ function initSchema(db: Database.Database) {
   if (!userMgmtCols.find(c => c.name === 'status')) {
     db.exec("ALTER TABLE users ADD COLUMN status TEXT DEFAULT 'active'");
   }
+  if (!userMgmtCols.find(c => c.name === 'timezone')) {
+    db.exec("ALTER TABLE users ADD COLUMN timezone TEXT");
+  }
 
   // Add search_patterns column to campaigns (safe to run repeatedly)
   const campCols = db.prepare("PRAGMA table_info(campaigns)").all() as { name: string }[];
@@ -334,6 +337,9 @@ function initSchema(db: Database.Database) {
   }
   if (!campColsP2.find(c => c.name === 'schedule_enabled')) {
     db.exec("ALTER TABLE campaigns ADD COLUMN schedule_enabled INTEGER DEFAULT 0");
+  }
+  if (!campColsP2.find(c => c.name === 'schedule_timezone')) {
+    db.exec("ALTER TABLE campaigns ADD COLUMN schedule_timezone TEXT");
   }
   if (!campColsP2.find(c => c.name === 'exclusion_config')) {
     db.exec("ALTER TABLE campaigns ADD COLUMN exclusion_config TEXT");

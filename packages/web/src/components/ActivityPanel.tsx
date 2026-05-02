@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useRunActivity, type ActivityEntry } from '../hooks/useRunActivity.js';
 import { TokenCounter } from './TokenCounter.js';
 import { ConnectionStatus } from './ConnectionStatus.js';
+import { timeAgo } from '../utils/dates';
 
 interface ActivityPanelProps {
   runId: string;
@@ -42,14 +43,6 @@ const TYPE_COLORS: Record<string, string> = {
   milestone: 'text-emerald-300',
   error: 'text-red-400',
 };
-
-function timeAgo(dateStr: string): string {
-  const diff = (Date.now() - new Date(dateStr).getTime()) / 1000;
-  if (diff < 5) return 'now';
-  if (diff < 60) return `${Math.floor(diff)}s ago`;
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-  return `${Math.floor(diff / 3600)}h ago`;
-}
 
 function ActivityItem({ entry }: { entry: ActivityEntry }) {
   const [expanded, setExpanded] = useState(false);

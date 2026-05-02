@@ -190,7 +190,7 @@ router.patch('/:id/role', authenticate, requireAdmin, (req: AuthRequest, res: Re
 
 // PUT /profile — Update own profile (any authenticated user)
 router.put('/profile', authenticate, (req: AuthRequest, res: Response) => {
-  const { display_name, current_password, new_password } = req.body;
+  const { display_name, current_password, new_password, timezone } = req.body;
   const db = getDb();
   const userId = req.user!.id;
 
@@ -200,6 +200,11 @@ router.put('/profile', authenticate, (req: AuthRequest, res: Response) => {
   if (display_name && display_name.trim()) {
     updates.push('display_name = ?');
     values.push(display_name.trim());
+  }
+
+  if (timezone !== undefined) {
+    updates.push('timezone = ?');
+    values.push(timezone || null);
   }
 
   if (new_password) {
@@ -224,7 +229,7 @@ router.put('/profile', authenticate, (req: AuthRequest, res: Response) => {
   values.push(userId);
   db.prepare(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`).run(...values);
 
-  const updated = db.prepare('SELECT id, email, display_name, role, created_at FROM users WHERE id = ?').get(userId);
+  const updated = db.prepare('SELECT id, email, display_name, role, timezone, created_at FROM users WHERE id = ?').get(userId);
   res.json(updated);
 });
 

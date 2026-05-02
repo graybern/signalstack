@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthContext } from '../App';
 import { api } from '../api/client';
+import { formatDateTimeFull, setUserTimezone, getUserTimezone } from '../utils/dates';
 import {
   Building2,
   User,
@@ -785,7 +786,7 @@ function TeamSection() {
                   </td>
                   <td className="px-4 py-3">
                     <span className="text-xs text-gray-500">
-                      {u.last_login_at ? new Date(u.last_login_at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : 'Never'}
+                      {u.last_login_at ? formatDateTimeFull(u.last_login_at) : 'Never'}
                     </span>
                   </td>
                   <td className="px-4 py-3">
@@ -854,13 +855,19 @@ function TeamSection() {
 // ── Profile Tab ────────────────────────────────────────────────
 
 function ProfileTab() {
-  const { user } = useAuthContext();
+  const { user, updateUser } = useAuthContext();
   const [displayName, setDisplayName] = useState(user?.display_name || '');
+  const [timezone, setTimezone] = useState((user as any)?.timezone || getUserTimezone());
+  const [timezoneList, setTimezoneList] = useState<{ zone: string; abbreviation: string; utc_offset: string }[]>([]);
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  useEffect(() => {
+    api('/settings/timezone').then((data: any) => setTimezoneList(data.timezones || [])).catch(() => {});
+  }, []);
 
   const roleMeta = ROLE_META[user?.role] || ROLE_META.member;
   const RoleIcon = roleMeta.icon;
@@ -871,6 +878,7 @@ function ProfileTab() {
     try {
       const body: any = {};
       if (displayName !== user?.display_name) body.display_name = displayName;
+      if (timezone !== ((user as any)?.timezone || '')) body.timezone = timezone;
       if (newPassword) {
         if (newPassword !== confirmPassword) { setMessage({ type: 'error', text: 'Passwords do not match' }); setSaving(false); return; }
         body.current_password = currentPassword;
@@ -878,9 +886,13 @@ function ProfileTab() {
       }
       if (Object.keys(body).length === 0) { setMessage({ type: 'error', text: 'No changes to save' }); setSaving(false); return; }
       await api('/users/profile', { method: 'PUT', body: JSON.stringify(body) });
+      if (body.timezone) {
+        setUserTimezone(body.timezone);
+        updateUser({ timezone: body.timezone } as any);
+      }
       setMessage({ type: 'success', text: 'Profile updated successfully' });
       setCurrentPassword(''); setNewPassword(''); setConfirmPassword('');
-      window.location.reload();
+      if (body.new_password) window.location.reload();
     } catch (err: any) {
       setMessage({ type: 'error', text: err.message || 'Failed to update profile' });
     } finally { setSaving(false); }
@@ -910,6 +922,20 @@ function ProfileTab() {
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Display Name</label>
             <input type="text" value={displayName} onChange={e => setDisplayName(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Timezone</label>
+            <select
+              value={timezone}
+              onChange={e => setTimezone(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white"
+            >
+              <option value="">Auto-detect ({Intl.DateTimeFormat().resolvedOptions().timeZone})</option>
+              {timezoneList.map(tz => (
+                <option key={tz.zone} value={tz.zone}>{tz.zone.replace(/_/g, ' ')} ({tz.abbreviation}, {tz.utc_offset})</option>
+              ))}
+            </select>
+            <p className="text-xs text-gray-400 mt-1">All timestamps across the app will display in this timezone</p>
           </div>
         </div>
       </div>

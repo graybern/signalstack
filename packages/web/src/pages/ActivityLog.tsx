@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { api } from '../api/client';
 import { useAuthContext } from '../App';
 import { permissions } from '../utils/permissions';
+import { timeAgo, formatDateTime } from '../utils/dates';
 import {
   History, ChevronDown, ChevronUp, RotateCcw, Filter,
   User, Target, Shield, Settings, Users, FileX,
@@ -107,18 +108,6 @@ export function ActivityLog() {
     return String(val);
   };
 
-  const timeAgo = (dateStr: string): string => {
-    const diff = Date.now() - new Date(dateStr).getTime();
-    const mins = Math.floor(diff / 60000);
-    if (mins < 1) return 'just now';
-    if (mins < 60) return `${mins}m ago`;
-    const hours = Math.floor(mins / 60);
-    if (hours < 24) return `${hours}h ago`;
-    const days = Math.floor(hours / 24);
-    if (days < 7) return `${days}d ago`;
-    return new Date(dateStr).toLocaleDateString();
-  };
-
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
@@ -191,7 +180,7 @@ export function ActivityLog() {
                       )}
                     </div>
                     <p className="text-xs text-gray-400 mt-0.5">
-                      {timeAgo(entry.created_at)} &middot; {new Date(entry.created_at).toLocaleString()}
+                      {timeAgo(entry.created_at)} &middot; {formatDateTime(entry.created_at)}
                     </p>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { api, setToken, clearToken } from '../api/client';
+import { setUserTimezone } from '../utils/dates';
 
 interface User {
   id: string;
@@ -7,6 +8,7 @@ interface User {
   display_name: string;
   role: 'superadmin' | 'admin' | 'operator' | 'member' | 'viewer';
   must_change_password?: boolean;
+  timezone?: string | null;
 }
 
 export function useAuth() {
@@ -18,18 +20,23 @@ export function useAuth() {
     if (!token) { setLoading(false); return; }
 
     api<User>('/auth/me')
-      .then(setUser)
+      .then(u => {
+        setUser(u);
+        if (u.timezone) setUserTimezone(u.timezone);
+      })
       .catch(() => clearToken())
       .finally(() => setLoading(false));
   }, []);
 
   const login = useCallback(async (email: string, password: string) => {
+    const browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
     const data = await api<{ token: string; user: User }>('/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ email, password, timezone: browserTz }),
     });
     setToken(data.token);
     setUser(data.user);
+    if (data.user.timezone) setUserTimezone(data.user.timezone);
     return data.user;
   }, []);
 

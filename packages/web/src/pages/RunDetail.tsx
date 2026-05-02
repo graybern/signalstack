@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { api } from '../api/client';
+import { formatDateTime } from '../utils/dates';
 import {
   ArrowLeft, CheckCircle2, XCircle, Clock, Loader2,
   Users, TrendingUp, DollarSign, Target, ExternalLink,
@@ -154,7 +155,7 @@ export function RunDetail() {
                   {status.label}
                 </span>
                 {run.triggered_by_name && <span>by {run.triggered_by_name}</span>}
-                <span>{new Date(run.created_at).toLocaleString()}</span>
+                <span>{formatDateTime(run.created_at)}</span>
               </div>
             </div>
           </div>

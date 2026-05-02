@@ -247,6 +247,7 @@ router.get('/:id/config', authenticate, (req: AuthRequest, res: Response) => {
     source_overrides: parsed.source_overrides,
     schedule_cron: parsed.schedule_cron,
     schedule_enabled: parsed.schedule_enabled,
+    schedule_timezone: parsed.schedule_timezone,
     exclusion_config: parsed.exclusion_config,
     rss_enabled: parsed.rss_enabled,
     funnel_config: parsed.funnel_config,
@@ -266,6 +267,7 @@ router.put('/:id/config', authenticate, requireOperator, (req: AuthRequest, res:
     `UPDATE campaigns SET
       icp_overrides = ?, pipeline_overrides = ?, prompt_overrides = ?,
       source_overrides = ?, schedule_cron = ?, schedule_enabled = ?,
+      schedule_timezone = ?,
       exclusion_config = ?, rss_enabled = ?, funnel_config = ?,
       notification_destinations = ?, notification_base_url = ?,
       updated_at = datetime('now')
@@ -277,6 +279,7 @@ router.put('/:id/config', authenticate, requireOperator, (req: AuthRequest, res:
     body.source_overrides ? JSON.stringify(body.source_overrides) : null,
     body.schedule_cron || null,
     body.schedule_enabled ? 1 : 0,
+    body.schedule_timezone || null,
     body.exclusion_config ? JSON.stringify(body.exclusion_config) : null,
     body.rss_enabled ? 1 : 0,
     body.funnel_config ? JSON.stringify(body.funnel_config) : null,
@@ -302,7 +305,7 @@ router.put('/:id/config', authenticate, requireOperator, (req: AuthRequest, res:
 
   // Update campaign scheduler when schedule changes
   if (body.schedule_enabled && body.schedule_cron) {
-    registerCampaignCron(req.params.id, updated?.name || '', body.schedule_cron);
+    registerCampaignCron(req.params.id, updated?.name || '', body.schedule_cron, body.schedule_timezone || undefined);
   } else {
     unregisterCampaignCron(req.params.id);
   }

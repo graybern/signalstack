@@ -85,7 +85,7 @@ router.post('/register', (req: AuthRequest, res: Response) => {
 });
 
 router.post('/login', (req: AuthRequest, res: Response) => {
-  const { email, password } = req.body;
+  const { email, password, timezone } = req.body;
   if (!email || !password) {
     return res.status(400).json({ error: 'email and password required' });
   }
@@ -100,7 +100,11 @@ router.post('/login', (req: AuthRequest, res: Response) => {
     return res.status(403).json({ error: 'Account suspended. Contact your administrator.' });
   }
 
-  db.prepare("UPDATE users SET last_login_at = datetime('now') WHERE id = ?").run(user.id);
+  if (timezone) {
+    db.prepare("UPDATE users SET last_login_at = datetime('now'), timezone = ? WHERE id = ?").run(timezone, user.id);
+  } else {
+    db.prepare("UPDATE users SET last_login_at = datetime('now') WHERE id = ?").run(user.id);
+  }
 
   const token = jwt.sign({ userId: user.id }, config.jwtSecret, { expiresIn: '7d' });
   res.json({
@@ -108,6 +112,7 @@ router.post('/login', (req: AuthRequest, res: Response) => {
     user: {
       id: user.id, email: user.email, display_name: user.display_name,
       role: user.role, must_change_password: !!user.must_change_password,
+      timezone: timezone || user.timezone || null,
     },
   });
 });
@@ -117,6 +122,7 @@ router.get('/me', authenticate, (req: AuthRequest, res: Response) => {
   res.json({
     id: u.id, email: u.email, display_name: u.display_name,
     role: u.role, must_change_password: !!u.must_change_password,
+    timezone: u.timezone || null,
   });
 });
 

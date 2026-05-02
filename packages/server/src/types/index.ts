@@ -9,6 +9,7 @@ export interface User {
   status: 'active' | 'suspended';
   must_change_password: number;
   last_login_at: string | null;
+  timezone: string | null;
   created_at: string;
 }
 
@@ -207,6 +208,7 @@ export interface Campaign {
   source_overrides: string | null;
   schedule_cron: string | null;
   schedule_enabled: number;
+  schedule_timezone: string | null;
   exclusion_config: string | null;
   rss_enabled: number;
   funnel_config: string | null;
@@ -350,6 +352,7 @@ export interface CampaignParsed {
   source_overrides: Record<string, any> | null;
   schedule_cron: string | null;
   schedule_enabled: number;
+  schedule_timezone: string | null;
   exclusion_config: CampaignExclusionConfig | null;
   rss_enabled: number;
   funnel_config: FunnelConfig | null;

@@ -207,7 +207,7 @@ function executeQualifyStep(
   return qualified;
 }
 
-export async function runCampaign(campaignId: string, triggeredBy: string, requestedSteps?: string[]): Promise<string> {
+export async function runCampaign(campaignId: string, triggeredBy: string | null, requestedSteps?: string[]): Promise<string> {
   const db = getDb();
   const runId = uuidv4();
 
@@ -287,7 +287,7 @@ export async function runCampaign(campaignId: string, triggeredBy: string, reque
       campaign_id: campaignId,
       campaign_name: campaign.name,
       run_id: runId,
-      triggered_by: triggeredBy,
+      triggered_by: triggeredBy || 'system',
     });
 
     const stepModels = activeSteps.filter(s => s.model).map(s => `${s.id}:${s.model}`).join(', ') || defaultModel;

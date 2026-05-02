@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api/client';
+import { timeAgo as timeAgoUtil, formatDate, formatDateShort } from '../utils/dates';
 import { useEventStream } from '../hooks/useEventStream';
 import {
   Activity,
@@ -393,7 +394,7 @@ export function Dashboard() {
                 <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
                 <Tooltip
                   contentStyle={{ fontSize: 12, borderRadius: 8 }}
-                  labelFormatter={d => new Date(d).toLocaleDateString()}
+                  labelFormatter={d => formatDate(d)}
                   formatter={(value: any, name: any) => [
                     name === 'count' ? value : Math.round(value),
                     name === 'count' ? 'Leads' : 'Avg Score',
@@ -733,7 +734,7 @@ function RunPill({ run, progress }: { run: Run; progress?: { phase?: string; ste
             {run.lead_count > 0 && (
               <span className="text-xs font-medium text-gray-600">{run.lead_count} leads</span>
             )}
-            <span className="text-[10px] text-gray-400">{timeAgo(run.completed_at || run.created_at)}</span>
+            <span className="text-[10px] text-gray-400">{timeAgoUtil(run.completed_at || run.created_at)}</span>
           </div>
         )}
       </div>
@@ -756,14 +757,14 @@ function RunTrendsCharts() {
 
   const scoreData = trends.map(t => ({
     name: t.campaign_name ? t.campaign_name.substring(0, 20) : 'Run',
-    date: new Date(t.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+    date: formatDateShort(t.created_at),
     avg_score: Math.round(t.avg_score || 0),
     leads: t.lead_count || 0,
   }));
 
   const costData = trends.map(t => ({
     name: t.campaign_name ? t.campaign_name.substring(0, 20) : 'Run',
-    date: new Date(t.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+    date: formatDateShort(t.created_at),
     cost: Math.round((t.estimated_cost || 0) * 1000) / 1000,
     leads: t.lead_count || 0,
   }));
@@ -978,14 +979,3 @@ function TopVerticalsWidget() {
   );
 }
 
-function timeAgo(dateStr: string): string {
-  const diff = Date.now() - new Date(dateStr).getTime();
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1) return 'just now';
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  const days = Math.floor(hrs / 24);
-  if (days < 7) return `${days}d ago`;
-  return new Date(dateStr).toLocaleDateString();
-}

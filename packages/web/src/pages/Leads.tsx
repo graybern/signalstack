@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api/client';
 import { useAuth } from '../hooks/useAuth';
+import { formatDate, formatTime } from '../utils/dates';
 import {
   Search,
   ChevronDown,
@@ -265,7 +266,7 @@ export function Leads() {
         .filter((r: any) => r.lead_count > 0)
         .map((r: any) => ({
           id: r.id,
-          label: `${new Date(r.created_at).toLocaleDateString()} ${new Date(r.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} — ${r.lead_count} leads`,
+          label: `${formatDate(r.created_at)} ${formatTime(r.created_at)} — ${r.lead_count} leads`,
           lead_count: r.lead_count,
           status: r.status,
         }));
@@ -714,11 +715,11 @@ export function Leads() {
                         </span>
                       )}
                       {feedback === 'good_fit_try_again' && lead.next_outreach_date && (
-                        <p className="text-xs text-amber-600 mt-0.5">{new Date(lead.next_outreach_date).toLocaleDateString()}</p>
+                        <p className="text-xs text-amber-600 mt-0.5">{formatDate(lead.next_outreach_date)}</p>
                       )}
                     </td>
                     <td className="px-4 py-3 text-xs text-gray-500">
-                      {new Date(lead.created_at).toLocaleDateString()}
+                      {formatDate(lead.created_at)}
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1">

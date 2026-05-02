@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
+import { formatDate } from '../utils/dates';
 import { ScoreBadge, ScoreLabel, ConfidenceBadge, SegmentBadge } from '../components/ScoreBadge';
 import {
   ArrowLeft, ExternalLink, Building2, Users, MapPin, Globe, Calendar,
@@ -377,7 +378,7 @@ export function LeadDetail() {
                 {latestFeedback.retry_date && (
                   <p className="text-xs mt-1 flex items-center gap-1">
                     <Clock className="w-3 h-3" />
-                    Re-outreach: {new Date(latestFeedback.retry_date).toLocaleDateString()}
+                    Re-outreach: {formatDate(latestFeedback.retry_date)}
                   </p>
                 )}
               </div>
@@ -457,7 +458,7 @@ export function LeadDetail() {
                           <span className="font-medium text-gray-700">{FEEDBACK_LABELS[f.verdict] || f.verdict}</span>
                           {f.reason && <span className="text-gray-500"> — {f.reason}</span>}
                           {f.created_at && (
-                            <p className="text-gray-400">{new Date(f.created_at).toLocaleDateString()}</p>
+                            <p className="text-gray-400">{formatDate(f.created_at)}</p>
                           )}
                         </div>
                       </div>

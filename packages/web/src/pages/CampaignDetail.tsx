@@ -2,6 +2,7 @@ import { useEffect, useState, useMemo, useRef } from 'react';
 import { useParams, Link, useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
 import { useAuthContext } from '../App';
+import { formatDate, formatDateTime, formatDateShort } from '../utils/dates';
 import {
   ArrowLeft, Play, Edit, Users, TrendingUp, Target, ChevronDown, ChevronUp,
   Layers, Settings, Clock, Shield, Rss, Copy, Check, Calendar,
@@ -46,6 +47,7 @@ interface CampaignFull {
   leads: any[];
   schedule_cron: string | null;
   schedule_enabled: number;
+  schedule_timezone: string | null;
   exclusion_config: { additions: any[]; exemptions: string[] } | null;
   rss_enabled: number;
   funnel_config: {
@@ -106,21 +108,28 @@ export function CampaignDetail() {
   const [editConfig, setEditConfig] = useState<{
     schedule_cron: string;
     schedule_enabled: boolean;
+    schedule_timezone: string;
     exclusion_config: { additions: any[]; exemptions: string[] } | null;
     rss_enabled: boolean;
     funnel_config: any | null;
     notification_destinations: any[];
     notification_base_url: string;
   }>({
-    schedule_cron: '', schedule_enabled: false, exclusion_config: null, rss_enabled: false,
+    schedule_cron: '', schedule_enabled: false, schedule_timezone: '', exclusion_config: null, rss_enabled: false,
     funnel_config: null, notification_destinations: [], notification_base_url: '',
   });
   const [globalExclusions, setGlobalExclusions] = useState<{ id: string; company_name: string; domain: string | null }[]>([]);
 
-  // Server timezone for schedule display
+  // Server timezone + timezone list for schedule display
   const [serverTzAbbr, setServerTzAbbr] = useState('');
+  const [serverTzName, setServerTzName] = useState('');
+  const [timezoneList, setTimezoneList] = useState<{ zone: string; abbreviation: string; utc_offset: string }[]>([]);
   useEffect(() => {
-    api('/settings/timezone').then((data: any) => setServerTzAbbr(data.abbreviation || '')).catch(() => {});
+    api('/settings/timezone').then((data: any) => {
+      setServerTzAbbr(data.abbreviation || '');
+      setServerTzName(data.timezone || '');
+      setTimezoneList(data.timezones || []);
+    }).catch(() => {});
   }, []);
 
   // Analytics
@@ -140,6 +149,7 @@ export function CampaignDetail() {
         setEditConfig({
           schedule_cron: data.schedule_cron || '',
           schedule_enabled: !!data.schedule_enabled,
+          schedule_timezone: data.schedule_timezone || '',
           exclusion_config: data.exclusion_config,
           rss_enabled: !!data.rss_enabled,
           funnel_config: data.funnel_config || null,
@@ -277,6 +287,7 @@ export function CampaignDetail() {
         body: JSON.stringify({
           schedule_cron: editConfig.schedule_cron || null,
           schedule_enabled: editConfig.schedule_enabled,
+          schedule_timezone: editConfig.schedule_timezone || null,
           exclusion_config: editConfig.exclusion_config,
           rss_enabled: editConfig.rss_enabled,
           funnel_config: editConfig.funnel_config,
@@ -414,12 +425,12 @@ export function CampaignDetail() {
               <>
                 <span className={`inline-block w-2 h-2 rounded-full mr-1.5 ${lastRun.status === 'completed' ? 'bg-green-500' : lastRun.status === 'failed' ? 'bg-red-500' : 'bg-yellow-500'}`} />
                 {lastRun.status === 'completed' ? `${lastRun.lead_count} leads` : lastRun.status}
-                <span className="text-xs text-gray-400 ml-1">{lastRun.completed_at ? new Date(lastRun.completed_at).toLocaleDateString() : ''}</span>
+                <span className="text-xs text-gray-400 ml-1">{lastRun.completed_at ? formatDate(lastRun.completed_at) : ''}</span>
               </>
             ) : '—'}
           </p>
         </div>
-        <StatCard icon={Calendar} label="Schedule" value={campaign.schedule_enabled && campaign.schedule_cron ? `${describeCron(campaign.schedule_cron)}${serverTzAbbr ? ` ${serverTzAbbr}` : ''}` : 'Not scheduled'} small />
+        <StatCard icon={Calendar} label="Schedule" value={campaign.schedule_enabled && campaign.schedule_cron ? `${describeCron(campaign.schedule_cron)} ${tzAbbrFor(campaign.schedule_timezone, timezoneList, serverTzAbbr)}` : 'Not scheduled'} small />
       </div>
 
       {/* AI Output Console — live streaming */}
@@ -524,6 +535,8 @@ export function CampaignDetail() {
           orgICP={orgICP}
           onRunStep={(stepId) => triggerRun([stepId])}
           serverTzAbbr={serverTzAbbr}
+          serverTzName={serverTzName}
+          timezoneList={timezoneList}
         />
       )}
     </div>
@@ -798,7 +811,7 @@ function LeadsTab({
                       </span>
                     )}
                   </td>
-                  <td className="px-4 py-3 text-xs text-gray-500">{new Date(lead.created_at).toLocaleDateString()}</td>
+                  <td className="px-4 py-3 text-xs text-gray-500">{formatDate(lead.created_at)}</td>
                 </tr>
               );
             })}
@@ -868,7 +881,7 @@ function RunsTab({
                   </span>
                 )}
                 <span>
-                  {run.completed_at ? new Date(run.completed_at).toLocaleString() : run.started_at ? new Date(run.started_at).toLocaleString() : ''}
+                  {run.completed_at ? formatDateTime(run.completed_at) : run.started_at ? formatDateTime(run.started_at) : ''}
                 </span>
                 <div className="flex items-center gap-1">
                   {run.status === 'running' ? (
@@ -941,7 +954,7 @@ function ConfigureTab({
   campaign, setCampaign, editConfig, setEditConfig, configTab, setConfigTab,
   configDirty, setConfigDirty, saveConfig, globalExclusions,
   campaignId, canEdit, canEditPipeline, canEditSchedule, canEditExclusions,
-  orgICP, onRunStep, serverTzAbbr,
+  orgICP, onRunStep, serverTzAbbr, serverTzName, timezoneList,
 }: {
   campaign: CampaignFull;
   setCampaign: (c: CampaignFull) => void;
@@ -961,6 +974,8 @@ function ConfigureTab({
   orgICP?: { verticals: string[]; tech_signals: string[]; competitors: string[] };
   onRunStep?: (stepId: string) => void;
   serverTzAbbr: string;
+  serverTzName: string;
+  timezoneList: { zone: string; abbreviation: string; utc_offset: string }[];
 }) {
   const configTabs = [
     { key: 'definition' as const, label: 'Definition', icon: Target },
@@ -991,7 +1006,7 @@ function ConfigureTab({
           </div>
           <div>
             <span className="text-xs text-gray-500">Schedule</span>
-            <p className="font-medium text-gray-900">{campaign.schedule_enabled && campaign.schedule_cron ? `${describeCron(campaign.schedule_cron)}${serverTzAbbr ? ` ${serverTzAbbr}` : ''}` : 'Off'}</p>
+            <p className="font-medium text-gray-900">{campaign.schedule_enabled && campaign.schedule_cron ? `${describeCron(campaign.schedule_cron)} ${tzAbbrFor(campaign.schedule_timezone, timezoneList, serverTzAbbr)}` : 'Off'}</p>
           </div>
           <div>
             <span className="text-xs text-gray-500">Exclusions</span>
@@ -1057,7 +1072,7 @@ function ConfigureTab({
           {/* Schedule */}
           {configTab === 'schedule' && (
             canEditSchedule ? (
-              <ScheduleTab editConfig={editConfig} setEditConfig={setEditConfig} setConfigDirty={setConfigDirty} serverTzAbbr={serverTzAbbr} />
+              <ScheduleTab editConfig={editConfig} setEditConfig={setEditConfig} setConfigDirty={setConfigDirty} serverTzAbbr={serverTzAbbr} serverTzName={serverTzName} timezoneList={timezoneList} />
             ) : (
               <div className="text-center py-8 text-sm text-gray-400">You don't have permission to edit the schedule.</div>
             )
@@ -1871,7 +1886,13 @@ const DAYS_OF_WEEK = [
   { value: '0', label: 'Sun' },
 ];
 
-function ScheduleTab({ editConfig, setEditConfig, setConfigDirty, serverTzAbbr }: { editConfig: any; setEditConfig: (c: any) => void; setConfigDirty: (d: boolean) => void; serverTzAbbr: string }) {
+function tzAbbrFor(campaignTz: string | null | undefined, timezoneList: { zone: string; abbreviation: string; utc_offset: string }[], serverTzAbbr: string): string {
+  if (!campaignTz) return serverTzAbbr;
+  const match = timezoneList.find(t => t.zone === campaignTz);
+  return match ? match.abbreviation : campaignTz;
+}
+
+function ScheduleTab({ editConfig, setEditConfig, setConfigDirty, serverTzAbbr, serverTzName, timezoneList }: { editConfig: any; setEditConfig: (c: any) => void; setConfigDirty: (d: boolean) => void; serverTzAbbr: string; serverTzName: string; timezoneList: { zone: string; abbreviation: string; utc_offset: string }[] }) {
   const parseCronParts = (cron: string) => {
     const parts = cron.split(/\s+/);
     if (parts.length < 5) return { minute: '0', hour: '9', days: [] as string[] };
@@ -1950,17 +1971,27 @@ function ScheduleTab({ editConfig, setEditConfig, setConfigDirty, serverTzAbbr }
           <select value={minute} onChange={e => setTime(hour, e.target.value)} className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white">
             {['0', '15', '30', '45'].map(m => <option key={m} value={m}>{m.padStart(2, '0')}</option>)}
           </select>
-          {serverTzAbbr && (
-            <span className="text-xs text-gray-400 font-medium">{serverTzAbbr}</span>
-          )}
         </div>
+      </div>
+      <div>
+        <label className="block text-xs text-gray-500 mb-2">Timezone</label>
+        <select
+          value={editConfig.schedule_timezone || ''}
+          onChange={e => { setEditConfig({ ...editConfig, schedule_timezone: e.target.value }); setConfigDirty(true); }}
+          className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white"
+        >
+          <option value="">Server default ({serverTzAbbr || serverTzName})</option>
+          {timezoneList.map(tz => (
+            <option key={tz.zone} value={tz.zone}>{tz.zone.replace(/_/g, ' ')} ({tz.abbreviation}, {tz.utc_offset})</option>
+          ))}
+        </select>
       </div>
       {editConfig.schedule_cron && (
         <div className="bg-brand-50 border border-brand-100 rounded-lg p-3 flex items-center gap-2">
           <Clock className="w-4 h-4 text-brand-600 flex-shrink-0" />
           <span className="text-sm text-brand-800 font-medium">
             {describeCron(editConfig.schedule_cron)}
-            {serverTzAbbr && <span className="text-brand-500 font-normal"> ({serverTzAbbr})</span>}
+            <span className="text-brand-500 font-normal"> ({tzAbbrFor(editConfig.schedule_timezone, timezoneList, serverTzAbbr)})</span>
           </span>
         </div>
       )}
@@ -2058,9 +2089,9 @@ function CampaignAnalytics({ data }: { data: any }) {
             <ResponsiveContainer width="100%" height={200}>
               <LineChart data={score_trends}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                <XAxis dataKey="date" tickFormatter={(d: string) => new Date(d).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} tick={{ fontSize: 10 }} />
+                <XAxis dataKey="date" tickFormatter={(d: string) => formatDateShort(d)} tick={{ fontSize: 10 }} />
                 <YAxis domain={[0, 100]} tick={{ fontSize: 10 }} />
-                <Tooltip contentStyle={{ fontSize: 12 }} labelFormatter={(d: any) => new Date(d).toLocaleDateString()} formatter={(v: any, name: any) => [v, name === 'avg_score' ? 'Avg Score' : name]} />
+                <Tooltip contentStyle={{ fontSize: 12 }} labelFormatter={(d: any) => formatDate(d)} formatter={(v: any, name: any) => [v, name === 'avg_score' ? 'Avg Score' : name]} />
                 <Line type="monotone" dataKey="avg_score" stroke="#6366f1" strokeWidth={2} dot={{ r: 3 }} />
                 <Line type="monotone" dataKey="max_score" stroke="#10b981" strokeWidth={1} strokeDasharray="4 2" dot={false} />
                 <Line type="monotone" dataKey="min_score" stroke="#ef4444" strokeWidth={1} strokeDasharray="4 2" dot={false} />
@@ -2077,9 +2108,9 @@ function CampaignAnalytics({ data }: { data: any }) {
             <ResponsiveContainer width="100%" height={200}>
               <BarChart data={score_trends}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                <XAxis dataKey="date" tickFormatter={(d: string) => new Date(d).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} tick={{ fontSize: 10 }} />
+                <XAxis dataKey="date" tickFormatter={(d: string) => formatDateShort(d)} tick={{ fontSize: 10 }} />
                 <YAxis tick={{ fontSize: 10 }} />
-                <Tooltip contentStyle={{ fontSize: 12 }} labelFormatter={(d: any) => new Date(d).toLocaleDateString()} />
+                <Tooltip contentStyle={{ fontSize: 12 }} labelFormatter={(d: any) => formatDate(d)} />
                 <Bar dataKey="lead_count" fill="#6366f1" radius={[4, 4, 0, 0]} name="Leads" />
               </BarChart>
             </ResponsiveContainer>
@@ -2110,9 +2141,9 @@ function CampaignAnalytics({ data }: { data: any }) {
             <ResponsiveContainer width="100%" height={200}>
               <LineChart data={score_trends}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                <XAxis dataKey="date" tickFormatter={(d: string) => new Date(d).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} tick={{ fontSize: 10 }} />
+                <XAxis dataKey="date" tickFormatter={(d: string) => formatDateShort(d)} tick={{ fontSize: 10 }} />
                 <YAxis tick={{ fontSize: 10 }} tickFormatter={(v: number) => `$${v.toFixed(2)}`} />
-                <Tooltip contentStyle={{ fontSize: 12 }} labelFormatter={(d: any) => new Date(d).toLocaleDateString()} formatter={(v: any) => [`$${(v as number).toFixed(2)}`, 'Cost']} />
+                <Tooltip contentStyle={{ fontSize: 12 }} labelFormatter={(d: any) => formatDate(d)} formatter={(v: any) => [`$${(v as number).toFixed(2)}`, 'Cost']} />
                 <Line type="monotone" dataKey="cost" stroke="#f59e0b" strokeWidth={2} dot={{ r: 3 }} />
               </LineChart>
             </ResponsiveContainer>

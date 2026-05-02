@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api/client';
+import { formatDateTime, formatDateTimeWithWeekday, formatTime } from '../utils/dates';
 import { useAuth } from '../hooks/useAuth';
 import {
   Clock, CheckCircle, XCircle, AlertCircle, RefreshCw, Target,
@@ -394,19 +395,19 @@ export function RunHistory() {
                 )}
                 {u.is_overdue && u.missed_count === 0 && (
                   <p className="text-xs text-red-600 font-medium mb-1">
-                    Overdue — expected {u.last_expected_at ? new Date(u.last_expected_at).toLocaleString() : 'earlier'}
+                    Overdue — expected {u.last_expected_at ? formatDateTime(u.last_expected_at) : 'earlier'}
                   </p>
                 )}
                 <div className="flex items-center justify-between">
                   <p className="text-xs text-gray-500 font-mono">{u.schedule_cron}</p>
                   {u.next_run_at && (
                     <p className="text-[10px] text-gray-500">
-                      Next: {new Date(u.next_run_at).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+                      Next: {formatDateTimeWithWeekday(u.next_run_at)}
                     </p>
                   )}
                 </div>
                 {u.last_run_at && (
-                  <p className="text-[10px] text-gray-400 mt-1">Last run: {new Date(u.last_run_at).toLocaleString()} ({u.last_run_status})</p>
+                  <p className="text-[10px] text-gray-400 mt-1">Last run: {formatDateTime(u.last_run_at)} ({u.last_run_status})</p>
                 )}
               </Link>
             ))}
@@ -612,7 +613,7 @@ function ActiveRunCard({ run, liveProgress, onViewActivity }: { run: Run; livePr
             </div>
           )}
           <p className="text-xs text-gray-500 mt-1">
-            Started {run.started_at ? new Date(run.started_at).toLocaleTimeString() : '—'}
+            Started {run.started_at ? formatTime(run.started_at) : '—'}
             {run.triggered_by_name && ` by ${run.triggered_by_name}`}
           </p>
         </div>
@@ -709,7 +710,7 @@ function CompletedRunRow({ run, expanded, leads, loadingLeads, onToggle, onViewL
         <td className="px-3 py-3 text-gray-500 text-xs font-mono">{totalTokens > 0 ? formatTokens(totalTokens) : '—'}</td>
         <td className="px-3 py-3 text-gray-500 text-xs">{run.estimated_cost > 0 ? `$${run.estimated_cost.toFixed(2)}` : '—'}</td>
         <td className="px-3 py-3 text-gray-500 text-xs">{duration}</td>
-        <td className="px-3 py-3 text-gray-500 text-xs">{run.started_at ? new Date(run.started_at).toLocaleString() : '—'}</td>
+        <td className="px-3 py-3 text-gray-500 text-xs">{run.started_at ? formatDateTime(run.started_at) : '—'}</td>
         <td className="px-3 py-3 text-gray-500 text-xs">{run.triggered_by_name || 'System'}</td>
         <td className="px-3 py-3">
           <div className="flex items-center gap-1">

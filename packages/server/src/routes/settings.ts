@@ -222,7 +222,7 @@ router.put('/keys', authenticate, requireAdmin, (req: AuthRequest, res: Response
   res.json({ success: true });
 });
 
-// GET /settings/timezone — Returns server timezone for schedule display
+// GET /settings/timezone — Returns server timezone + list for schedule display
 router.get('/timezone', authenticate, (_req: AuthRequest, res: Response) => {
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const abbr = new Date().toLocaleTimeString('en-US', { timeZoneName: 'short' }).split(' ').pop() || '';
@@ -231,7 +231,49 @@ router.get('/timezone', authenticate, (_req: AuthRequest, res: Response) => {
   const absH = Math.floor(Math.abs(offset) / 60);
   const absM = Math.abs(offset) % 60;
   const utcOffset = `UTC${sign}${absH}${absM ? ':' + String(absM).padStart(2, '0') : ''}`;
-  res.json({ timezone: tz, abbreviation: abbr, utc_offset: utcOffset });
+
+  const timezones = [
+    'UTC',
+    'America/New_York',
+    'America/Chicago',
+    'America/Denver',
+    'America/Los_Angeles',
+    'America/Anchorage',
+    'Pacific/Honolulu',
+    'America/Phoenix',
+    'America/Toronto',
+    'America/Vancouver',
+    'Europe/London',
+    'Europe/Berlin',
+    'Europe/Paris',
+    'Asia/Tokyo',
+    'Asia/Shanghai',
+    'Asia/Kolkata',
+    'Asia/Singapore',
+    'Australia/Sydney',
+    'Pacific/Auckland',
+  ];
+
+  const timezoneList = timezones.map(zone => {
+    const now = new Date();
+    const formatter = new Intl.DateTimeFormat('en-US', { timeZone: zone, timeZoneName: 'short' });
+    const parts = formatter.formatToParts(now);
+    const zoneAbbr = parts.find(p => p.type === 'timeZoneName')?.value || '';
+    const offsetMs = getTimezoneOffsetMs(zone, now);
+    const offSign = offsetMs >= 0 ? '+' : '-';
+    const offH = Math.floor(Math.abs(offsetMs) / 3600000);
+    const offM = Math.floor((Math.abs(offsetMs) % 3600000) / 60000);
+    const utcOff = `UTC${offSign}${offH}${offM ? ':' + String(offM).padStart(2, '0') : ''}`;
+    return { zone, abbreviation: zoneAbbr, utc_offset: utcOff };
+  });
+
+  res.json({ timezone: tz, abbreviation: abbr, utc_offset: utcOffset, timezones: timezoneList });
 });
+
+function getTimezoneOffsetMs(zone: string, date: Date): number {
+  const utcStr = date.toLocaleString('en-US', { timeZone: 'UTC' });
+  const zoneStr = date.toLocaleString('en-US', { timeZone: zone });
+  return new Date(zoneStr).getTime() - new Date(utcStr).getTime();
+}
 
 export default router;

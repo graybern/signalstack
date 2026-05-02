@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { api } from '../api/client';
 import { useAuthContext } from '../App';
+import { formatDate } from '../utils/dates';
 import { LeadCard } from '../components/LeadCard';
 import {
   Upload, Plus, Webhook, FileSpreadsheet, CheckCircle, XCircle, Loader2,
@@ -147,7 +148,7 @@ export function Inbound() {
                     <td className="px-4 py-3 text-gray-700">{imp.processed_count}</td>
                     <td className="px-4 py-3"><span className="text-emerald-700 font-medium">{imp.qualified_count}</span></td>
                     <td className="px-4 py-3"><ImportStatusBadge status={imp.status} /></td>
-                    <td className="px-4 py-3 text-gray-500 text-xs">{new Date(imp.created_at).toLocaleDateString()}</td>
+                    <td className="px-4 py-3 text-gray-500 text-xs">{formatDate(imp.created_at)}</td>
                     <td className="px-4 py-3">
                       <button onClick={() => viewImport(imp.id)} className="flex items-center gap-1 text-xs text-brand-600 hover:text-brand-700">
                         View <ArrowRight className="w-3 h-3" />
@@ -641,7 +642,7 @@ function EnrichmentConfigTab() {
                   <span className="text-[10px] text-gray-400">+{(t.output_format?.fields || []).length - 5} more</span>
                 )}
               </div>
-              <p className="text-[10px] text-gray-400 mt-2">{new Date(t.created_at).toLocaleDateString()}</p>
+              <p className="text-[10px] text-gray-400 mt-2">{formatDate(t.created_at)}</p>
             </div>
           ))}
         </div>

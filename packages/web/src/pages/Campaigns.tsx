@@ -5,6 +5,7 @@ import { useAuthContext } from '../App';
 import { useEventStream } from '../hooks/useEventStream';
 import { Target, Plus, Play, Users, TrendingUp, Clock, ChevronRight } from 'lucide-react';
 import { permissions } from '../utils/permissions';
+import { formatDate } from '../utils/dates';
 
 interface CampaignSummary {
   id: string;
@@ -218,7 +219,7 @@ export function Campaigns() {
                         {c.last_run && (
                           <span className="flex items-center gap-1">
                             <Clock className="w-3.5 h-3.5" />
-                            Last run: {new Date(c.last_run.completed_at || c.last_run.created_at).toLocaleDateString()}
+                            Last run: {formatDate(c.last_run.completed_at || c.last_run.created_at)}
                           </span>
                         )}
                         <span>{c.target_categories.length} categories</span>

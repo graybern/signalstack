@@ -5,6 +5,7 @@ import { v4 as uuid } from 'uuid';
 import { getDb } from '../db/schema.js';
 import { authenticate, requireAdmin, requireSuperAdmin, hasRole, AuthRequest } from '../auth/middleware.js';
 import { logActivity } from '../services/activityLog.js';
+import { PERMISSIONS, ALL_PERMISSIONS, DEFAULT_ROLE_PERMISSIONS, getRolePermissions, getPermissionCategories } from '../auth/permissions.js';
 import type { UserRole } from '../types/index.js';
 
 const router = Router();
@@ -233,42 +234,99 @@ router.put('/profile', authenticate, (req: AuthRequest, res: Response) => {
   res.json(updated);
 });
 
-// GET /roles — List available roles and permissions (any authenticated user)
+// GET /roles — List roles with their current permissions (any authenticated user)
 router.get('/roles', authenticate, (_req: AuthRequest, res: Response) => {
+  const ROLE_META: Record<string, { label: string; description: string }> = {
+    superadmin: { label: 'Super Admin', description: 'Ultimate authority — manages admins, system-wide settings' },
+    admin:      { label: 'Admin',       description: 'Full access — user management, system settings, API keys' },
+    operator:   { label: 'Operator',    description: 'Configure ICP, prompts, data sources, exclusions, campaigns' },
+    member:     { label: 'Member',      description: 'Run campaigns, import leads, provide feedback, export data' },
+    viewer:     { label: 'Viewer',      description: 'Read-only access to leads, briefs, dashboards, run history' },
+  };
+
+  const roles = VALID_ROLES.map(role => ({
+    role,
+    label: ROLE_META[role]?.label || role,
+    description: ROLE_META[role]?.description || '',
+    permissions: getRolePermissions(role as UserRole),
+  }));
+
   res.json({
-    roles: [
-      {
-        role: 'superadmin',
-        label: 'Super Admin',
-        description: 'Ultimate authority — manages admins, system-wide settings, cannot be demoted by admins',
-        permissions: ['*', 'manage_admins'],
-      },
-      {
-        role: 'admin',
-        label: 'Admin',
-        description: 'Full access — user management, system settings, webhooks, API keys',
-        permissions: ['*'],
-      },
-      {
-        role: 'operator',
-        label: 'Operator',
-        description: 'Configure ICP, prompts, data sources, exclusions, campaign settings',
-        permissions: ['read', 'run', 'configure'],
-      },
-      {
-        role: 'member',
-        label: 'Member',
-        description: 'Run campaigns, import leads, provide feedback, export data',
-        permissions: ['read', 'run'],
-      },
-      {
-        role: 'viewer',
-        label: 'Viewer',
-        description: 'Read-only access to leads, briefs, dashboards, and run history',
-        permissions: ['read'],
-      },
-    ],
+    roles,
+    permission_catalog: getPermissionCategories(),
+    all_permissions: ALL_PERMISSIONS,
   });
+});
+
+// PUT /roles/:role/permissions — Update a role's permissions (superadmin only)
+router.put('/roles/:role/permissions', authenticate, requireSuperAdmin, (req: AuthRequest, res: Response) => {
+  const { role } = req.params;
+  const { permissions } = req.body;
+
+  if (!VALID_ROLES.includes(role as UserRole)) {
+    return res.status(400).json({ error: `Invalid role: ${role}` });
+  }
+
+  if (!Array.isArray(permissions)) {
+    return res.status(400).json({ error: 'permissions must be an array' });
+  }
+
+  const invalid = permissions.filter((p: string) => !ALL_PERMISSIONS.includes(p));
+  if (invalid.length > 0) {
+    return res.status(400).json({ error: 'Invalid permissions', invalid });
+  }
+
+  const db = getDb();
+  const tx = db.transaction(() => {
+    db.prepare('DELETE FROM role_permissions WHERE role = ?').run(role);
+    const insert = db.prepare('INSERT INTO role_permissions (role, permission) VALUES (?, ?)');
+    for (const perm of permissions) {
+      insert.run(role, perm);
+    }
+  });
+  tx();
+
+  logActivity({
+    userId: req.user!.id,
+    entityType: 'role',
+    entityId: role,
+    entityTitle: role,
+    action: 'updated',
+    changes: { permissions: { new: permissions } },
+  });
+
+  res.json({ success: true, role, permissions });
+});
+
+// POST /roles/:role/reset-permissions — Reset a role to default permissions (superadmin only)
+router.post('/roles/:role/reset-permissions', authenticate, requireSuperAdmin, (req: AuthRequest, res: Response) => {
+  const { role } = req.params;
+
+  if (!VALID_ROLES.includes(role as UserRole)) {
+    return res.status(400).json({ error: `Invalid role: ${role}` });
+  }
+
+  const defaults = DEFAULT_ROLE_PERMISSIONS[role as UserRole] || [];
+  const db = getDb();
+  const tx = db.transaction(() => {
+    db.prepare('DELETE FROM role_permissions WHERE role = ?').run(role);
+    const insert = db.prepare('INSERT INTO role_permissions (role, permission) VALUES (?, ?)');
+    for (const perm of defaults) {
+      insert.run(role, perm);
+    }
+  });
+  tx();
+
+  logActivity({
+    userId: req.user!.id,
+    entityType: 'role',
+    entityId: role,
+    entityTitle: role,
+    action: 'reset_permissions',
+    changes: { permissions: { new: defaults } },
+  });
+
+  res.json({ success: true, role, permissions: defaults });
 });
 
 // ── Invite Management ─────────────────────────────────────────

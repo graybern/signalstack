@@ -1,8 +1,8 @@
 import { v4 as uuidv4 } from 'uuid';
 import { getDb } from '../db/schema.js';
 
-export type EntityType = 'campaign' | 'lead' | 'icp_config' | 'exclusion' | 'user' | 'setting' | 'import';
-export type ActionType = 'created' | 'updated' | 'deleted' | 'reverted';
+export type EntityType = 'campaign' | 'lead' | 'icp_config' | 'exclusion' | 'user' | 'setting' | 'import' | 'api_key' | 'role';
+export type ActionType = 'created' | 'updated' | 'deleted' | 'reverted' | 'revoked' | 'reset_permissions';
 
 export interface ActivityEntry {
   id: string;
@@ -11,7 +11,7 @@ export interface ActivityEntry {
   entity_id: string;
   entity_title: string | null;
   action: ActionType;
-  changes: Record<string, { old: unknown; new: unknown }> | null;
+  changes: Record<string, { old?: unknown; new: unknown }> | null;
   snapshot: Record<string, unknown> | null;
   created_at: string;
 }
@@ -22,7 +22,7 @@ interface LogActivityParams {
   entityId: string;
   entityTitle?: string;
   action: ActionType;
-  changes?: Record<string, { old: unknown; new: unknown }> | null;
+  changes?: Record<string, { old?: unknown; new: unknown }> | null;
   snapshot?: Record<string, unknown> | null;
 }
 

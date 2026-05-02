@@ -304,12 +304,12 @@ export function Dashboard() {
       {/* ═══ Section 1: Overview Stats — full width, prominent ═══ */}
       {overview && (
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-          <OverviewStat icon={<Users className="w-5 h-5 text-brand-600" />} label="Total Leads" value={overview.total_leads} accent="brand" />
-          <OverviewStat icon={<Target className="w-5 h-5 text-indigo-600" />} label="Campaigns" value={overview.active_campaigns} accent="indigo" />
-          <OverviewStat icon={<TrendingUp className="w-5 h-5 text-emerald-600" />} label="Avg Score" value={overview.avg_score ?? '—'} accent="emerald" />
-          <OverviewStat icon={<Play className="w-5 h-5 text-blue-600" />} label="Total Runs" value={overview.total_runs} accent="blue" />
-          <OverviewStat icon={<CheckCircle2 className="w-5 h-5 text-green-600" />} label="Success Rate" value={`${overview.success_rate}%`} accent="green" />
-          <OverviewStat icon={<BarChart3 className="w-5 h-5 text-amber-600" />} label="Feedback Rate" value={`${overview.feedback_rate}%`} accent="amber" />
+          <OverviewStat icon={<Users className="w-5 h-5 text-brand-600" />} label="Total Leads" value={overview.total_leads} accent="brand" to="/leads" />
+          <OverviewStat icon={<Target className="w-5 h-5 text-indigo-600" />} label="Campaigns" value={overview.active_campaigns} accent="indigo" to="/campaigns" />
+          <OverviewStat icon={<TrendingUp className="w-5 h-5 text-emerald-600" />} label="Avg Score" value={overview.avg_score ?? '—'} accent="emerald" to="/leads" />
+          <OverviewStat icon={<Play className="w-5 h-5 text-blue-600" />} label="Total Runs" value={overview.total_runs} accent="blue" to="/runs" />
+          <OverviewStat icon={<CheckCircle2 className="w-5 h-5 text-green-600" />} label="Success Rate" value={`${overview.success_rate}%`} accent="green" to="/runs" />
+          <OverviewStat icon={<BarChart3 className="w-5 h-5 text-amber-600" />} label="Feedback Rate" value={`${overview.feedback_rate}%`} accent="amber" to="/leads" />
         </div>
       )}
 
@@ -686,14 +686,23 @@ const ACCENT_STYLES: Record<string, string> = {
   amber: 'border-amber-100 bg-amber-50/40',
 };
 
-function OverviewStat({ icon, label, value, accent }: { icon: React.ReactNode; label: string; value: string | number; accent: string }) {
-  return (
-    <div className={`rounded-xl border p-4 ${ACCENT_STYLES[accent] || 'border-gray-200 bg-white'}`}>
+function OverviewStat({ icon, label, value, accent, to }: { icon: React.ReactNode; label: string; value: string | number; accent: string; to?: string }) {
+  const content = (
+    <>
       <div className="flex items-center gap-2 mb-2">{icon}</div>
       <p className="text-2xl font-bold text-gray-900">{value}</p>
       <p className="text-xs text-gray-500 mt-0.5">{label}</p>
-    </div>
+    </>
   );
+  const base = `rounded-xl border p-4 ${ACCENT_STYLES[accent] || 'border-gray-200 bg-white'}`;
+  if (to) {
+    return (
+      <Link to={to} className={`${base} hover:shadow-md hover:scale-[1.02] transition-all cursor-pointer block`}>
+        {content}
+      </Link>
+    );
+  }
+  return <div className={base}>{content}</div>;
 }
 
 function RunPill({ run, progress }: { run: Run; progress?: { phase?: string; step_number?: number; total_steps?: number; tokens?: { estimated_cost: number } } }) {

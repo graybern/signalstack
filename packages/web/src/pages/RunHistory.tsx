@@ -190,11 +190,10 @@ export function RunHistory() {
   };
 
   const toggleSelectAll = () => {
-    const finishedRuns = runs.filter(r => r.status === 'completed' || r.status === 'failed' || r.status === 'cancelled');
-    if (selectedRuns.size === finishedRuns.length) {
+    if (selectedRuns.size === filteredFinishedRuns.length) {
       setSelectedRuns(new Set());
     } else {
-      setSelectedRuns(new Set(finishedRuns.map(r => r.id)));
+      setSelectedRuns(new Set(filteredFinishedRuns.map(r => r.id)));
     }
   };
 

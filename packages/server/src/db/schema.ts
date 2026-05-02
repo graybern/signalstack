@@ -648,4 +648,31 @@ function initSchema(db: Database.Database) {
   if (!recCols.find(c => c.name === 'action_data')) {
     db.exec("ALTER TABLE ai_recommendations ADD COLUMN action_data TEXT");
   }
+
+  // Role permissions — customizable permission assignments per role
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS role_permissions (
+      role       TEXT NOT NULL,
+      permission TEXT NOT NULL,
+      PRIMARY KEY (role, permission)
+    );
+  `);
+
+  // API keys — user-level tokens with scoped permissions
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS api_keys (
+      id           TEXT PRIMARY KEY,
+      user_id      TEXT NOT NULL REFERENCES users(id),
+      name         TEXT NOT NULL,
+      key_hash     TEXT NOT NULL,
+      key_prefix   TEXT NOT NULL,
+      scopes       TEXT NOT NULL DEFAULT '[]',
+      expires_at   TEXT,
+      last_used_at TEXT,
+      created_at   TEXT DEFAULT (datetime('now')),
+      revoked_at   TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys(user_id);
+    CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
+  `);
 }

@@ -19,6 +19,7 @@ import analyticsRoutes from './routes/analytics.js';
 import settingsRoutes from './routes/settings.js';
 import activityRoutes from './routes/activity.js';
 import configTransferRoutes from './routes/configTransfer.js';
+import apiKeyRoutes from './routes/apikeys.js';
 import { initScheduler } from './scheduler/cron.js';
 import { initCampaignScheduler } from './scheduler/campaignScheduler.js';
 import { initWebhookDispatcher } from './events/webhookDispatcher.js';
@@ -54,6 +55,7 @@ const mountRoutes = (prefix: string) => {
   app.use(`${prefix}/settings`, settingsRoutes);
   app.use(`${prefix}/activity`, activityRoutes);
   app.use(`${prefix}/config-transfer`, configTransferRoutes);
+  app.use(`${prefix}/api-keys`, apiKeyRoutes);
 };
 
 mountRoutes('/api');
@@ -135,6 +137,10 @@ if (userCount === 0) {
   ).run(uuid(), 'admin@example.com', hashSync('admin123', 10), 'Admin', 'superadmin', 1);
   console.log('Created default admin user (admin@example.com / admin123 — must change on first login)');
 }
+
+// Seed role permissions on first run
+import { seedRolePermissions } from './auth/permissions.js';
+seedRolePermissions();
 
 initWebhookDispatcher();
 initNotificationDispatcher();

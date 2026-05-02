@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect, Fragment } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthContext } from '../App';
 import { api } from '../api/client';
@@ -134,13 +134,14 @@ export function Settings({ tab: initialTab }: SettingsProps) {
 // ── Org Settings Tab ───────────────────────────────────────────
 
 function OrgSettingsTab() {
-  const [section, setSection] = useState<'icp' | 'sources' | 'exclusions' | 'team'>('icp');
+  const [section, setSection] = useState<'icp' | 'sources' | 'exclusions' | 'team' | 'permissions'>('icp');
 
   const sections = [
     { key: 'icp', label: 'ICP Defaults', icon: Target },
     { key: 'sources', label: 'Data Sources', icon: Database },
     { key: 'exclusions', label: 'Global Exclusions', icon: Shield },
     { key: 'team', label: 'Team & Roles', icon: Users },
+    { key: 'permissions', label: 'Permissions', icon: ShieldCheck },
   ] as const;
 
   return (
@@ -166,6 +167,7 @@ function OrgSettingsTab() {
       {section === 'sources' && <DataSourcesSection />}
       {section === 'exclusions' && <GlobalExclusionsSection />}
       {section === 'team' && <TeamSection />}
+      {section === 'permissions' && <PermissionsSection />}
     </div>
   );
 }
@@ -852,6 +854,238 @@ function TeamSection() {
   );
 }
 
+// ── Permissions Section ────────────────────────────────────────
+
+interface PermissionCatalogEntry {
+  category: string;
+  permissions: { key: string; label: string; description: string }[];
+}
+
+interface RoleDef {
+  role: string;
+  label: string;
+  description: string;
+  permissions: string[];
+}
+
+function PermissionsSection() {
+  const { user } = useAuthContext();
+  const isSuperAdmin = user?.role === 'superadmin';
+  const [roles, setRoles] = useState<RoleDef[]>([]);
+  const [catalog, setCatalog] = useState<PermissionCatalogEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState<string | null>(null);
+  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [dirty, setDirty] = useState<Record<string, string[]>>({});
+  const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set());
+
+  const loadData = async () => {
+    try {
+      const data = await api('/users/roles');
+      setRoles(data.roles);
+      setCatalog(data.permission_catalog);
+      setDirty({});
+      setExpandedCategories(new Set(data.permission_catalog.map((c: PermissionCatalogEntry) => c.category)));
+    } catch (err) {
+      console.error('Failed to load permissions:', err);
+    } finally { setLoading(false); }
+  };
+
+  useEffect(() => { loadData(); }, []);
+
+  const getPerms = (role: string): string[] => dirty[role] ?? roles.find(r => r.role === role)?.permissions ?? [];
+
+  const togglePerm = (role: string, perm: string) => {
+    if (!isSuperAdmin) return;
+    const current = getPerms(role);
+    const updated = current.includes(perm) ? current.filter(p => p !== perm) : [...current, perm];
+    setDirty(prev => ({ ...prev, [role]: updated }));
+  };
+
+  const toggleCategory = (role: string, category: PermissionCatalogEntry) => {
+    if (!isSuperAdmin) return;
+    const current = getPerms(role);
+    const catPerms = category.permissions.map(p => p.key);
+    const allOn = catPerms.every(p => current.includes(p));
+    const updated = allOn
+      ? current.filter(p => !catPerms.includes(p))
+      : [...new Set([...current, ...catPerms])];
+    setDirty(prev => ({ ...prev, [role]: updated }));
+  };
+
+  const handleSave = async (role: string) => {
+    if (!dirty[role]) return;
+    setSaving(role);
+    setMessage(null);
+    try {
+      await api(`/users/roles/${role}/permissions`, {
+        method: 'PUT',
+        body: JSON.stringify({ permissions: dirty[role] }),
+      });
+      setMessage({ type: 'success', text: `${ROLE_META[role]?.label || role} permissions updated` });
+      await loadData();
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err.message || 'Failed to save' });
+    } finally { setSaving(null); }
+  };
+
+  const handleReset = async (role: string) => {
+    if (!confirm(`Reset ${ROLE_META[role]?.label || role} to default permissions?`)) return;
+    setSaving(role);
+    setMessage(null);
+    try {
+      await api(`/users/roles/${role}/reset-permissions`, { method: 'POST' });
+      setMessage({ type: 'success', text: `${ROLE_META[role]?.label || role} reset to defaults` });
+      await loadData();
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err.message || 'Failed to reset' });
+    } finally { setSaving(null); }
+  };
+
+  if (loading) return <div className="text-gray-500 text-sm">Loading permissions...</div>;
+
+  const editableRoles = roles.filter(r => r.role !== 'superadmin');
+
+  return (
+    <div className="space-y-5">
+      {message && (
+        <div className={`px-4 py-3 rounded-lg text-sm flex items-start gap-2 ${
+          message.type === 'success' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'
+        }`}>
+          {message.type === 'success' ? <CheckCircle className="w-4 h-4 mt-0.5 shrink-0" /> : <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />}
+          <span>{message.text}</span>
+          <button onClick={() => setMessage(null)} className="ml-auto shrink-0 text-current opacity-50 hover:opacity-100"><X className="w-3.5 h-3.5" /></button>
+        </div>
+      )}
+
+      <div>
+        <h3 className="text-lg font-semibold text-gray-900">Role Permissions</h3>
+        <p className="text-sm text-gray-500 mt-1">
+          {isSuperAdmin ? 'Configure which permissions each role has access to' : 'View permission assignments for each role'}
+        </p>
+      </div>
+
+      <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead>
+              <tr className="border-b border-gray-200 bg-gray-50">
+                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide min-w-[220px]">Permission</th>
+                {editableRoles.map(r => {
+                  const meta = ROLE_META[r.role] || ROLE_META.member;
+                  return (
+                    <th key={r.role} className="text-center px-3 py-3 min-w-[100px]">
+                      <div className="flex flex-col items-center gap-1">
+                        <span className={`text-xs font-semibold ${meta.color}`}>{meta.label}</span>
+                        {dirty[r.role] && isSuperAdmin && (
+                          <div className="flex gap-1">
+                            <button onClick={() => handleSave(r.role)} disabled={saving === r.role}
+                              className="text-[10px] px-1.5 py-0.5 bg-brand-600 text-white rounded hover:bg-brand-700 disabled:opacity-50">
+                              {saving === r.role ? '...' : 'Save'}
+                            </button>
+                            <button onClick={() => setDirty(prev => { const n = { ...prev }; delete n[r.role]; return n; })}
+                              className="text-[10px] px-1.5 py-0.5 bg-gray-200 text-gray-600 rounded hover:bg-gray-300">
+                              Undo
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </th>
+                  );
+                })}
+              </tr>
+            </thead>
+            <tbody>
+              {catalog.map(cat => {
+                const isExpanded = expandedCategories.has(cat.category);
+                return (
+                  <React.Fragment key={cat.category}>
+                    <tr className="bg-gray-50/60 border-t border-gray-100 cursor-pointer hover:bg-gray-100/60"
+                      onClick={() => setExpandedCategories(prev => {
+                        const next = new Set(prev);
+                        next.has(cat.category) ? next.delete(cat.category) : next.add(cat.category);
+                        return next;
+                      })}>
+                      <td className="px-4 py-2" colSpan={1}>
+                        <div className="flex items-center gap-2">
+                          {isExpanded ? <ChevronDown className="w-3 h-3 text-gray-400" /> : <ChevronRight className="w-3 h-3 text-gray-400" />}
+                          <span className="text-xs font-bold text-gray-600 uppercase tracking-wider">{cat.category}</span>
+                        </div>
+                      </td>
+                      {editableRoles.map(r => {
+                        const perms = getPerms(r.role);
+                        const catPerms = cat.permissions.map(p => p.key);
+                        const allOn = catPerms.every(p => perms.includes(p));
+                        const someOn = catPerms.some(p => perms.includes(p));
+                        return (
+                          <td key={r.role} className="text-center px-3 py-2">
+                            {isSuperAdmin ? (
+                              <button onClick={(e) => { e.stopPropagation(); toggleCategory(r.role, cat); }}
+                                className={`w-4 h-4 rounded border inline-flex items-center justify-center transition-colors ${
+                                  allOn ? 'bg-brand-600 border-brand-600 text-white'
+                                    : someOn ? 'bg-brand-200 border-brand-400 text-brand-700'
+                                    : 'border-gray-300 hover:border-gray-400'
+                                }`}>
+                                {allOn && <CheckCircle className="w-3 h-3" />}
+                                {someOn && !allOn && <span className="w-1.5 h-1.5 bg-current rounded-sm" />}
+                              </button>
+                            ) : (
+                              <span className={`inline-block w-3 h-3 rounded-full ${allOn ? 'bg-brand-500' : someOn ? 'bg-brand-200' : 'bg-gray-200'}`} />
+                            )}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                    {isExpanded && cat.permissions.map(perm => (
+                      <tr key={perm.key} className="border-t border-gray-50 hover:bg-blue-50/30">
+                        <td className="pl-10 pr-4 py-2">
+                          <div>
+                            <span className="text-sm text-gray-800">{perm.label}</span>
+                            <p className="text-[11px] text-gray-400">{perm.description}</p>
+                          </div>
+                        </td>
+                        {editableRoles.map(r => {
+                          const has = getPerms(r.role).includes(perm.key);
+                          return (
+                            <td key={r.role} className="text-center px-3 py-2">
+                              {isSuperAdmin ? (
+                                <button onClick={() => togglePerm(r.role, perm.key)}
+                                  className={`w-4 h-4 rounded border inline-flex items-center justify-center transition-colors ${
+                                    has ? 'bg-brand-600 border-brand-600 text-white' : 'border-gray-300 hover:border-gray-400'
+                                  }`}>
+                                  {has && <CheckCircle className="w-3 h-3" />}
+                                </button>
+                              ) : (
+                                <span className={`inline-block w-3 h-3 rounded-full ${has ? 'bg-brand-500' : 'bg-gray-200'}`} />
+                              )}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </React.Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {isSuperAdmin && (
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-gray-500">Reset to defaults:</span>
+          {editableRoles.map(r => (
+            <button key={r.role} onClick={() => handleReset(r.role)}
+              className="text-xs px-2.5 py-1 border border-gray-200 rounded-lg text-gray-500 hover:text-gray-700 hover:border-gray-300">
+              {ROLE_META[r.role]?.label || r.role}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Profile Tab ────────────────────────────────────────────────
 
 function ProfileTab() {
@@ -963,6 +1197,281 @@ function ProfileTab() {
       <button onClick={handleSave} disabled={saving} className="px-6 py-2 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700 disabled:opacity-50">
         {saving ? 'Saving...' : 'Save Changes'}
       </button>
+
+      <ApiKeysSection />
+    </div>
+  );
+}
+
+// ── API Keys Section ──────────────────────────────────────────
+
+interface ApiKeyEntry {
+  id: string;
+  name: string;
+  key_prefix: string;
+  scopes: string[];
+  expires_at: string | null;
+  last_used_at: string | null;
+  created_at: string;
+  revoked_at: string | null;
+}
+
+function ApiKeysSection() {
+  const { user } = useAuthContext();
+  const [keys, setKeys] = useState<ApiKeyEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showCreate, setShowCreate] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [newKeyName, setNewKeyName] = useState('');
+  const [newKeyExpiry, setNewKeyExpiry] = useState('');
+  const [selectedScopes, setSelectedScopes] = useState<Set<string>>(new Set());
+  const [availableScopes, setAvailableScopes] = useState<PermissionCatalogEntry[]>([]);
+  const [myPermissions, setMyPermissions] = useState<string[]>([]);
+  const [createdKey, setCreatedKey] = useState<string | null>(null);
+  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const loadData = async () => {
+    try {
+      const [keysData, rolesData] = await Promise.all([
+        api('/api-keys'),
+        api('/users/roles'),
+      ]);
+      setKeys(keysData);
+      setAvailableScopes(rolesData.permission_catalog);
+      const myRole = rolesData.roles.find((r: RoleDef) => r.role === user?.role);
+      setMyPermissions(myRole?.permissions || []);
+    } catch {
+      setMyPermissions([]);
+    } finally { setLoading(false); }
+  };
+
+  useEffect(() => { loadData(); }, []);
+
+  if (!loading && !myPermissions.includes('api_keys:manage')) return null;
+
+  const handleCreate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (selectedScopes.size === 0) {
+      setMessage({ type: 'error', text: 'Select at least one scope' });
+      return;
+    }
+    setCreating(true);
+    setMessage(null);
+    try {
+      const result = await api('/api-keys', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: newKeyName,
+          scopes: Array.from(selectedScopes),
+          expires_in_days: newKeyExpiry ? parseInt(newKeyExpiry) : undefined,
+        }),
+      });
+      setCreatedKey(result.key);
+      setNewKeyName('');
+      setNewKeyExpiry('');
+      setSelectedScopes(new Set());
+      setShowCreate(false);
+      loadData();
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err.message || 'Failed to create key' });
+    } finally { setCreating(false); }
+  };
+
+  const handleRevoke = async (id: string, name: string) => {
+    if (!confirm(`Revoke API key "${name}"? Any integrations using this key will stop working.`)) return;
+    try {
+      await api(`/api-keys/${id}`, { method: 'DELETE' });
+      setMessage({ type: 'success', text: `API key "${name}" revoked` });
+      loadData();
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err.message || 'Failed to revoke key' });
+    }
+  };
+
+  const copyKey = () => {
+    if (createdKey) {
+      navigator.clipboard.writeText(createdKey);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
+  const activeKeys = keys.filter(k => !k.revoked_at);
+  const revokedKeys = keys.filter(k => k.revoked_at);
+
+  if (loading) return null;
+
+  return (
+    <div className="bg-white border border-gray-200 rounded-lg p-6">
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h3 className="text-lg font-medium text-gray-900 flex items-center gap-2"><Key className="w-4 h-4" /> API Keys</h3>
+          <p className="text-sm text-gray-500 mt-0.5">Create API keys for programmatic access. Keys inherit your role's permissions.</p>
+        </div>
+        <button onClick={() => { setShowCreate(!showCreate); setCreatedKey(null); }}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-white bg-brand-600 rounded-lg hover:bg-brand-700">
+          {showCreate ? <X className="w-3.5 h-3.5" /> : <Plus className="w-3.5 h-3.5" />}
+          {showCreate ? 'Cancel' : 'New Key'}
+        </button>
+      </div>
+
+      {message && (
+        <div className={`px-4 py-3 rounded-lg text-sm mb-4 flex items-start gap-2 ${
+          message.type === 'success' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'
+        }`}>
+          <span>{message.text}</span>
+          <button onClick={() => setMessage(null)} className="ml-auto shrink-0 text-current opacity-50 hover:opacity-100"><X className="w-3.5 h-3.5" /></button>
+        </div>
+      )}
+
+      {createdKey && (
+        <div className="mb-4 p-4 bg-amber-50 border border-amber-200 rounded-lg">
+          <p className="text-sm font-medium text-amber-800 mb-2">Copy your API key now — it won't be shown again</p>
+          <div className="flex items-center gap-2">
+            <code className="flex-1 px-3 py-2 bg-white border border-amber-300 rounded text-sm font-mono text-gray-900 select-all">{createdKey}</code>
+            <button onClick={copyKey} className="px-3 py-2 text-sm font-medium bg-amber-600 text-white rounded hover:bg-amber-700">
+              {copied ? 'Copied' : 'Copy'}
+            </button>
+          </div>
+          <p className="text-xs text-amber-600 mt-2">Use as: <code className="bg-white/60 px-1 rounded">Authorization: ApiKey {'{your_key}'}</code></p>
+        </div>
+      )}
+
+      {showCreate && (
+        <form onSubmit={handleCreate} className="mb-4 p-4 bg-gray-50 border border-gray-200 rounded-lg">
+          <h4 className="text-sm font-semibold text-gray-700 mb-3">Create API Key</h4>
+          <div className="grid grid-cols-2 gap-4 mb-4">
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Key Name *</label>
+              <input type="text" value={newKeyName} onChange={e => setNewKeyName(e.target.value)} required
+                placeholder="e.g. CI Pipeline, Slack Bot" className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Expires In</label>
+              <select value={newKeyExpiry} onChange={e => setNewKeyExpiry(e.target.value)}
+                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg bg-white">
+                <option value="">Never</option>
+                <option value="30">30 days</option>
+                <option value="90">90 days</option>
+                <option value="180">6 months</option>
+                <option value="365">1 year</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="mb-4">
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-xs font-medium text-gray-600">Scopes *</label>
+              <div className="flex gap-2">
+                <button type="button" onClick={() => setSelectedScopes(new Set(myPermissions))}
+                  className="text-[11px] text-brand-600 hover:text-brand-700">Select all</button>
+                <button type="button" onClick={() => setSelectedScopes(new Set())}
+                  className="text-[11px] text-gray-500 hover:text-gray-700">Clear</button>
+              </div>
+            </div>
+            <div className="bg-white border border-gray-200 rounded-lg p-3 max-h-52 overflow-y-auto">
+              {availableScopes.map(cat => {
+                const catPerms = cat.permissions.filter(p => myPermissions.includes(p.key));
+                if (catPerms.length === 0) return null;
+                return (
+                  <div key={cat.category} className="mb-2 last:mb-0">
+                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">{cat.category}</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {catPerms.map(p => (
+                        <button key={p.key} type="button"
+                          onClick={() => setSelectedScopes(prev => {
+                            const next = new Set(prev);
+                            next.has(p.key) ? next.delete(p.key) : next.add(p.key);
+                            return next;
+                          })}
+                          title={p.description}
+                          className={`text-xs px-2 py-0.5 rounded-full border transition-colors ${
+                            selectedScopes.has(p.key)
+                              ? 'bg-brand-100 border-brand-300 text-brand-700 font-medium'
+                              : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300'
+                          }`}>
+                          {p.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <p className="text-[11px] text-gray-400 mt-1">
+              {selectedScopes.size} scope{selectedScopes.size !== 1 ? 's' : ''} selected — only scopes within your role are available
+            </p>
+          </div>
+
+          <div className="flex justify-end">
+            <button type="submit" disabled={creating}
+              className="flex items-center gap-1.5 px-5 py-2 text-sm font-medium text-white bg-brand-600 rounded-lg hover:bg-brand-700 disabled:opacity-50">
+              <Key className="w-3.5 h-3.5" />{creating ? 'Creating...' : 'Create Key'}
+            </button>
+          </div>
+        </form>
+      )}
+
+      {activeKeys.length === 0 && !showCreate && (
+        <p className="text-sm text-gray-400 py-4 text-center">No API keys yet. Create one to enable programmatic access.</p>
+      )}
+
+      {activeKeys.length > 0 && (
+        <div className="border border-gray-200 rounded-lg overflow-hidden">
+          <table className="w-full">
+            <thead>
+              <tr className="border-b border-gray-100 bg-gray-50">
+                <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase">Name</th>
+                <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase">Key</th>
+                <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase">Scopes</th>
+                <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase">Last Used</th>
+                <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase">Expires</th>
+                <th className="text-right px-4 py-2 text-xs font-semibold text-gray-500 uppercase"></th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {activeKeys.map(k => (
+                <tr key={k.id} className="hover:bg-gray-50">
+                  <td className="px-4 py-3 text-sm font-medium text-gray-900">{k.name}</td>
+                  <td className="px-4 py-3"><code className="text-xs text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">{k.key_prefix}...</code></td>
+                  <td className="px-4 py-3">
+                    <div className="flex flex-wrap gap-1 max-w-[200px]">
+                      {k.scopes.slice(0, 3).map(s => (
+                        <span key={s} className="text-[10px] px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded">{s.split(':')[0]}</span>
+                      ))}
+                      {k.scopes.length > 3 && <span className="text-[10px] text-gray-400">+{k.scopes.length - 3}</span>}
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 text-xs text-gray-500">{k.last_used_at ? formatDateTimeFull(k.last_used_at) : 'Never'}</td>
+                  <td className="px-4 py-3 text-xs text-gray-500">
+                    {k.expires_at ? formatDateTimeFull(k.expires_at) : 'Never'}
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <button onClick={() => handleRevoke(k.id, k.name)}
+                      className="text-xs text-red-500 hover:text-red-700 font-medium">Revoke</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {revokedKeys.length > 0 && (
+        <details className="mt-3">
+          <summary className="text-xs text-gray-400 cursor-pointer hover:text-gray-600">{revokedKeys.length} revoked key{revokedKeys.length > 1 ? 's' : ''}</summary>
+          <div className="mt-2 space-y-1">
+            {revokedKeys.map(k => (
+              <div key={k.id} className="flex items-center gap-3 px-3 py-1.5 text-xs text-gray-400 bg-gray-50 rounded">
+                <span className="font-medium line-through">{k.name}</span>
+                <code>{k.key_prefix}...</code>
+                <span className="ml-auto">Revoked {k.revoked_at ? formatDateTimeFull(k.revoked_at) : ''}</span>
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
     </div>
   );
 }

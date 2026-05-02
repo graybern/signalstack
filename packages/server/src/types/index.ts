@@ -13,6 +13,19 @@ export interface User {
   created_at: string;
 }
 
+export interface ApiKey {
+  id: string;
+  user_id: string;
+  name: string;
+  key_hash: string;
+  key_prefix: string;
+  scopes: string;
+  expires_at: string | null;
+  last_used_at: string | null;
+  created_at: string;
+  revoked_at: string | null;
+}
+
 export interface PipelineRun {
   id: string;
   triggered_by: string | null;

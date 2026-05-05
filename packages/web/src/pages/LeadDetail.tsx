@@ -7,6 +7,7 @@ import {
   ArrowLeft, ExternalLink, Building2, Users, MapPin, Globe, Calendar,
   Briefcase, Linkedin, MessageSquare, Shield, Server, ChevronDown, ChevronUp,
   Signal, Clock, History, Trash2, AlertTriangle, Brain, FileText, Download,
+  ClipboardCheck,
 } from 'lucide-react';
 
 const VERDICT_OPTIONS = [
@@ -521,6 +522,49 @@ export function LeadDetail() {
                   <span>{scoreBreakdown.total || lead.fit_score}/100</span>
                 </div>
               </div>
+            </div>
+          )}
+
+          {/* Audit Quality */}
+          {lead.audit_score != null && (
+            <div className="bg-white rounded-xl border border-gray-200 p-4">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="font-medium text-gray-900 flex items-center gap-2">
+                  <ClipboardCheck className="w-4 h-4" />
+                  Audit Quality
+                </h3>
+                <span className={`text-sm font-bold px-2 py-0.5 rounded-full ${
+                  lead.audit_score >= 70 ? 'bg-green-100 text-green-700' :
+                  lead.audit_score >= 50 ? 'bg-amber-100 text-amber-700' :
+                  'bg-red-100 text-red-700'
+                }`}>
+                  {lead.audit_score}/100
+                </span>
+              </div>
+              {lead.audit_issues_parsed && lead.audit_issues_parsed.length > 0 && (
+                <div className="space-y-1.5 mt-3">
+                  {lead.audit_issues_parsed
+                    .sort((a: any, b: any) => {
+                      const order: Record<string, number> = { error: 0, warning: 1, info: 2 };
+                      return (order[a.severity] ?? 3) - (order[b.severity] ?? 3);
+                    })
+                    .map((issue: any, i: number) => (
+                    <div key={i} className="flex items-start gap-2 text-xs">
+                      <span className={`px-1.5 py-0.5 rounded font-medium flex-shrink-0 ${
+                        issue.severity === 'error' ? 'bg-red-100 text-red-700' :
+                        issue.severity === 'warning' ? 'bg-amber-100 text-amber-700' :
+                        'bg-gray-100 text-gray-600'
+                      }`}>
+                        {issue.severity}
+                      </span>
+                      <span className="text-gray-600">{issue.message}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {lead.audit_issues_parsed && lead.audit_issues_parsed.length === 0 && (
+                <p className="text-xs text-green-600">No issues found — all checks passed.</p>
+              )}
             </div>
           )}
 

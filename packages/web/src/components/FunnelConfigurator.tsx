@@ -1,11 +1,11 @@
-import { Search, Filter, Database, BarChart3, FileText, ChevronDown, ChevronUp, Info, Play } from 'lucide-react';
+import { Search, Filter, Database, BarChart3, FileText, ChevronDown, ChevronUp, Info, Play, CheckCircle } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { api } from '../api/client';
 
 // ── Types ────────────────────────────────────────────────────────
 
 interface FunnelStepConfig {
-  id: 'discover' | 'qualify' | 'enrich' | 'score' | 'brief';
+  id: 'discover' | 'qualify' | 'enrich' | 'score' | 'brief' | 'audit';
   enabled: boolean;
   model?: string;
   prompt_instructions?: string;
@@ -67,6 +67,8 @@ interface FunnelStepConfig {
   brief_depth?: 'quick' | 'standard' | 'comprehensive';
   // Enrich levers
   min_enrichment_sources?: number;
+  // Audit levers
+  audit_quality_threshold?: number;
 }
 
 interface FunnelConfig {
@@ -180,6 +182,17 @@ const STEP_META: Record<string, {
     iconFg: 'text-rose-600',
     borderColor: 'border-rose-200',
   },
+  audit: {
+    label: 'Audit',
+    icon: CheckCircle,
+    headline: 'Quality check',
+    guide: 'Rules-based quality audit of generated briefs — checks completeness, evidence grounding, and persona specificity. No AI cost.',
+    color: 'teal',
+    bgColor: 'bg-teal-50/40',
+    iconBg: 'bg-teal-100',
+    iconFg: 'text-teal-600',
+    borderColor: 'border-teal-200',
+  },
 };
 
 // Estimate cost per step
@@ -193,7 +206,7 @@ function estimateCost(step: FunnelStepConfig): string | null {
   return `~$${cost.toFixed(2)}`;
 }
 
-const FUNNEL_WIDTHS = ['100%', '93%', '86%', '78%', '70%'];
+const FUNNEL_WIDTHS = ['100%', '93%', '86%', '78%', '70%', '64%'];
 
 // ── Main Component ───────────────────────────────────────────────
 
@@ -407,6 +420,9 @@ export function FunnelConfigurator({
                   )}
                   {step.id === 'brief' && (
                     <BriefConfig step={step} updateStep={updateStep} globalPrompts={globalPrompts} />
+                  )}
+                  {step.id === 'audit' && (
+                    <AuditConfig step={step} updateStep={updateStep} />
                   )}
                 </div>
               )}
@@ -1192,9 +1208,10 @@ function BriefConfig({ step, updateStep, globalPrompts }: {
 
   return (
     <>
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <ModelSelect value={step.model} onChange={v => updateStep(step.id, { model: v })} recommended="claude-opus-4-6@default" />
         <NumberInput label="Max output tokens" value={step.max_tokens} onChange={v => updateStep(step.id, { max_tokens: v })} placeholder="4096" />
+        <NumberInput label="Max briefs to generate" value={step.candidate_limit} onChange={v => updateStep(step.id, { candidate_limit: v })} placeholder="Target count" />
         <div>
           <label className="text-xs font-medium text-gray-700 mb-1 block">Outreach tone</label>
           <select
@@ -1529,6 +1546,60 @@ function TagInput({ values, onChange, placeholder }: {
         placeholder={values.length === 0 ? placeholder : ''}
         className="flex-1 min-w-[120px] text-xs outline-none bg-transparent"
       />
+    </div>
+  );
+}
+
+// ── Audit Step Config ────────────────────────────────────────────
+
+function AuditConfig({ step, updateStep }: {
+  step: FunnelStepConfig;
+  updateStep: (id: string, patch: Partial<FunnelStepConfig>) => void;
+}) {
+  const threshold = step.audit_quality_threshold ?? 60;
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-teal-50 border border-teal-200 rounded-lg px-4 py-3">
+        <p className="text-xs text-teal-700">
+          Rules-based quality audit — no AI cost. Checks brief completeness, persona quality, evidence grounding, source citations, and competitive displacement. Briefs below the threshold are flagged.
+        </p>
+      </div>
+
+      <div>
+        <label className="text-xs font-medium text-gray-700 block mb-1.5">Quality Threshold (0-100)</label>
+        <div className="flex items-center gap-3">
+          <input
+            type="range"
+            min={0}
+            max={100}
+            step={5}
+            value={threshold}
+            onChange={e => updateStep(step.id, { audit_quality_threshold: parseInt(e.target.value) })}
+            className="flex-1 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-teal-600"
+          />
+          <span className={`text-sm font-bold min-w-[3ch] text-right ${
+            threshold >= 80 ? 'text-red-600' : threshold >= 60 ? 'text-amber-600' : 'text-green-600'
+          }`}>{threshold}</span>
+        </div>
+        <p className="text-[10px] text-gray-400 mt-1">
+          Briefs scoring below this threshold are flagged in the activity log. Higher = stricter quality bar.
+        </p>
+      </div>
+
+      <div className="bg-gray-50 rounded-lg p-3">
+        <p className="text-xs font-medium text-gray-700 mb-2">Audit checks performed:</p>
+        <div className="grid grid-cols-2 gap-1.5 text-[11px] text-gray-500">
+          <div className="flex items-center gap-1"><CheckCircle className="w-3 h-3 text-teal-500" /> Structural completeness</div>
+          <div className="flex items-center gap-1"><CheckCircle className="w-3 h-3 text-teal-500" /> Pain hypotheses quality</div>
+          <div className="flex items-center gap-1"><CheckCircle className="w-3 h-3 text-teal-500" /> Persona specificity</div>
+          <div className="flex items-center gap-1"><CheckCircle className="w-3 h-3 text-teal-500" /> Source citations</div>
+          <div className="flex items-center gap-1"><CheckCircle className="w-3 h-3 text-teal-500" /> Evidence grounding</div>
+          <div className="flex items-center gap-1"><CheckCircle className="w-3 h-3 text-teal-500" /> Why-now triggers</div>
+          <div className="flex items-center gap-1"><CheckCircle className="w-3 h-3 text-teal-500" /> Competitive displacement</div>
+          <div className="flex items-center gap-1"><CheckCircle className="w-3 h-3 text-teal-500" /> Scoring consistency</div>
+        </div>
+      </div>
     </div>
   );
 }

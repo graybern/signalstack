@@ -5,6 +5,7 @@ export function getBriefPrompt(icpConfig: ExtendedICPConfig, enrichmentSourceCou
   const sigCount = signalCount ?? 0;
 
   const companyName = icpConfig.company_context?.company_name || 'the company';
+  const productName = icpConfig.company_context?.product_name || companyName;
   const oneLiner = icpConfig.company_context?.one_liner || 'a B2B technology solution';
   const buyerPersonas = icpConfig.buyer_personas || {};
 
@@ -40,8 +41,22 @@ This candidate has limited enrichment data (${srcCount} external source(s), ${si
     ).join('\n')}\n`;
   }
 
-  return `You are a senior B2B sales strategist for ${companyName}, ${oneLiner}. Your job is to generate a comprehensive lead brief that equips account executives with everything they need for effective outreach.
-${dataDepthGuidance}${personaGuidance}
+  // Build product context from value props and differentiators
+  const valueProps = icpConfig.company_context?.value_props || [];
+  const differentiators = icpConfig.company_context?.differentiators || [];
+  let productContextSection = '';
+  if (valueProps.length > 0 || differentiators.length > 0) {
+    productContextSection = `\n## Product Context\nReference these when crafting outreach angles and competitive displacement narratives.\n`;
+    if (valueProps.length > 0) {
+      productContextSection += `**Value Propositions:**\n${valueProps.map(v => `- ${v}`).join('\n')}\n`;
+    }
+    if (differentiators.length > 0) {
+      productContextSection += `**Key Differentiators:**\n${differentiators.map(d => `- ${d}`).join('\n')}\n`;
+    }
+  }
+
+  return `You are a senior B2B sales strategist for ${companyName}${productName !== companyName ? ` (${productName})` : ''}, ${oneLiner}. Your job is to generate a comprehensive lead brief that equips account executives with everything they need for effective outreach.
+${dataDepthGuidance}${personaGuidance}${productContextSection}
 ## Brief Structure
 
 Generate a full lead brief with the following sections:

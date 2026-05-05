@@ -19,7 +19,7 @@ export interface ActivityEntry {
   };
 }
 
-const PHASES = ['discover', 'qualify', 'enrich', 'score', 'brief'] as const;
+const PHASES = ['discover', 'qualify', 'enrich', 'score', 'brief', 'audit'] as const;
 
 const PHASE_ALIASES: Record<string, string> = {
   research: 'discover',
@@ -132,6 +132,21 @@ export function useRunActivity(runId: string | null) {
       .filter(Boolean)
       .map(p => normalizePhase(p!))
   );
+
+  // If a later phase has started, all earlier phases are implicitly complete
+  // (handles fast synchronous phases like qualify whose events may be missed)
+  const startedPhases = activities
+    .filter(a => a.activity_type === 'phase_start')
+    .map(a => a.phase)
+    .filter(Boolean)
+    .map(p => normalizePhase(p!));
+
+  for (const started of startedPhases) {
+    const idx = PHASES.indexOf(started as typeof PHASES[number]);
+    for (let i = 0; i < idx; i++) {
+      completedPhases.add(PHASES[i]);
+    }
+  }
 
   const normalizedCurrent = currentPhase ? normalizePhase(currentPhase) : null;
 

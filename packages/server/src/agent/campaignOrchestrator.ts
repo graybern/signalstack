@@ -4,6 +4,7 @@ import { createAIClient, getAIConfig, resolveModel } from '../config/vertexConfi
 import { getDb } from '../db/schema.js';
 import { scoreCandidate } from './scorer.js';
 import { generateBrief } from './briefWriter.js';
+import { auditBrief } from './briefAuditor.js';
 import { getCampaignResearchPrompt } from './prompts/campaign.js';
 import { TokenTracker, MultiModelTokenTracker } from './tokenTracker.js';
 import { ActivityLogger } from './activityLogger.js';
@@ -79,6 +80,7 @@ function buildLegacyFunnel(pipelineConfig: Record<string, any>): FunnelConfig {
       { id: 'enrich', enabled: true },
       { id: 'score', enabled: true, model, max_tokens: pipelineConfig.max_tokens_scoring || 2048 },
       { id: 'brief', enabled: true, model, max_tokens: pipelineConfig.max_tokens_brief || 4096 },
+      { id: 'audit', enabled: true, audit_quality_threshold: 60 },
     ],
   };
 }
@@ -253,6 +255,8 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
 
   try {
     const { pipelineConfig, promptConfig, icpConfig, exclusions } = loadCampaignConfig(campaign);
+    icpConfig.campaign_target_signals = campaign.target_signals;
+    icpConfig.campaign_value_prop_angle = campaign.value_prop_angle || undefined;
     const targetCount = campaign.target_count || 12;
 
     // Resolve funnel config: explicit > legacy (matches old behavior)
@@ -809,7 +813,8 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
         }
 
         case 'brief': {
-          const selected = scoredCandidates.slice(0, targetCount);
+          const briefLimit = step.candidate_limit || targetCount;
+          const selected = scoredCandidates.slice(0, briefLimit);
           logger.phaseStart('brief', `Generating outreach briefs for ${selected.length} candidates (model: ${stepModel})...`);
           const briefTracker = tracker.getTrackerForModel(stepModel);
           for (const { candidate, score } of selected) {
@@ -837,6 +842,56 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
           const briefMap = new Map(briefResults.map(br => [br.candidate.company_name, br.brief]));
           const briefThinkingMap = new Map(briefResults.map(br => [br.candidate.company_name, { scorer: br.score.reasoning || undefined, brief: br.brief.thinking || undefined }]));
           persistCandidates('briefed', briefResults.map(br => br.candidate), briefScoreMap, briefMap, briefThinkingMap);
+          break;
+        }
+
+        case 'audit': {
+          if (briefResults.length === 0) {
+            logger.thinking('audit', 'No briefs to audit — skipping');
+            break;
+          }
+          emitProgress('audit');
+          const threshold = step.audit_quality_threshold ?? 60;
+          logger.phaseStart('audit', `Auditing ${briefResults.length} briefs (threshold: ${threshold}/100)...`);
+
+          const auditResults: { company: string; score: number; passed: boolean; issues: number; errorCount: number; warnCount: number }[] = [];
+
+          for (const { candidate, score, brief } of briefResults) {
+            const audit = auditBrief({ brief, candidate, score }, threshold);
+            auditResults.push({
+              company: candidate.company_name,
+              score: audit.score,
+              passed: audit.passed,
+              issues: audit.issues.length,
+              errorCount: audit.issues.filter(i => i.severity === 'error').length,
+              warnCount: audit.issues.filter(i => i.severity === 'warning').length,
+            });
+
+            // Persist audit results to lead
+            const leadId = getLeadId(candidate.company_name);
+            try {
+              db.prepare('UPDATE leads SET audit_score = ?, audit_issues = ?, pipeline_stage = ? WHERE id = ? AND run_id = ?')
+                .run(audit.score, JSON.stringify(audit.issues), 'audited', leadId, runId);
+            } catch { /* column may not exist yet */ }
+
+            if (audit.passed) {
+              logger.finding('audit', candidate.company_name, `Audit passed (${audit.score}/100)`, {
+                checks: Object.fromEntries(Object.entries(audit.checks).map(([k, v]) => [k, `${v.score}pts ${v.passed ? '✓' : '✗'}`])),
+              });
+            } else {
+              const topIssues = audit.issues.filter(i => i.severity === 'error').slice(0, 3).map(i => i.message);
+              logger.thinking('audit', `${candidate.company_name}: below threshold (${audit.score}/${threshold}) — ${topIssues.join('; ')}`);
+            }
+          }
+
+          const passCount = auditResults.filter(r => r.passed).length;
+          const avgScore = Math.round(auditResults.reduce((s, r) => s + r.score, 0) / auditResults.length);
+          logger.phaseComplete('audit', `Audit complete — ${passCount}/${auditResults.length} passed (avg: ${avgScore}/100)`, {
+            passed: passCount,
+            failed: auditResults.length - passCount,
+            avg_score: avgScore,
+            threshold,
+          });
           break;
         }
       }

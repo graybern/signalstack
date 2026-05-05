@@ -377,6 +377,7 @@ function parseLead(row: any) {
   try { lead.investors_parsed = JSON.parse(row.investors); } catch { lead.investors_parsed = null; }
   try { lead.outreach_strategy_parsed = JSON.parse(row.outreach_strategy); } catch { lead.outreach_strategy_parsed = null; }
   try { lead.candidate_data_parsed = JSON.parse(row.candidate_data); } catch { lead.candidate_data_parsed = null; }
+  try { lead.audit_issues_parsed = JSON.parse(row.audit_issues); } catch { lead.audit_issues_parsed = null; }
 
   let signalCount = 0;
   if (lead.sources_parsed && Array.isArray(lead.sources_parsed)) signalCount += lead.sources_parsed.length;

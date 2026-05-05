@@ -229,7 +229,20 @@ export interface Campaign {
   notification_base_url: string | null;
 }
 
-export type FunnelStepId = 'discover' | 'qualify' | 'enrich' | 'score' | 'brief';
+export type FunnelStepId = 'discover' | 'qualify' | 'enrich' | 'score' | 'brief' | 'audit';
+
+export interface AuditIssue {
+  check: string;
+  severity: 'error' | 'warning' | 'info';
+  message: string;
+}
+
+export interface AuditResult {
+  score: number;
+  passed: boolean;
+  issues: AuditIssue[];
+  checks: Record<string, { passed: boolean; score: number; details?: string }>;
+}
 
 export interface FunnelStepConfig {
   id: FunnelStepId;
@@ -300,6 +313,9 @@ export interface FunnelStepConfig {
   // ── Brief levers ──
   persona_types?: ('champion' | 'economic_buyer' | 'executive_sponsor')[];
   brief_depth?: 'quick' | 'standard' | 'comprehensive';
+
+  // ── Audit levers ──
+  audit_quality_threshold?: number;
 }
 
 export interface FunnelConfig {
@@ -455,4 +471,6 @@ export interface ExtendedICPConfig extends ICPConfigParsed {
     outreach_tone: string;
     outreach_tone_description: string;
   };
+  campaign_target_signals?: string[];
+  campaign_value_prop_angle?: string;
 }

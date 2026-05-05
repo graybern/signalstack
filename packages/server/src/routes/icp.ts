@@ -197,6 +197,7 @@ function getDefaultFunnelConfig() {
       { id: 'enrich', enabled: true, candidate_limit: 15 },
       { id: 'score', enabled: true, model: 'claude-opus-4-6@default', max_tokens: 2048, candidate_limit: 10 },
       { id: 'brief', enabled: true, model: 'claude-opus-4-6@default', max_tokens: 16384 },
+      { id: 'audit', enabled: true, audit_quality_threshold: 60 },
     ],
   };
 }

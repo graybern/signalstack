@@ -55,6 +55,13 @@ export async function scoreCandidate(
 
   const signalCount = candidate.signals.length;
   const sourceCount = candidate.sources.length;
+  const valueProps = icpConfig.company_context?.value_props || [];
+  const differentiators = icpConfig.company_context?.differentiators || [];
+  const campaignSignals = icpConfig.campaign_target_signals || [];
+  const buyerPersonas = icpConfig.buyer_personas || {};
+  const buyerPersonaSummary = Object.entries(buyerPersonas)
+    .map(([key, p]) => `${(p as any).label || key} (${(p as any).titles?.slice(0, 2).join(', ') || 'N/A'})`)
+    .join('; ');
 
   const companyName = icpConfig.company_context?.company_name || 'the';
   const userMessage = `Score the following prospect company against ${companyName}'s ICP.
@@ -88,16 +95,18 @@ ${candidate.notes}
 - **Tech Signals:** ${techSignals.join(', ')}
 - **Competitors to Displace:** ${competitors.join(', ')}
 - **Segment Config:** VPN users range ${icpConfig.segments[candidate.segment].vpn_users_min}–${icpConfig.segments[candidate.segment].vpn_users_max}
-
+${valueProps.length > 0 ? `- **Value Propositions:** ${valueProps.join(', ')}\n` : ''}${differentiators.length > 0 ? `- **Key Differentiators:** ${differentiators.join(', ')}\n` : ''}${campaignSignals.length > 0 ? `- **Campaign Target Signals:** ${campaignSignals.join(', ')}\n` : ''}${icpConfig.campaign_value_prop_angle ? `- **Campaign Value Prop Angle:** ${icpConfig.campaign_value_prop_angle}\n` : ''}${buyerPersonaSummary ? `- **Target Buyer Roles:** ${buyerPersonaSummary}\n` : ''}
 Score this company using the rubric. Apply the Evidence Density Modifier: ${signalCount} signals from ${sourceCount} sources should directly influence where you place scores within each tier. Cite specific signal counts in each category's evidence array.${promptInstructions ? `\n\n## Additional Instructions\n${promptInstructions}` : ''}`;
 
   let rawText: string;
   let thinkingText = '';
 
+  const maxTok = stepConfig?.max_tokens || 4096;
+
   if (streamCtx) {
     const result = await streamAICall({
       model: model || aiConfig.defaultModel,
-      max_tokens: 4096,
+      max_tokens: maxTok,
       system: systemPrompt,
       userMessage,
       thinking_budget: 8000,
@@ -109,7 +118,7 @@ Score this company using the rubric. Apply the Evidence Density Modifier: ${sign
   } else {
     const response = await client.messages.create({
       model: resolveModel(model || aiConfig.defaultModel, aiConfig.provider),
-      max_tokens: 12096,
+      max_tokens: maxTok + 8000,
       system: systemPrompt,
       messages: [{ role: 'user', content: userMessage }],
       thinking: { type: 'enabled', budget_tokens: 8000 },

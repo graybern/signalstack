@@ -20,6 +20,7 @@ const PHASE_LABELS: Record<string, string> = {
   scoring: 'Scoring',
   brief: 'Brief Generation',
   brief_generation: 'Brief Generation',
+  audit: 'Audit',
   analysis: 'Analysis',
 };
 

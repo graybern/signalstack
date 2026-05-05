@@ -78,6 +78,38 @@ ${campaign.target_categories.map(c => `- ${c}`).join('\n')}
 Search across these categories for companies matching the pattern.
 ` : '';
 
+  // Tech signals from ICP config
+  const techSignalsSection = (icpConfig.tech_signals || []).length > 0
+    ? `## Tech Signals to Look For
+These technology signals indicate a company may be a good fit:
+${icpConfig.tech_signals.map(s => `- ${s}`).join('\n')}
+` : '';
+
+  // Competitors from ICP config
+  const competitorsSection = (icpConfig.competitors || []).length > 0
+    ? `## Competitors to Identify
+Look for companies using these products — they represent displacement opportunities:
+${icpConfig.competitors.map(c => `- ${c}`).join('\n')}
+` : '';
+
+  // Buyer personas from ICP config
+  const buyerPersonas = icpConfig.buyer_personas || {};
+  const buyerPersonasSection = Object.keys(buyerPersonas).length > 0
+    ? `## Target Buyer Personas
+When researching companies, look for evidence of these roles:
+${Object.entries(buyerPersonas).map(([key, p]) =>
+  `- **${(p as any).label || key}**: ${(p as any).titles?.join(', ') || 'N/A'}${(p as any).notes ? ` — ${(p as any).notes}` : ''}`
+).join('\n')}
+` : '';
+
+  // Success stories from ICP config
+  const successStoriesSection = Object.keys(icpConfig.success_stories || {}).length > 0
+    ? `## Success Story Analogues
+${Object.entries(icpConfig.success_stories).map(([vertical, companies]) => `- **${vertical}**: ${(companies as string[]).join(', ')}`).join('\n')}
+
+Use these as reference points — find companies with similar characteristics, deployment models, and customer-access patterns.
+` : '';
+
   // Value prop angle
   const valuePropSection = campaign.value_prop_angle
     ? `## Why This Pattern Matters for ${companyName}
@@ -200,7 +232,7 @@ ${companySection}
 ## Research Pattern: ${campaign.name}
 ${campaign.pattern_thesis}
 
-${valuePropSection}${exampleSection}${searchPatternsSection}${signalSection}${categorySection}${antiPatternSection}
+${valuePropSection}${exampleSection}${searchPatternsSection}${signalSection}${categorySection}${antiPatternSection}${techSignalsSection}${competitorsSection}${buyerPersonasSection}${successStoriesSection}
 ## Exclusion List (DO NOT recommend these)
 ${exclusionList}
 
@@ -246,7 +278,7 @@ For each company, provide the most accurate domain you know. If you are uncertai
    - HQ location, founding year, funding stage
    - Buying-intent signals (see Signal Quality below)
    - Sources where you found the information
-   - Segment assignment: ENT (1000+ employees), MM (200-999), SMB (30-199)
+   - Segment assignment: ENT (${icpConfig.segments?.ENT?.vpn_users_min || 1000}+ employees), MM (${icpConfig.segments?.MM?.vpn_users_min || 200}-${icpConfig.segments?.MM?.vpn_users_max || 999}), SMB (${icpConfig.segments?.SMB?.vpn_users_min || 30}-${icpConfig.segments?.SMB?.vpn_users_max || 199})
 3. Prioritize companies with strong, clear pattern matches
 4. Exclude companies on the exclusion list and already-known examples
 5. **Spread results across multiple verticals/patterns** — don't cluster in one area

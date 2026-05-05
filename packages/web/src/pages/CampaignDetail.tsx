@@ -4,9 +4,9 @@ import { api } from '../api/client';
 import { useAuthContext } from '../App';
 import { formatDate, formatDateTime, formatDateShort } from '../utils/dates';
 import {
-  ArrowLeft, Play, Edit, Users, TrendingUp, Target, ChevronDown, ChevronUp,
+  ArrowLeft, Play, Edit, Users, TrendingUp, Target, ChevronDown, ChevronUp, ChevronRight,
   Layers, Settings, Clock, Shield, Rss, Copy, Check, Calendar,
-  Search, Send, Globe, Hash, Plus, Trash2, Power,
+  Search, Send, Globe, Hash, Plus, Trash2, Power, Crosshair,
   BarChart3, DollarSign, Activity, Eye, ExternalLink,
   ArrowUpDown, ArrowUp, ArrowDown, Filter, X,
 } from 'lucide-react';
@@ -114,9 +114,10 @@ export function CampaignDetail() {
     funnel_config: any | null;
     notification_destinations: any[];
     notification_base_url: string;
+    icp_overrides: Record<string, any> | null;
   }>({
     schedule_cron: '', schedule_enabled: false, schedule_timezone: '', exclusion_config: null, rss_enabled: false,
-    funnel_config: null, notification_destinations: [], notification_base_url: '',
+    funnel_config: null, notification_destinations: [], notification_base_url: '', icp_overrides: null,
   });
   const [globalExclusions, setGlobalExclusions] = useState<{ id: string; company_name: string; domain: string | null }[]>([]);
 
@@ -155,6 +156,7 @@ export function CampaignDetail() {
           funnel_config: data.funnel_config || null,
           notification_destinations: (data as any).notification_destinations || [],
           notification_base_url: (data as any).notification_base_url || '',
+          icp_overrides: (data as any).icp_overrides || null,
         });
       }).finally(() => setLoading(false));
       api('/exclusions?limit=10000').then((data: any) => {
@@ -299,6 +301,7 @@ export function CampaignDetail() {
           funnel_config: editConfig.funnel_config,
           notification_destinations: editConfig.notification_destinations,
           notification_base_url: editConfig.notification_base_url || null,
+          icp_overrides: editConfig.icp_overrides,
         }),
       });
       setConfigDirty(false);
@@ -485,7 +488,11 @@ export function CampaignDetail() {
 
       {/* Tab Content */}
       {activeTab === 'overview' && (
-        <OverviewTab campaign={campaign} />
+        <OverviewTab
+          campaign={campaign}
+          orgICP={orgICP}
+          icpOverrides={editConfig.icp_overrides}
+        />
       )}
 
       {activeTab === 'leads' && (
@@ -565,10 +572,30 @@ function StatCard({ icon: Icon, label, value, small }: { icon: typeof Target; la
 
 // ── Overview Tab ──────────────────────────────────────────────────
 
-function OverviewTab({ campaign }: { campaign: CampaignFull }) {
+type OrgICP = {
+  verticals: string[]; tech_signals: string[]; competitors: string[];
+  company_context?: any; disqualifiers?: any[]; signal_weights?: any[];
+  buyer_personas?: any; geographies?: any; segment_details?: any;
+};
+
+function OverviewTab({ campaign, orgICP, icpOverrides }: {
+  campaign: CampaignFull;
+  orgICP?: OrgICP;
+  icpOverrides: Record<string, any> | null;
+}) {
+  const effectiveICP = (field: string) => icpOverrides?.[field] !== undefined ? icpOverrides[field] : orgICP ? (orgICP as any)[field] : undefined;
+  const icpSource = (field: string): 'campaign' | 'global' => icpOverrides?.[field] !== undefined ? 'campaign' : 'global';
+
+  const company = effectiveICP('company_context') || {};
+  const verticals: string[] = effectiveICP('verticals') || [];
+  const techSignals: string[] = effectiveICP('tech_signals') || [];
+  const competitors: string[] = effectiveICP('competitors') || [];
+  const disqualifiers: any[] = effectiveICP('disqualifiers') || [];
+  const signalWeights: any[] = effectiveICP('signal_weights') || [];
+
   return (
     <div className="space-y-6">
-      {/* Pattern Thesis - always visible, prominent */}
+      {/* Pattern Thesis */}
       <div className="bg-white rounded-xl border border-gray-200 p-6">
         <div className="flex items-center gap-2 mb-3">
           <Target className="w-5 h-5 text-brand-600" />
@@ -584,9 +611,8 @@ function OverviewTab({ campaign }: { campaign: CampaignFull }) {
         )}
       </div>
 
-      {/* Two columns: Signals & Anti-patterns | Example Companies */}
+      {/* Signals & Anti-patterns | Example Companies */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* Signals + Anti-patterns */}
         <div className="bg-white rounded-xl border border-gray-200 p-5">
           {campaign.target_signals.length > 0 && (
             <div className="mb-4">
@@ -613,7 +639,6 @@ function OverviewTab({ campaign }: { campaign: CampaignFull }) {
           )}
         </div>
 
-        {/* Example Companies */}
         <div className="bg-white rounded-xl border border-gray-200 p-5">
           <h4 className="text-xs font-semibold text-gray-500 uppercase mb-2">
             Example Companies ({campaign.example_companies.length})
@@ -669,6 +694,110 @@ function OverviewTab({ campaign }: { campaign: CampaignFull }) {
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* ICP Configuration (read-only) */}
+      {orgICP && (
+        <div className="bg-white rounded-xl border border-gray-200 p-5">
+          <div className="flex items-center gap-2 mb-4">
+            <Crosshair className="w-5 h-5 text-brand-600" />
+            <h3 className="font-semibold text-gray-900">ICP Configuration</h3>
+            <span className="text-xs text-gray-400 ml-auto">Read-only — edit in Configure tab</span>
+          </div>
+
+          {/* Company Context */}
+          {(company.company_name || company.product_name) && (
+            <div className="mb-4 pb-4 border-b border-gray-100">
+              <div className="flex items-center gap-2 mb-2">
+                <h4 className="text-xs font-semibold text-gray-500 uppercase">Company Context</h4>
+                <SourceBadge source={icpSource('company_context')} />
+              </div>
+              <div className="space-y-1 text-sm text-gray-600">
+                {company.company_name && <p><span className="text-gray-400 w-24 inline-block">Company:</span> {company.company_name}</p>}
+                {company.product_name && <p><span className="text-gray-400 w-24 inline-block">Product:</span> {company.product_name}</p>}
+                {company.one_liner && <p><span className="text-gray-400 w-24 inline-block">One-liner:</span> {company.one_liner}</p>}
+              </div>
+              {(company.value_props?.length > 0 || company.differentiators?.length > 0) && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
+                  {company.value_props?.length > 0 && (
+                    <div>
+                      <span className="text-xs text-gray-400 block mb-1">Value Propositions</span>
+                      <ICPTagList items={company.value_props} colorClass="bg-brand-50 text-brand-700" />
+                    </div>
+                  )}
+                  {company.differentiators?.length > 0 && (
+                    <div>
+                      <span className="text-xs text-gray-400 block mb-1">Differentiators</span>
+                      <ICPTagList items={company.differentiators} colorClass="bg-violet-50 text-violet-700" />
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Verticals, Signals, Competitors */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4 pb-4 border-b border-gray-100">
+            <div>
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-xs font-semibold text-gray-500 uppercase">Verticals</span>
+                <SourceBadge source={icpSource('verticals')} />
+              </div>
+              <ICPTagList items={verticals} colorClass="bg-brand-50 text-brand-700" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-xs font-semibold text-gray-500 uppercase">Tech Signals</span>
+                <SourceBadge source={icpSource('tech_signals')} />
+              </div>
+              <ICPTagList items={techSignals} colorClass="bg-emerald-50 text-emerald-700" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-xs font-semibold text-gray-500 uppercase">Competitors</span>
+                <SourceBadge source={icpSource('competitors')} />
+              </div>
+              <ICPTagList items={competitors} colorClass="bg-red-50 text-red-700" />
+            </div>
+          </div>
+
+          {/* Disqualifiers */}
+          {disqualifiers.length > 0 && (
+            <div className="mb-4 pb-4 border-b border-gray-100">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-xs font-semibold text-gray-500 uppercase">Disqualifiers</span>
+                <SourceBadge source={icpSource('disqualifiers')} />
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {disqualifiers.map((dq: any, i: number) => (
+                  <span key={i} className={`text-xs px-2.5 py-1 rounded-full border font-medium ${
+                    dq.severity === 'hard' ? 'bg-red-50 text-red-700 border-red-100' : 'bg-amber-50 text-amber-700 border-amber-100'
+                  }`}>
+                    <span className="opacity-60">{dq.severity}</span> {dq.signal}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Signal Weights */}
+          {signalWeights.length > 0 && (
+            <div>
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-xs font-semibold text-gray-500 uppercase">Signal Weights</span>
+                <SourceBadge source={icpSource('signal_weights')} />
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {signalWeights.map((sw: any, i: number) => (
+                  <span key={i} className="text-xs px-2.5 py-1 bg-gray-50 text-gray-700 rounded-full border border-gray-200">
+                    <span className="font-bold mr-1">{sw.weight}</span>{sw.signal}
+                    <span className="text-gray-400 ml-1">{sw.category}</span>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -954,6 +1083,370 @@ function AnalyticsTab({ analytics, loading }: { analytics: any; loading: boolean
   return <CampaignAnalytics data={analytics} />;
 }
 
+// ── Campaign ICP Configuration ───────────────────────────────────
+
+function SourceBadge({ source }: { source: 'global' | 'campaign' }) {
+  return source === 'campaign'
+    ? <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-blue-100 text-blue-700 uppercase">Campaign Override</span>
+    : <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-gray-100 text-gray-500 uppercase">Global Default</span>;
+}
+
+function ICPTagList({ items, colorClass }: { items: string[]; colorClass: string }) {
+  if (!items.length) return <span className="text-xs text-gray-400 italic">None configured</span>;
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {items.map((v, i) => (
+        <span key={i} className={`px-2.5 py-1 rounded-full text-xs font-medium ${colorClass}`}>{v}</span>
+      ))}
+    </div>
+  );
+}
+
+function ICPTagEditor({ items, onAdd, onRemove, placeholder, colorClass }: {
+  items: string[]; onAdd: (v: string) => void; onRemove: (i: number) => void;
+  placeholder: string; colorClass: string;
+}) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      {items.map((v, i) => (
+        <span key={i} className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium ${colorClass}`}>
+          {v}
+          <button onClick={() => onRemove(i)} className="hover:text-red-500"><X className="w-3 h-3" /></button>
+        </span>
+      ))}
+      <input type="text" placeholder={placeholder}
+        className="px-2.5 py-1 text-xs border border-dashed border-gray-300 rounded-full w-36"
+        onKeyDown={e => {
+          if (e.key === 'Enter' && (e.target as HTMLInputElement).value.trim()) {
+            onAdd((e.target as HTMLInputElement).value.trim());
+            (e.target as HTMLInputElement).value = '';
+          }
+        }} />
+    </div>
+  );
+}
+
+function CampaignICPSection({ orgICP, overrides, onChange, readOnly }: {
+  orgICP: OrgICP;
+  overrides: Record<string, any> | null;
+  onChange: (overrides: Record<string, any> | null) => void;
+  readOnly: boolean;
+}) {
+  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(['company', 'signals']));
+
+  const toggleSection = (key: string) => setExpandedSections(prev => {
+    const next = new Set(prev);
+    next.has(key) ? next.delete(key) : next.add(key);
+    return next;
+  });
+
+  const isOverridden = (field: string) => overrides?.[field] !== undefined;
+
+  const toggleOverride = (field: string) => {
+    if (readOnly) return;
+    if (isOverridden(field)) {
+      const next = { ...overrides };
+      delete next[field];
+      onChange(Object.keys(next).length ? next : null);
+    } else {
+      const globalVal = (orgICP as any)[field];
+      const val = Array.isArray(globalVal) ? [...globalVal]
+        : typeof globalVal === 'object' && globalVal ? { ...globalVal }
+        : globalVal;
+      onChange({ ...overrides, [field]: val });
+    }
+  };
+
+  const updateOverride = (field: string, value: any) => {
+    onChange({ ...overrides, [field]: value });
+  };
+
+  const effectiveVal = (field: string) => isOverridden(field) ? overrides![field] : (orgICP as any)[field];
+
+  const company = effectiveVal('company_context') || {};
+  const disqualifiers: any[] = effectiveVal('disqualifiers') || [];
+  const signalWeights: any[] = effectiveVal('signal_weights') || [];
+
+  const SectionHeader = ({ id, title, subtitle, field }: { id: string; title: string; subtitle?: string; field: string }) => (
+    <div className="flex items-center justify-between px-5 py-3 hover:bg-gray-50 transition-colors">
+      <button onClick={() => toggleSection(id)} className="flex items-center gap-2 text-left flex-1 min-w-0">
+        {expandedSections.has(id) ? <ChevronDown className="w-4 h-4 text-gray-400 shrink-0" /> : <ChevronRight className="w-4 h-4 text-gray-400 shrink-0" />}
+        <div className="min-w-0">
+          <h3 className="text-sm font-semibold text-gray-700">{title}</h3>
+          {subtitle && <p className="text-xs text-gray-400 mt-0.5">{subtitle}</p>}
+        </div>
+      </button>
+      <div className="flex items-center gap-2 shrink-0">
+        <SourceBadge source={isOverridden(field) ? 'campaign' : 'global'} />
+        {!readOnly && (
+          <button
+            onClick={() => toggleOverride(field)}
+            className={`px-2 py-1 text-[10px] font-medium rounded border transition-colors ${
+              isOverridden(field)
+                ? 'border-gray-300 text-gray-500 hover:bg-gray-50'
+                : 'border-blue-300 text-blue-600 hover:bg-blue-50'
+            }`}
+          >
+            {isOverridden(field) ? 'Reset to Global' : 'Customize'}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="space-y-3">
+      <div className="bg-blue-50 border border-blue-200 rounded-lg px-4 py-3">
+        <p className="text-sm text-blue-700">
+          Campaign-level ICP overrides. Sections using <strong>Global Default</strong> inherit from Settings. Click <strong>Customize</strong> to override for this campaign only.
+        </p>
+      </div>
+
+      {/* Company Context */}
+      <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+        <SectionHeader id="company" title="Company Context" subtitle="Identity used in prompts and outreach" field="company_context" />
+        {expandedSections.has('company') && (
+          <div className="px-5 pb-5 space-y-3 border-t border-gray-100 pt-4">
+            {isOverridden('company_context') && !readOnly ? (
+              <>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs font-medium text-gray-600 block mb-1">Company Name</label>
+                    <input type="text" value={company.company_name || ''} onChange={e => updateOverride('company_context', { ...company, company_name: e.target.value })}
+                      className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg" />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-gray-600 block mb-1">Product Name</label>
+                    <input type="text" value={company.product_name || ''} onChange={e => updateOverride('company_context', { ...company, product_name: e.target.value })}
+                      className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg" />
+                  </div>
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-gray-600 block mb-1">One-Liner</label>
+                  <input type="text" value={company.one_liner || ''} onChange={e => updateOverride('company_context', { ...company, one_liner: e.target.value })}
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg" />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-gray-600 block mb-1">Value Propositions</label>
+                  <ICPTagEditor items={company.value_props || []}
+                    onAdd={v => updateOverride('company_context', { ...company, value_props: [...(company.value_props || []), v] })}
+                    onRemove={i => updateOverride('company_context', { ...company, value_props: (company.value_props || []).filter((_: any, j: number) => j !== i) })}
+                    placeholder="Add value prop..." colorClass="bg-brand-50 text-brand-700" />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-gray-600 block mb-1">Key Differentiators</label>
+                  <ICPTagEditor items={company.differentiators || []}
+                    onAdd={v => updateOverride('company_context', { ...company, differentiators: [...(company.differentiators || []), v] })}
+                    onRemove={i => updateOverride('company_context', { ...company, differentiators: (company.differentiators || []).filter((_: any, j: number) => j !== i) })}
+                    placeholder="Add differentiator..." colorClass="bg-violet-50 text-violet-700" />
+                </div>
+              </>
+            ) : (
+              <div className="space-y-2 text-sm text-gray-600">
+                {company.company_name && <p><span className="text-gray-400 w-28 inline-block">Company:</span> {company.company_name}</p>}
+                {company.product_name && <p><span className="text-gray-400 w-28 inline-block">Product:</span> {company.product_name}</p>}
+                {company.one_liner && <p><span className="text-gray-400 w-28 inline-block">One-liner:</span> {company.one_liner}</p>}
+                {(company.value_props || []).length > 0 && (
+                  <div><span className="text-gray-400 text-xs block mb-1">Value Propositions</span><ICPTagList items={company.value_props} colorClass="bg-brand-50 text-brand-700" /></div>
+                )}
+                {(company.differentiators || []).length > 0 && (
+                  <div><span className="text-gray-400 text-xs block mb-1">Differentiators</span><ICPTagList items={company.differentiators} colorClass="bg-violet-50 text-violet-700" /></div>
+                )}
+                {!company.company_name && !company.product_name && <p className="text-gray-400 italic text-xs">No company context configured in global settings.</p>}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Verticals, Signals & Competitors */}
+      <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+        <SectionHeader id="signals" title="Verticals, Signals & Competitors" subtitle="Target industries, tech signals, and competitors" field="verticals" />
+        {expandedSections.has('signals') && (
+          <div className="px-5 pb-5 space-y-4 border-t border-gray-100 pt-4">
+            <div>
+              <div className="flex items-center gap-2 mb-2">
+                <label className="text-xs font-medium text-gray-600">Target Verticals</label>
+                <SourceBadge source={isOverridden('verticals') ? 'campaign' : 'global'} />
+                {!readOnly && !isOverridden('verticals') && (
+                  <button onClick={() => toggleOverride('verticals')} className="text-[10px] text-blue-600 hover:underline">Customize</button>
+                )}
+                {!readOnly && isOverridden('verticals') && (
+                  <button onClick={() => toggleOverride('verticals')} className="text-[10px] text-gray-500 hover:underline">Reset</button>
+                )}
+              </div>
+              {isOverridden('verticals') && !readOnly ? (
+                <ICPTagEditor items={overrides!.verticals || []}
+                  onAdd={v => updateOverride('verticals', [...(overrides!.verticals || []), v])}
+                  onRemove={i => updateOverride('verticals', (overrides!.verticals || []).filter((_: any, j: number) => j !== i))}
+                  placeholder="Add vertical..." colorClass="bg-brand-50 text-brand-700" />
+              ) : (
+                <ICPTagList items={effectiveVal('verticals') || []} colorClass="bg-brand-50 text-brand-700" />
+              )}
+            </div>
+            <div>
+              <div className="flex items-center gap-2 mb-2">
+                <label className="text-xs font-medium text-gray-600">Tech Signals</label>
+                <SourceBadge source={isOverridden('tech_signals') ? 'campaign' : 'global'} />
+                {!readOnly && !isOverridden('tech_signals') && (
+                  <button onClick={() => toggleOverride('tech_signals')} className="text-[10px] text-blue-600 hover:underline">Customize</button>
+                )}
+                {!readOnly && isOverridden('tech_signals') && (
+                  <button onClick={() => toggleOverride('tech_signals')} className="text-[10px] text-gray-500 hover:underline">Reset</button>
+                )}
+              </div>
+              {isOverridden('tech_signals') && !readOnly ? (
+                <ICPTagEditor items={overrides!.tech_signals || []}
+                  onAdd={v => updateOverride('tech_signals', [...(overrides!.tech_signals || []), v])}
+                  onRemove={i => updateOverride('tech_signals', (overrides!.tech_signals || []).filter((_: any, j: number) => j !== i))}
+                  placeholder="Add signal..." colorClass="bg-emerald-50 text-emerald-700" />
+              ) : (
+                <ICPTagList items={effectiveVal('tech_signals') || []} colorClass="bg-emerald-50 text-emerald-700" />
+              )}
+            </div>
+            <div>
+              <div className="flex items-center gap-2 mb-2">
+                <label className="text-xs font-medium text-gray-600">Competitors</label>
+                <SourceBadge source={isOverridden('competitors') ? 'campaign' : 'global'} />
+                {!readOnly && !isOverridden('competitors') && (
+                  <button onClick={() => toggleOverride('competitors')} className="text-[10px] text-blue-600 hover:underline">Customize</button>
+                )}
+                {!readOnly && isOverridden('competitors') && (
+                  <button onClick={() => toggleOverride('competitors')} className="text-[10px] text-gray-500 hover:underline">Reset</button>
+                )}
+              </div>
+              {isOverridden('competitors') && !readOnly ? (
+                <ICPTagEditor items={overrides!.competitors || []}
+                  onAdd={v => updateOverride('competitors', [...(overrides!.competitors || []), v])}
+                  onRemove={i => updateOverride('competitors', (overrides!.competitors || []).filter((_: any, j: number) => j !== i))}
+                  placeholder="Add competitor..." colorClass="bg-red-50 text-red-700" />
+              ) : (
+                <ICPTagList items={effectiveVal('competitors') || []} colorClass="bg-red-50 text-red-700" />
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Disqualifiers */}
+      <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+        <SectionHeader id="disqualifiers" title="Disqualifiers" subtitle="Hard DQs filter in qualify step, soft ones penalize scoring" field="disqualifiers" />
+        {expandedSections.has('disqualifiers') && (
+          <div className="px-5 pb-5 border-t border-gray-100 pt-4 space-y-2">
+            {isOverridden('disqualifiers') && !readOnly ? (
+              <>
+                {disqualifiers.map((dq: any, i: number) => (
+                  <div key={i} className="flex items-start gap-2 p-2.5 bg-gray-50 rounded-lg">
+                    <select value={dq.severity || 'soft'}
+                      onChange={e => {
+                        const updated = [...disqualifiers];
+                        updated[i] = { ...dq, severity: e.target.value };
+                        updateOverride('disqualifiers', updated);
+                      }}
+                      className={`px-2 py-1 text-xs font-medium rounded border shrink-0 ${
+                        dq.severity === 'hard' ? 'bg-red-50 border-red-200 text-red-700' : 'bg-amber-50 border-amber-200 text-amber-700'
+                      }`}>
+                      <option value="hard">Hard</option>
+                      <option value="soft">Soft</option>
+                    </select>
+                    <input type="text" value={dq.signal || ''} placeholder="Signal pattern..."
+                      onChange={e => {
+                        const updated = [...disqualifiers];
+                        updated[i] = { ...dq, signal: e.target.value };
+                        updateOverride('disqualifiers', updated);
+                      }}
+                      className="flex-1 px-2 py-1 text-sm border border-gray-300 rounded" />
+                    <button onClick={() => updateOverride('disqualifiers', disqualifiers.filter((_: any, j: number) => j !== i))}
+                      className="p-1 text-gray-300 hover:text-red-500 shrink-0"><Trash2 className="w-3.5 h-3.5" /></button>
+                  </div>
+                ))}
+                <button onClick={() => updateOverride('disqualifiers', [...disqualifiers, { signal: '', severity: 'soft', notes: '' }])}
+                  className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-brand-600 border border-dashed border-brand-300 rounded-lg hover:bg-brand-50">
+                  <Plus className="w-3 h-3" /> Add Disqualifier
+                </button>
+              </>
+            ) : (
+              <div className="space-y-1.5">
+                {disqualifiers.length === 0 && <p className="text-xs text-gray-400 italic">No disqualifiers configured.</p>}
+                {disqualifiers.map((dq: any, i: number) => (
+                  <div key={i} className="flex items-center gap-2 px-2.5 py-1.5 bg-gray-50 rounded">
+                    <span className={`px-1.5 py-0.5 text-[10px] font-medium rounded ${
+                      dq.severity === 'hard' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'
+                    }`}>{dq.severity}</span>
+                    <span className="text-sm text-gray-700">{dq.signal}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Signal Weights */}
+      <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+        <SectionHeader id="signal_weights" title="Signal Weights" subtitle="Prioritize buying signals for scoring (1-10)" field="signal_weights" />
+        {expandedSections.has('signal_weights') && (
+          <div className="px-5 pb-5 border-t border-gray-100 pt-4 space-y-2">
+            {isOverridden('signal_weights') && !readOnly ? (
+              <>
+                {signalWeights.map((sw: any, i: number) => (
+                  <div key={i} className="flex items-center gap-2 p-2.5 bg-gray-50 rounded-lg">
+                    <input type="number" min={1} max={10} value={sw.weight || 5}
+                      onChange={e => {
+                        const updated = [...signalWeights];
+                        updated[i] = { ...sw, weight: parseInt(e.target.value) || 5 };
+                        updateOverride('signal_weights', updated);
+                      }}
+                      className="w-12 px-2 py-1 text-sm font-medium text-center border border-gray-300 rounded shrink-0" />
+                    <input type="text" value={sw.signal || ''} placeholder="Signal..."
+                      onChange={e => {
+                        const updated = [...signalWeights];
+                        updated[i] = { ...sw, signal: e.target.value };
+                        updateOverride('signal_weights', updated);
+                      }}
+                      className="flex-1 px-2 py-1 text-sm border border-gray-300 rounded" />
+                    <select value={sw.category || 'buying_intent'}
+                      onChange={e => {
+                        const updated = [...signalWeights];
+                        updated[i] = { ...sw, category: e.target.value };
+                        updateOverride('signal_weights', updated);
+                      }}
+                      className="px-2 py-1 text-xs border border-gray-300 rounded bg-white shrink-0">
+                      <option value="buying_intent">Buying Intent</option>
+                      <option value="pain_indicator">Pain Indicator</option>
+                      <option value="tech_fit">Tech Fit</option>
+                      <option value="displacement">Displacement</option>
+                      <option value="urgency">Urgency</option>
+                      <option value="vertical_fit">Vertical Fit</option>
+                    </select>
+                    <button onClick={() => updateOverride('signal_weights', signalWeights.filter((_: any, j: number) => j !== i))}
+                      className="p-1 text-gray-300 hover:text-red-500 shrink-0"><Trash2 className="w-3.5 h-3.5" /></button>
+                  </div>
+                ))}
+                <button onClick={() => updateOverride('signal_weights', [...signalWeights, { signal: '', weight: 5, category: 'buying_intent' }])}
+                  className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-brand-600 border border-dashed border-brand-300 rounded-lg hover:bg-brand-50">
+                  <Plus className="w-3 h-3" /> Add Signal Weight
+                </button>
+              </>
+            ) : (
+              <div className="space-y-1.5">
+                {signalWeights.length === 0 && <p className="text-xs text-gray-400 italic">No signal weights configured.</p>}
+                {signalWeights.map((sw: any, i: number) => (
+                  <div key={i} className="flex items-center gap-2 px-2.5 py-1.5 bg-gray-50 rounded">
+                    <span className="w-7 text-center text-sm font-bold text-gray-700">{sw.weight}</span>
+                    <span className="text-sm text-gray-700 flex-1">{sw.signal}</span>
+                    <span className="text-[10px] text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded">{sw.category}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Settings Tab ──────────────────────────────────────────────────
 
 function ConfigureTab({
@@ -977,7 +1470,7 @@ function ConfigureTab({
   canEditPipeline: boolean;
   canEditSchedule: boolean;
   canEditExclusions: boolean;
-  orgICP?: { verticals: string[]; tech_signals: string[]; competitors: string[]; company_context?: any; disqualifiers?: any[]; signal_weights?: any[]; buyer_personas?: any; geographies?: any; segment_details?: any };
+  orgICP?: OrgICP;
   onRunStep?: (stepId: string) => void;
   serverTzAbbr: string;
   serverTzName: string;
@@ -1041,14 +1534,44 @@ function ConfigureTab({
         </div>
 
         <div className="p-6">
-          {/* Definition */}
+          {/* Definition + ICP */}
           {configTab === 'definition' && (
-            <DefinitionEditor
-              campaign={campaign}
-              campaignId={campaignId}
-              canEdit={canEdit}
-              onSaved={setCampaign}
-            />
+            <div className="space-y-8">
+              <DefinitionEditor
+                campaign={campaign}
+                campaignId={campaignId}
+                canEdit={canEdit}
+                onSaved={setCampaign}
+              />
+
+              <div className="border-t border-gray-200 pt-6">
+                <div className="flex items-center gap-2 mb-4">
+                  <Crosshair className="w-5 h-5 text-brand-600" />
+                  <h3 className="font-semibold text-gray-900">ICP Configuration</h3>
+                  {configDirty && (
+                    <button
+                      onClick={saveConfig}
+                      className="ml-auto px-4 py-1.5 text-sm font-medium text-white bg-brand-600 rounded-lg hover:bg-brand-700 transition-colors"
+                    >
+                      Save ICP Changes
+                    </button>
+                  )}
+                </div>
+                {orgICP ? (
+                  <CampaignICPSection
+                    orgICP={orgICP}
+                    overrides={editConfig.icp_overrides}
+                    onChange={(overrides) => {
+                      setEditConfig({ ...editConfig, icp_overrides: overrides });
+                      setConfigDirty(true);
+                    }}
+                    readOnly={!canEdit}
+                  />
+                ) : (
+                  <div className="text-center py-8 text-sm text-gray-400">Loading ICP configuration...</div>
+                )}
+              </div>
+            </div>
           )}
 
           {/* Pipeline Funnel */}
@@ -1062,6 +1585,7 @@ function ConfigureTab({
                   { id: 'enrich', enabled: true, candidate_limit: 15 },
                   { id: 'score', enabled: true, model: 'claude-opus-4-6@default', max_tokens: 2048, candidate_limit: 10 },
                   { id: 'brief', enabled: true, model: 'claude-opus-4-6@default', max_tokens: 16384 },
+                  { id: 'audit', enabled: true, audit_quality_threshold: 60 },
                 ],
               }}
               onChange={(config) => {

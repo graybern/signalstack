@@ -31,6 +31,11 @@ export function getScoringPrompt(icpConfig: ExtendedICPConfig, scoringWeights?: 
   const techSignals = icpConfig.tech_signals || [];
   const disqualifiers = icpConfig.disqualifiers || [];
   const signalWeights = icpConfig.signal_weights || [];
+  const valueProps = icpConfig.company_context?.value_props || [];
+  const differentiators = icpConfig.company_context?.differentiators || [];
+  const buyerPersonas = icpConfig.buyer_personas || {};
+  const successStories = icpConfig.success_stories || {};
+  const productName = icpConfig.company_context?.product_name || companyName;
 
   const topCompetitors = competitors.slice(0, 3).join(', ') || 'legacy solutions';
   const topVerticals = verticals.slice(0, 3).join(', ') || 'target verticals';
@@ -66,7 +71,7 @@ export function getScoringPrompt(icpConfig: ExtendedICPConfig, scoringWeights?: 
     signalWeightsSection = `\n### Signal Prioritization\nWhen evaluating evidence, weight these signals according to ICP priority:\n${topSignals.map(s => `- [${s.weight}/10] ${s.signal} (${s.category})`).join('\n')}\n`;
   }
 
-  return `You are an expert B2B sales scoring analyst for ${companyName}, ${oneLiner}. Your job is to evaluate a prospect company against ${companyName}'s Ideal Customer Profile and assign a fit score using a precise ${total}-point rubric.
+  return `You are an expert B2B sales scoring analyst for ${companyName}${productName !== companyName ? ` (${productName})` : ''}, ${oneLiner}. Your job is to evaluate a prospect company against ${companyName}'s Ideal Customer Profile and assign a fit score using a precise ${total}-point rubric.
 ${dataQualitySection}
 ## Scoring Rubric (${total} points total)
 
@@ -105,6 +110,7 @@ Evidence to consider: remote work policies, BYOC/BYOD programs, contractor workf
 - 0: Recently purchased a competitor or locked into a long contract
 
 Evidence to consider: tech stack signals, G2/TrustRadius reviews, job postings mentioning specific tools, LinkedIn signals. **Important**: Don't require the specific product to be named to score above 50%. Compound evidence from industry, tech stack, and workforce distribution that strongly implies usage should score ${Math.round(w.displacement_wedge * 0.6)}–${Math.round(w.displacement_wedge * 0.75)}.
+${valueProps.length > 0 || differentiators.length > 0 ? `\n${companyName} key advantages to evaluate against prospect needs:${valueProps.length > 0 ? `\n- Value props: ${valueProps.join(', ')}` : ''}${differentiators.length > 0 ? `\n- Differentiators: ${differentiators.join(', ')}` : ''}` : ''}
 
 ### 5. Vertical / Playbook Match (0–${w.vertical_playbook} points)
 - ${w.vertical_playbook}: Core vertical (${topVerticals}) with strong pattern match to existing wins
@@ -114,6 +120,7 @@ Evidence to consider: tech stack signals, G2/TrustRadius reviews, job postings m
 - 0: Vertical with no clear fit or relevance
 
 Evidence to consider: industry, business model, engineering culture, product type, similar customers.
+${Object.keys(successStories).length > 0 ? `\nExisting wins to match against:\n${Object.entries(successStories).map(([vertical, companies]) => `- **${vertical}**: ${(companies as string[]).join(', ')}`).join('\n')}\nCompanies similar to these success stories score higher.` : ''}
 
 ### 6. Buyer Access + Org Readiness (0–${w.buyer_access_readiness} points)
 - ${w.buyer_access_readiness}: Identifiable champion + economic buyer, security team with budget authority
@@ -123,6 +130,7 @@ Evidence to consider: industry, business model, engineering culture, product typ
 - 0: No identifiable path to buyer
 
 Evidence to consider: org structure, security team presence, IT leadership on LinkedIn, procurement processes.
+${Object.keys(buyerPersonas).length > 0 ? `\nTarget buyer roles to look for: ${Object.entries(buyerPersonas).map(([key, p]) => `${(p as any).label || key} (${(p as any).titles?.slice(0, 2).join(', ') || 'N/A'})`).join(', ')}` : ''}
 
 ### 7. Evidence Density Modifier
 Within each category above, adjust your score based on signal depth:

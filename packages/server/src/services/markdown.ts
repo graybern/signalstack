@@ -117,7 +117,7 @@ export function generateSegmentMarkdown(segment: string, leads: any[], date: str
       const current = displacement.likely_current || displacement.current_products || '';
       const wedge = displacement.twingate_wedge || displacement.advantages || '';
       if (current) lines.push(`- Likely current: ${Array.isArray(current) ? current.join(', ') : current}`);
-      if (wedge) lines.push(`- Twingate wedge: ${Array.isArray(wedge) ? wedge.join(', ') : wedge}`);
+      if (wedge) lines.push(`- Competitive wedge: ${Array.isArray(wedge) ? wedge.join(', ') : wedge}`);
       lines.push('');
     }
 

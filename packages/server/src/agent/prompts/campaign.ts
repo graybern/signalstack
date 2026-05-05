@@ -10,8 +10,8 @@ export function getCampaignResearchPrompt(
   searchContext?: string
 ): string {
   const company = icpConfig.company_context;
-  const companyName = company?.company_name || 'Twingate';
-  const productName = company?.product_name || 'Twingate';
+  const companyName = company?.company_name || 'the company';
+  const productName = company?.product_name || 'the company';
 
   const companySection = company ? `
 ## About ${companyName}
@@ -26,7 +26,7 @@ ${(company.differentiators || []).map(d => `- ${d}`).join('\n')}
 Website: ${company.website || ''}
 ` : `
 ## About ${companyName}
-${productName} provides a modern Zero Trust Network Access (ZTNA) solution that replaces legacy VPNs.
+${productName} — a B2B technology solution.
 `;
 
   // Example companies

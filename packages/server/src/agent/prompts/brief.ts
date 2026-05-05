@@ -1,6 +1,12 @@
-export function getBriefPrompt(enrichmentSourceCount?: number, signalCount?: number): string {
+import type { ExtendedICPConfig } from '../../types/index.js';
+
+export function getBriefPrompt(icpConfig: ExtendedICPConfig, enrichmentSourceCount?: number, signalCount?: number): string {
   const srcCount = enrichmentSourceCount ?? 0;
   const sigCount = signalCount ?? 0;
+
+  const companyName = icpConfig.company_context?.company_name || 'the company';
+  const oneLiner = icpConfig.company_context?.one_liner || 'a B2B technology solution';
+  const buyerPersonas = icpConfig.buyer_personas || {};
 
   let dataDepthGuidance = '';
   if (srcCount >= 3 && sigCount >= 5) {
@@ -16,7 +22,7 @@ This candidate has moderate enrichment data (${srcCount} external source(s), ${s
 - **Personas**: Generate role-based personas with reasonable title assumptions. Personalize outreach to company context.
 - **Pain Hypotheses**: Generate 2-3 hypotheses. Be specific where signals support it, flag where you're inferring.
 - **Tech Stack**: Note what's confirmed vs. inferred.
-- **Gaps**: In the brief_markdown, include a "## Research Gaps" section listing what an AE should verify manually (e.g., "Current VPN product unknown — ask during discovery call").\n`;
+- **Gaps**: In the brief_markdown, include a "## Research Gaps" section listing what an AE should verify manually.\n`;
   } else {
     dataDepthGuidance = `\n## Data Depth: Thin
 This candidate has limited enrichment data (${srcCount} external source(s), ${sigCount} buying signals). Be conservative:
@@ -26,8 +32,16 @@ This candidate has limited enrichment data (${srcCount} external source(s), ${si
 - **Gaps**: In the brief_markdown, include a prominent "## Research Gaps" section listing everything the AE needs to manually research before outreach. This is critical — the AE needs to know where the data is thin so they don't walk into a call unprepared.\n`;
   }
 
-  return `You are a senior B2B sales strategist for Twingate, a Zero Trust Network Access (ZTNA) solution. Your job is to generate a comprehensive lead brief that equips account executives with everything they need for effective outreach.
-${dataDepthGuidance}
+  // Build buyer persona guidance from ICP config
+  let personaGuidance = '';
+  if (Object.keys(buyerPersonas).length > 0) {
+    personaGuidance = `\n## Buyer Persona Guidance\n${Object.entries(buyerPersonas).map(([key, p]) =>
+      `- **${(p as any).label || key}**: Target titles: ${(p as any).titles?.join(', ') || 'N/A'}. ${(p as any).notes || ''}`
+    ).join('\n')}\n`;
+  }
+
+  return `You are a senior B2B sales strategist for ${companyName}, ${oneLiner}. Your job is to generate a comprehensive lead brief that equips account executives with everything they need for effective outreach.
+${dataDepthGuidance}${personaGuidance}
 ## Brief Structure
 
 Generate a full lead brief with the following sections:
@@ -39,7 +53,7 @@ A concise summary of the company including:
 - Recent news or developments relevant to their security/IT posture
 
 ### 2. Pain Hypotheses
-Identify specific pain points this company likely experiences that Twingate can address. Each hypothesis should include:
+Identify specific pain points this company likely experiences that ${companyName} can address. Each hypothesis should include:
 - A clear claim about the pain point
 - Why it matters to this specific company (tied to their business context)
 - **Evidence strength**: "confirmed" (directly supported by a source/signal) or "inferred" (logical deduction from company profile)
@@ -53,7 +67,7 @@ For each persona, provide:
 - **department**: Their department
 - **tenure**: Estimated tenure if inferable from sources
 - **outreach_angle**: The specific angle to use when reaching out to this persona — tie it to a specific signal or pain point when possible
-- **talking_points**: 3-5 bullet points tailored to their role and concerns. Reference specific company signals (e.g., "Your team's recent Kubernetes migration..." not generic "Modern infrastructure needs...")
+- **talking_points**: 3-5 bullet points tailored to their role and concerns. Reference specific company signals (e.g., "Your team's recent migration..." not generic "Modern infrastructure needs...")
 - **outreach_message**: A complete personalized outreach message (email or LinkedIn) for this persona. Must reference at least one specific company signal. Keep it concise (3-5 sentences) with a clear CTA.
 - **social_signals**: Any public activity (blog posts, conference talks, tweets, open source contributions) that could be referenced in outreach
 - **buying_signals**: Specific signals that indicate this persona might be receptive — tie to evidence
@@ -70,7 +84,7 @@ Analyze the company's likely technology stack:
 ### 5. Competitive Displacement
 - **likely_current**: List of solutions they likely use currently (with confidence per item)
 - **evidence_sources**: Evidence for each with confidence level and specific source
-- **twingate_wedge**: Specific advantages Twingate has over their current solution — be precise about *why* Twingate wins here
+- **twingate_wedge**: Specific advantages ${companyName} has over their current solution — be precise about *why* ${companyName} wins here
 - **proof_points_to_use**: Customer stories or proof points relevant to this prospect's vertical/scale
 
 ### 6. Outreach Strategy

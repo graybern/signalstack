@@ -14,6 +14,7 @@ import type { BriefResult } from './briefWriter.js';
 import type { CampaignParsed, Exclusion, FunnelConfig, FunnelStepConfig } from '../types/index.js';
 import type { ExtendedICPConfig } from './prompts/research.js';
 import { getSetting, getDefaultPipelineConfig, getDefaultPromptConfig, getDefaultFunnelConfig } from '../routes/icp.js';
+import { loadExtendedIcpConfig } from './config/icpConfigLoader.js';
 import { enrichCandidates } from './enrichment/service.js';
 import { validateCandidateDomains, shouldKeepCandidate } from './validation/domainValidator.js';
 import { eventBus } from '../events/eventBus.js';
@@ -93,8 +94,14 @@ function executeQualifyStep(
   logger.phaseStart('qualify', `Qualifying ${candidates.length} candidates (rules-based, no AI cost)...`);
 
   const qualCriteria = step.qualification_criteria || [];
-  const disqualCriteria = [...(step.disqualification_criteria || []), ...(campaign.anti_patterns || [])];
+  const icpHardDqs = (icpConfig.disqualifiers || []).filter(d => d.severity === 'hard').map(d => d.signal);
+  const disqualCriteria = [...(step.disqualification_criteria || []), ...(campaign.anti_patterns || []), ...icpHardDqs];
+  const icpSoftDqs = (icpConfig.disqualifiers || []).filter(d => d.severity === 'soft');
   const limit = step.candidate_limit || candidates.length;
+
+  // Check if ICP has a government-related hard DQ for domain-pattern matching
+  const hasGovDq = icpHardDqs.some(d => d.toLowerCase().includes('government') || d.toLowerCase().includes('public sector'));
+  const govDomainSuffixes = ['.gov', '.mil', '.gov.uk', '.gov.au', '.gc.ca'];
 
   const qualified: ResearchCandidate[] = [];
   let disqualified = 0;
@@ -102,12 +109,30 @@ function executeQualifyStep(
   for (const c of candidates) {
     const searchText = `${c.notes} ${c.signals.join(' ')} ${c.company_name} ${c.domain}`.toLowerCase();
 
-    // Check disqualification criteria
+    // Domain-pattern disqualification (.gov/.mil) — only when ICP has government hard DQ
+    if (hasGovDq && c.domain) {
+      const domainLower = c.domain.toLowerCase();
+      const govMatch = govDomainSuffixes.find(suffix => domainLower.endsWith(suffix));
+      if (govMatch) {
+        logger.thinking('qualify', `Disqualified ${c.company_name}: ${govMatch} domain matches ICP government hard DQ`);
+        disqualified++;
+        continue;
+      }
+    }
+
+    // Check disqualification criteria (step + campaign + ICP hard DQs)
     const disqualMatch = disqualCriteria.find(d => searchText.includes(d.toLowerCase()));
     if (disqualMatch) {
       logger.thinking('qualify', `Disqualified ${c.company_name}: matches anti-pattern "${disqualMatch}"`);
       disqualified++;
       continue;
+    }
+
+    // Annotate soft DQ matches for scorer visibility (don't disqualify)
+    const softMatches = icpSoftDqs.filter(d => searchText.includes(d.signal.toLowerCase()));
+    if (softMatches.length > 0) {
+      c.notes += `\n[SOFT DQ: ${softMatches.map(d => d.signal).join('; ')}]`;
+      logger.thinking('qualify', `Soft DQ match for ${c.company_name}: ${softMatches.map(d => d.signal).join(', ')} — passing to scoring`);
     }
 
     // Segment filter
@@ -1192,50 +1217,6 @@ function mergeWithNullInheritance(global: Record<string, any>, overrides?: Recor
     // null/undefined: inherit from global (already there)
   }
   return merged;
-}
-
-function loadExtendedIcpConfig(promptConfig: any, icpOverrides?: Record<string, any> | null): ExtendedICPConfig {
-  const db = getDb();
-  const row = db
-    .prepare('SELECT * FROM icp_config ORDER BY version DESC LIMIT 1')
-    .get() as Record<string, string> | undefined;
-
-  const base = row ? {
-    segments: JSON.parse(row.segments),
-    verticals: JSON.parse(row.verticals),
-    tech_signals: JSON.parse(row.tech_signals),
-    competitors: JSON.parse(row.competitors),
-    success_stories: row.success_stories ? JSON.parse(row.success_stories) : {},
-  } : {
-    segments: {
-      SMB: { vpn_users_min: 100, vpn_users_max: 350 },
-      MM: { vpn_users_min: 350, vpn_users_max: 650 },
-      ENT: { vpn_users_min: 650, vpn_users_max: 10000 },
-    },
-    verticals: ['Gaming', 'Developer Tools', 'Cloud-Native SaaS', 'FinTech'],
-    tech_signals: ['VPN replacement', 'Zero trust initiative', 'Kubernetes/K8s adoption'],
-    competitors: ['Zscaler', 'Cloudflare Access', 'Tailscale'],
-    success_stories: {},
-  };
-
-  // Apply campaign-level ICP overrides (arrays replace, objects merge)
-  if (icpOverrides) {
-    if (icpOverrides.verticals) base.verticals = icpOverrides.verticals;
-    if (icpOverrides.tech_signals) base.tech_signals = icpOverrides.tech_signals;
-    if (icpOverrides.competitors) base.competitors = icpOverrides.competitors;
-    if (icpOverrides.segments) base.segments = { ...base.segments, ...icpOverrides.segments };
-  }
-
-  return {
-    ...base,
-    company_context: getSetting('icp.company_context', undefined),
-    geographies: getSetting('icp.geographies', undefined),
-    segment_details: getSetting('icp.segment_details', undefined),
-    disqualifiers: getSetting('icp.disqualifiers', undefined),
-    signal_weights: getSetting('icp.signal_weights', undefined),
-    buyer_personas: getSetting('icp.buyer_personas', undefined),
-    prompt_config: promptConfig,
-  };
 }
 
 function loadMergedExclusions(campaignExclusionConfig?: { additions?: any[]; exemptions?: string[] } | null): Exclusion[] {

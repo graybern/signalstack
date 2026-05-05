@@ -90,6 +90,12 @@ export interface OrgICP {
   verticals: string[];
   tech_signals: string[];
   competitors: string[];
+  company_context?: any;
+  disqualifiers?: any[];
+  signal_weights?: any[];
+  buyer_personas?: any;
+  geographies?: any;
+  segment_details?: any;
 }
 
 // ── Constants ────────────────────────────────────────────────────

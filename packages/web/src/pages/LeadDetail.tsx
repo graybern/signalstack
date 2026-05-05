@@ -328,7 +328,7 @@ export function LeadDetail() {
               )}
               {competitive.twingate_wedge?.length > 0 && (
                 <div>
-                  <p className="text-xs font-medium text-gray-500 uppercase mb-1">Twingate Advantage</p>
+                  <p className="text-xs font-medium text-gray-500 uppercase mb-1">Competitive Advantage</p>
                   <div className="flex flex-wrap gap-1">
                     {competitive.twingate_wedge.map((w: string, i: number) => (
                       <span key={i} className="px-2 py-1 bg-emerald-50 text-emerald-700 rounded text-xs">{w}</span>

@@ -26,8 +26,9 @@ import { checkConvergence } from './convergenceChecker.js';
 import { eventBus } from '../events/eventBus.js';
 import type { ResearchCandidate } from './researcher.js';
 import type { ICPConfigParsed } from '../types/index.js';
-import type { ExtendedICPConfig } from './prompts/research.js';
+import type { ExtendedICPConfig } from '../types/index.js';
 import { getSetting, getDefaultPipelineConfig, getDefaultPromptConfig } from '../routes/icp.js';
+import { loadExtendedIcpConfig } from './config/icpConfigLoader.js';
 
 export async function processInboundImport(importId: string): Promise<void> {
   const db = getDb();
@@ -279,43 +280,3 @@ export async function processInboundImport(importId: string): Promise<void> {
   }
 }
 
-/**
- * Load extended ICP config (same pattern as orchestrator.ts)
- */
-function loadExtendedIcpConfig(promptConfig: any): ExtendedICPConfig {
-  const db = getDb();
-  const row = db
-    .prepare('SELECT * FROM icp_config ORDER BY version DESC LIMIT 1')
-    .get() as Record<string, string> | undefined;
-
-  const base: ICPConfigParsed = row
-    ? {
-        segments: JSON.parse(row.segments),
-        verticals: JSON.parse(row.verticals),
-        tech_signals: JSON.parse(row.tech_signals),
-        competitors: JSON.parse(row.competitors),
-        success_stories: row.success_stories ? JSON.parse(row.success_stories) : {},
-      }
-    : {
-        segments: {
-          SMB: { vpn_users_min: 100, vpn_users_max: 350 },
-          MM: { vpn_users_min: 350, vpn_users_max: 650 },
-          ENT: { vpn_users_min: 650, vpn_users_max: 10000 },
-        },
-        verticals: ['Gaming', 'Developer Tools', 'Cloud-Native SaaS', 'FinTech'],
-        tech_signals: ['VPN replacement', 'Zero trust initiative', 'Kubernetes/K8s adoption'],
-        competitors: ['Zscaler', 'Cloudflare Access', 'Tailscale', 'Cisco AnyConnect'],
-        success_stories: {},
-      };
-
-  return {
-    ...base,
-    company_context: getSetting('icp.company_context', undefined),
-    geographies: getSetting('icp.geographies', undefined),
-    segment_details: getSetting('icp.segment_details', undefined),
-    disqualifiers: getSetting('icp.disqualifiers', undefined),
-    signal_weights: getSetting('icp.signal_weights', undefined),
-    buyer_personas: getSetting('icp.buyer_personas', undefined),
-    prompt_config: promptConfig,
-  };
-}

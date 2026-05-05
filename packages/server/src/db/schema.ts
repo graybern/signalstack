@@ -2,6 +2,15 @@ import Database from 'better-sqlite3';
 import { config } from '../config.js';
 import fs from 'fs';
 import path from 'path';
+import {
+  getDefaultICP,
+  getDefaultCompanyContext,
+  getDefaultGeographies,
+  getDefaultSegmentDetails,
+  getDefaultDisqualifiers,
+  getDefaultSignalWeights,
+  getDefaultBuyerPersonas,
+} from '../config/icpDefaults.js';
 
 let db: Database.Database;
 
@@ -675,4 +684,40 @@ function initSchema(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys(user_id);
     CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
   `);
+
+  seedIcpDefaults(db);
+}
+
+function seedIcpDefaults(db: Database.Database) {
+  const hasIcp = db.prepare('SELECT COUNT(*) as c FROM icp_config').get() as { c: number };
+  if (hasIcp.c === 0) {
+    const defaults = getDefaultICP();
+    const id = crypto.randomUUID();
+    db.prepare(
+      'INSERT INTO icp_config (id, version, segments, verticals, tech_signals, competitors, success_stories) VALUES (?,?,?,?,?,?,?)'
+    ).run(
+      id, 1,
+      JSON.stringify(defaults.segments),
+      JSON.stringify(defaults.verticals),
+      JSON.stringify(defaults.tech_signals),
+      JSON.stringify(defaults.competitors),
+      JSON.stringify(defaults.success_stories || {}),
+    );
+  }
+
+  const hasSettings = db.prepare("SELECT COUNT(*) as c FROM app_settings WHERE key LIKE 'icp.%'").get() as { c: number };
+  if (hasSettings.c === 0) {
+    const seedSetting = (key: string, value: any) => {
+      db.prepare(
+        "INSERT OR IGNORE INTO app_settings (key, value, updated_at) VALUES (?, ?, datetime('now'))"
+      ).run(key, JSON.stringify(value));
+    };
+
+    seedSetting('icp.company_context', getDefaultCompanyContext());
+    seedSetting('icp.geographies', getDefaultGeographies());
+    seedSetting('icp.segment_details', getDefaultSegmentDetails());
+    seedSetting('icp.disqualifiers', getDefaultDisqualifiers());
+    seedSetting('icp.signal_weights', getDefaultSignalWeights());
+    seedSetting('icp.buyer_personas', getDefaultBuyerPersonas());
+  }
 }

@@ -1,50 +1,5 @@
-import type { ICPConfigParsed, Exclusion } from '../../types/index.js';
-
-export interface FeedbackPattern {
-  pattern: string;
-  direction: 'positive' | 'negative';
-  count: number;
-}
-
-export interface ExtendedICPConfig extends ICPConfigParsed {
-  company_context?: {
-    company_name: string;
-    product_name: string;
-    one_liner: string;
-    value_props: string[];
-    differentiators: string[];
-    website: string;
-    industry_focus: string;
-  };
-  geographies?: {
-    target_regions: string[];
-    target_countries: string[];
-    notes: string;
-  };
-  segment_details?: Record<string, {
-    employee_min: number;
-    employee_max: number;
-    revenue_min: string;
-    revenue_max: string;
-    funding_stages: string[];
-    notes: string;
-  }>;
-  disqualifiers?: { signal: string; severity: 'hard' | 'soft'; notes: string }[];
-  signal_weights?: { signal: string; weight: number; category: string }[];
-  buyer_personas?: Record<string, {
-    label: string;
-    priority: number;
-    titles: string[];
-    departments: string[];
-    notes: string;
-  }>;
-  prompt_config?: {
-    research_preamble: string;
-    research_additional_instructions: string;
-    outreach_tone: string;
-    outreach_tone_description: string;
-  };
-}
+import type { Exclusion, ExtendedICPConfig, FeedbackPattern } from '../../types/index.js';
+export type { ExtendedICPConfig, FeedbackPattern } from '../../types/index.js';
 
 export function getResearchPrompt(
   segment: 'ENT' | 'MM' | 'SMB',
@@ -62,9 +17,9 @@ export function getResearchPrompt(
   const promptConfig = icpConfig.prompt_config;
 
   // Company context — configurable, not hardcoded
-  const companyName = company?.company_name || 'Twingate';
-  const productName = company?.product_name || 'Twingate';
-  const oneLiner = company?.one_liner || 'Modern Zero Trust Network Access (ZTNA) that replaces legacy VPNs';
+  const companyName = company?.company_name || 'the company';
+  const productName = company?.product_name || 'the company';
+  const oneLiner = company?.one_liner || 'a B2B technology solution';
 
   const companySection = company ? `
 ## About ${companyName}
@@ -80,7 +35,7 @@ Website: ${company.website || ''}
 Industry: ${company.industry_focus || ''}
 ` : `
 ## About ${companyName}
-${productName} provides a modern Zero Trust Network Access (ZTNA) solution that replaces legacy VPNs.
+${productName} — ${oneLiner}.
 `;
 
   // Segment description

@@ -2,7 +2,7 @@ import { createAIClient, getAIConfig, resolveModel } from '../config/vertexConfi
 import { streamAICall } from './streamingAI.js';
 import { getBriefPrompt } from './prompts/brief.js';
 import type {
-  ICPConfigParsed,
+  ExtendedICPConfig,
   PainHypothesis,
   TechStackIntel,
   CompetitiveDisplacement,
@@ -56,7 +56,7 @@ function extractJson(text: string): string {
 export async function generateBrief(
   candidate: ResearchCandidate,
   score: ScoringResult,
-  icpConfig: ICPConfigParsed,
+  icpConfig: ExtendedICPConfig,
   model?: string,
   tracker?: TokenTracker,
   promptInstructions?: string,
@@ -69,7 +69,7 @@ export async function generateBrief(
 
   const enrichmentSourceCount = candidate.enrichment_source_count ?? 0;
   const signalCount = candidate.signals.length;
-  const systemPrompt = getBriefPrompt(enrichmentSourceCount, signalCount);
+  const systemPrompt = getBriefPrompt(icpConfig, enrichmentSourceCount, signalCount);
 
   const userMessage = `Generate a comprehensive lead brief for the following prospect.
 
@@ -208,7 +208,7 @@ Generate the full lead brief as a JSON object.${outreachTone ? `\n\n## Outreach 
     return {
       company_snapshot: rawText.substring(0, 500),
       pain_hypotheses: [],
-      personas: [buildFallbackChampion(candidate.company_name, candidate.segment)],
+      personas: [buildFallbackChampion(candidate.company_name, candidate.segment, icpConfig)],
       tech_stack: { vpn_product: null, pam_product: null, recent_purchases: [], cloud_infra: [], dev_tools: [], notes: 'Brief generation failed — JSON parse error' },
       competitive_displacement: { likely_current: [], evidence_sources: [], twingate_wedge: [], proof_points_to_use: [] },
       outreach_strategy: '',
@@ -219,21 +219,25 @@ Generate the full lead brief as a JSON object.${outreachTone ? `\n\n## Outreach 
   }
 }
 
-function buildFallbackChampion(companyName: string, segment?: string): PersonaBrief {
-  const title = segment === 'ENT' ? 'Director of IT Infrastructure' :
-    segment === 'MM' ? 'Senior IT Manager' : 'IT Manager';
+function buildFallbackChampion(companyName: string, segment?: string, icpConfig?: ExtendedICPConfig): PersonaBrief {
+  const championPersona = icpConfig?.buyer_personas?.champion;
+  const fallbackTitle = championPersona?.titles?.[0] || (
+    segment === 'ENT' ? 'Director of IT' :
+    segment === 'MM' ? 'Senior IT Manager' : 'IT Manager'
+  );
+  const productName = icpConfig?.company_context?.product_name || 'our solution';
   return {
     role_type: 'champion',
     name: null,
-    title,
+    title: fallbackTitle,
     linkedin_url: null,
-    department: 'IT / Infrastructure',
+    department: championPersona?.departments?.[0] || 'IT / Infrastructure',
     tenure: null,
-    outreach_angle: `Explore how ${companyName} handles secure remote access for distributed teams`,
+    outreach_angle: `Explore how ${companyName} handles secure access for distributed teams`,
     talking_points: JSON.stringify([
-      'Current remote access architecture and pain points',
-      'Zero-trust approach vs. traditional VPN',
-      'Deployment simplicity — no network reconfiguration required',
+      'Current access architecture and pain points',
+      `How ${productName} compares to their current approach`,
+      'Deployment simplicity and time-to-value',
     ]),
     outreach_message: null,
     social_signals: null,

@@ -240,8 +240,26 @@ router.get('/:id/config', authenticate, (req: AuthRequest, res: Response) => {
   const mergedPipeline = { ...globalPipeline, ...(parsed.pipeline_overrides || {}) };
   const mergedPrompts = { ...globalPrompts, ...(parsed.prompt_overrides || {}) };
 
+  // Full org ICP (core + extended) for campaign UI
+  const icpRow = db.prepare('SELECT * FROM icp_config ORDER BY version DESC LIMIT 1').get() as any;
+  const icpBase = icpRow ? {
+    verticals: JSON.parse(icpRow.verticals),
+    tech_signals: JSON.parse(icpRow.tech_signals),
+    competitors: JSON.parse(icpRow.competitors),
+  } : { verticals: [], tech_signals: [], competitors: [] };
+  const orgICP = {
+    ...icpBase,
+    company_context: getSetting('icp.company_context', {}),
+    disqualifiers: getSetting('icp.disqualifiers', []),
+    signal_weights: getSetting('icp.signal_weights', []),
+    buyer_personas: getSetting('icp.buyer_personas', {}),
+    geographies: getSetting('icp.geographies', {}),
+    segment_details: getSetting('icp.segment_details', {}),
+  };
+
   res.json({
     icp_overrides: parsed.icp_overrides,
+    org_icp: orgICP,
     pipeline: mergedPipeline,
     prompts: mergedPrompts,
     source_overrides: parsed.source_overrides,

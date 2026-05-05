@@ -1,7 +1,7 @@
 import { createAIClient, getAIConfig, resolveModel } from '../config/vertexConfig.js';
 import { streamAICall } from './streamingAI.js';
 import { getScoringPrompt } from './prompts/scoring.js';
-import type { ICPConfigParsed, ScoreBreakdown, FunnelStepConfig } from '../types/index.js';
+import type { ExtendedICPConfig, ScoreBreakdown, FunnelStepConfig } from '../types/index.js';
 import type { ResearchCandidate } from './researcher.js';
 import type { TokenTracker } from './tokenTracker.js';
 
@@ -34,7 +34,7 @@ function extractJson(text: string): string {
 
 export async function scoreCandidate(
   candidate: ResearchCandidate,
-  icpConfig: ICPConfigParsed,
+  icpConfig: ExtendedICPConfig,
   model?: string,
   tracker?: TokenTracker,
   promptInstructions?: string,
@@ -45,7 +45,7 @@ export async function scoreCandidate(
   const client = await createAIClient();
 
   const enrichmentSourceCount = candidate.enrichment_source_count ?? 0;
-  const systemPrompt = getScoringPrompt(stepConfig?.scoring_weights, enrichmentSourceCount);
+  const systemPrompt = getScoringPrompt(icpConfig, stepConfig?.scoring_weights, enrichmentSourceCount);
 
   // ICP overrides from step config (skip overrides when use_org_icp is true)
   const useOrg = stepConfig?.use_org_icp !== false;
@@ -56,7 +56,8 @@ export async function scoreCandidate(
   const signalCount = candidate.signals.length;
   const sourceCount = candidate.sources.length;
 
-  const userMessage = `Score the following prospect company against Twingate's ICP.
+  const companyName = icpConfig.company_context?.company_name || 'the';
+  const userMessage = `Score the following prospect company against ${companyName}'s ICP.
 
 ## Company Information
 - **Company:** ${candidate.company_name}

@@ -1,3 +1,5 @@
+import type { ExtendedICPConfig } from '../../types/index.js';
+
 export interface ScoringWeights {
   segment_scale_fit?: number;
   why_now_triggers?: number;
@@ -16,12 +18,22 @@ const DEFAULT_WEIGHTS: Required<ScoringWeights> = {
   buyer_access_readiness: 10,
 };
 
-export function getScoringPrompt(scoringWeights?: ScoringWeights, enrichmentSourceCount?: number): string {
+export function getScoringPrompt(icpConfig: ExtendedICPConfig, scoringWeights?: ScoringWeights, enrichmentSourceCount?: number): string {
   const w = { ...DEFAULT_WEIGHTS, ...scoringWeights };
   const total = w.segment_scale_fit + w.why_now_triggers + w.remote_access_pain + w.displacement_wedge + w.vertical_playbook + w.buyer_access_readiness;
 
-  // Scale tier breakpoints proportionally (default total = 100)
   const scale = (pct: number) => Math.round(pct * total / 100);
+
+  const companyName = icpConfig.company_context?.company_name || 'the company';
+  const oneLiner = icpConfig.company_context?.one_liner || 'a B2B technology solution';
+  const competitors = icpConfig.competitors || [];
+  const verticals = icpConfig.verticals || [];
+  const techSignals = icpConfig.tech_signals || [];
+  const disqualifiers = icpConfig.disqualifiers || [];
+  const signalWeights = icpConfig.signal_weights || [];
+
+  const topCompetitors = competitors.slice(0, 3).join(', ') || 'legacy solutions';
+  const topVerticals = verticals.slice(0, 3).join(', ') || 'target verticals';
 
   const srcCount = enrichmentSourceCount ?? 0;
   let dataQualitySection = `\n## Data Quality Context\nThis candidate was enriched by ${srcCount} external data source(s).\n`;
@@ -33,21 +45,42 @@ export function getScoringPrompt(scoringWeights?: ScoringWeights, enrichmentSour
     dataQualitySection += 'Multiple data sources corroborate this company\'s information. High-confidence scoring is appropriate if evidence supports it.\n';
   }
 
-  return `You are an expert B2B sales scoring analyst for Twingate, a Zero Trust Network Access (ZTNA) solution. Your job is to evaluate a prospect company against Twingate's Ideal Customer Profile and assign a fit score using a precise ${total}-point rubric.
+  // Build disqualifiers section from ICP config
+  let disqualifiersSection = '';
+  if (disqualifiers.length > 0) {
+    const hardDqs = disqualifiers.filter(d => d.severity === 'hard');
+    const softDqs = disqualifiers.filter(d => d.severity === 'soft');
+    disqualifiersSection = `\n### ICP Disqualifiers\nApply additional penalties for these company-specific signals:\n`;
+    if (hardDqs.length > 0) {
+      disqualifiersSection += hardDqs.map(d => `- **HARD PENALTY (-15 to -25):** ${d.signal}${d.notes ? ` — ${d.notes}` : ''}`).join('\n') + '\n';
+    }
+    if (softDqs.length > 0) {
+      disqualifiersSection += softDqs.map(d => `- **SOFT PENALTY (-3 to -8):** ${d.signal}${d.notes ? ` — ${d.notes}` : ''}`).join('\n') + '\n';
+    }
+  }
+
+  // Build signal weights section from ICP config
+  let signalWeightsSection = '';
+  if (signalWeights.length > 0) {
+    const topSignals = [...signalWeights].sort((a, b) => b.weight - a.weight).slice(0, 8);
+    signalWeightsSection = `\n### Signal Prioritization\nWhen evaluating evidence, weight these signals according to ICP priority:\n${topSignals.map(s => `- [${s.weight}/10] ${s.signal} (${s.category})`).join('\n')}\n`;
+  }
+
+  return `You are an expert B2B sales scoring analyst for ${companyName}, ${oneLiner}. Your job is to evaluate a prospect company against ${companyName}'s Ideal Customer Profile and assign a fit score using a precise ${total}-point rubric.
 ${dataQualitySection}
 ## Scoring Rubric (${total} points total)
 
 ### 1. Segment + Scale Fit (0–${w.segment_scale_fit} points)
-- ${w.segment_scale_fit}: Perfect segment match with confirmed VPN user count in range
+- ${w.segment_scale_fit}: Perfect segment match with confirmed user count in range
 - ${Math.round(w.segment_scale_fit * 0.75)}: Strong match — employee count and tech footprint clearly indicate segment fit
 - ${Math.round(w.segment_scale_fit * 0.5)}: Likely fit based on available signals, but some data gaps
 - ${Math.round(w.segment_scale_fit * 0.25)}: Marginal fit — on the edge of segment boundaries
 - 0: Poor fit — clearly outside segment parameters
 
-Evidence to consider: employee count, engineering team size, office locations, contractor usage, VPN user estimates.
+Evidence to consider: employee count, engineering team size, office locations, contractor usage, estimated user count.
 
 ### 2. Why Now Triggers (0–${w.why_now_triggers} points)
-- ${w.why_now_triggers}: Active VPN replacement project or ZTNA evaluation confirmed
+- ${w.why_now_triggers}: Active evaluation or replacement project confirmed
 - ${Math.round(w.why_now_triggers * 0.8)}: Recent trigger event (security incident, compliance mandate, new CTO/CISO, IPO prep)
 - ${Math.round(w.why_now_triggers * 0.6)}: Relevant job postings, RFP signals, or **multiple compounding growth signals** (e.g., recent funding + hiring surge + geographic expansion together indicate near-term infrastructure needs)
 - ${Math.round(w.why_now_triggers * 0.4)}: At least one growth or modernization signal with plausible urgency
@@ -56,9 +89,9 @@ Evidence to consider: employee count, engineering team size, office locations, c
 Evidence to consider: job postings, press releases, funding announcements, leadership changes, compliance initiatives. **Compound signals**: when 3+ signals from different categories all suggest growing infrastructure needs, score at the upper end even if no single signal is definitive.
 
 ### 3. Remote Access Pain Likelihood (0–${w.remote_access_pain} points)
-- ${w.remote_access_pain}: Confirmed VPN complaints, remote-first with known VPN issues
+- ${w.remote_access_pain}: Confirmed pain with current solution, ${companyName}-relevant use case validated
 - ${Math.round(w.remote_access_pain * 0.75)}: Remote/hybrid with BYOC/BYOD policies, contractor-heavy workforce
-- ${Math.round(w.remote_access_pain * 0.5)}: Distributed engineering team, likely using VPN for resource access
+- ${Math.round(w.remote_access_pain * 0.5)}: Distributed engineering team, likely using legacy solution for resource access
 - ${Math.round(w.remote_access_pain * 0.25)}: Some remote workers but pain is speculative
 - 0: Office-only or no evidence of remote access needs
 
@@ -66,15 +99,15 @@ Evidence to consider: remote work policies, BYOC/BYOD programs, contractor workf
 
 ### 4. Displacement / Competitive Wedge (0–${w.displacement_wedge} points)
 - ${w.displacement_wedge}: Using a known competitor with documented dissatisfaction
-- ${Math.round(w.displacement_wedge * 0.75)}: Using legacy VPN (Cisco AnyConnect, GlobalProtect, Pulse) with scale pain, OR company profile **strongly implies VPN usage** (e.g., distributed engineering teams + compliance requirements + large contractor workforce — VPN is near-certain even without naming the product)
-- ${Math.round(w.displacement_wedge * 0.5)}: Likely using a traditional solution based on tech stack signals or industry norms (e.g., gaming studios with Perforce and multi-site builds almost always use VPN for asset access)
-- ${Math.round(w.displacement_wedge * 0.35)}: Unknown current solution but company characteristics suggest remote access needs
+- ${Math.round(w.displacement_wedge * 0.75)}: Using legacy solution (${topCompetitors}) with scale pain, OR company profile **strongly implies usage** (e.g., distributed engineering teams + compliance requirements + large contractor workforce)
+- ${Math.round(w.displacement_wedge * 0.5)}: Likely using a traditional solution based on tech stack signals or industry norms
+- ${Math.round(w.displacement_wedge * 0.35)}: Unknown current solution but company characteristics suggest relevant needs
 - 0: Recently purchased a competitor or locked into a long contract
 
-Evidence to consider: tech stack signals, G2/TrustRadius reviews, job postings mentioning specific tools, LinkedIn signals. **Important**: Don't require the specific VPN product to be named to score above 50%. Compound evidence from industry, tech stack, and workforce distribution that strongly implies VPN usage should score ${Math.round(w.displacement_wedge * 0.6)}–${Math.round(w.displacement_wedge * 0.75)}.
+Evidence to consider: tech stack signals, G2/TrustRadius reviews, job postings mentioning specific tools, LinkedIn signals. **Important**: Don't require the specific product to be named to score above 50%. Compound evidence from industry, tech stack, and workforce distribution that strongly implies usage should score ${Math.round(w.displacement_wedge * 0.6)}–${Math.round(w.displacement_wedge * 0.75)}.
 
 ### 5. Vertical / Playbook Match (0–${w.vertical_playbook} points)
-- ${w.vertical_playbook}: Core vertical (gaming, developer tools, cloud-native SaaS) with strong pattern match to existing wins
+- ${w.vertical_playbook}: Core vertical (${topVerticals}) with strong pattern match to existing wins
 - ${Math.round(w.vertical_playbook * 0.8)}: Adjacent vertical with similar access patterns and pain points
 - ${Math.round(w.vertical_playbook * 0.53)}: Relevant vertical but less proven playbook
 - ${Math.round(w.vertical_playbook * 0.27)}: Tangentially related industry
@@ -93,20 +126,19 @@ Evidence to consider: org structure, security team presence, IT leadership on Li
 
 ### 7. Evidence Density Modifier
 Within each category above, adjust your score based on signal depth:
-- **Multiple corroborating signals from different sources** → score at the upper end of the tier. Example: job postings + press release + G2 review all confirming VPN pain = top of the Remote Access Pain tier.
-- **Single signal or vague inference** → score at the lower end of the tier. Example: "they probably use VPN because they're remote" with no concrete evidence = bottom of the tier.
+- **Multiple corroborating signals from different sources** → score at the upper end of the tier.
+- **Single signal or vague inference** → score at the lower end of the tier.
 - **Zero signals for a category** → score 0 or near-0, do not speculate points into existence.
 
 Count the signals and sources provided. A candidate with 8+ specific signals across multiple source types (job postings, tech stack, press, reviews) warrants higher scores than one with 2-3 generic signals from AI knowledge alone. Quantify your evidence: cite the actual number of corroborating data points in each category's evidence array.
-
-### 8. Penalties (up to -20 points)
+${signalWeightsSection}
+### 8. Penalties (up to -30 points)
 Apply penalties for any of the following:
 - Recently recommended and rejected (-5 to -10)
 - Known long-term competitor contract (-5 to -10)
 - In active litigation or financial distress (-5)
-- Government/regulated with long procurement cycles (-3 to -5)
 - Negative feedback pattern match (-5 per pattern)
-
+${disqualifiersSection}
 ## Star Rating Map
 - ${scale(85)}–${total} points = 5 stars (Exceptional fit, immediate outreach)
 - ${scale(70)}–${scale(84)} points = 4 stars (Strong fit, prioritize)

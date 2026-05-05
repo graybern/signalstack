@@ -173,7 +173,7 @@ export function CampaignDetail() {
 
   const [showRunMenu, setShowRunMenu] = useState(false);
   const runMenuRef = useRef<HTMLDivElement>(null);
-  const [orgICP, setOrgICP] = useState<{ verticals: string[]; tech_signals: string[]; competitors: string[] } | undefined>(undefined);
+  const [orgICP, setOrgICP] = useState<{ verticals: string[]; tech_signals: string[]; competitors: string[]; company_context?: any; disqualifiers?: any[]; signal_weights?: any[]; buyer_personas?: any; geographies?: any; segment_details?: any } | undefined>(undefined);
 
   // Close run dropdown on click-away
   useEffect(() => {
@@ -189,12 +189,18 @@ export function CampaignDetail() {
 
   // Fetch org ICP for FunnelConfigurator
   useEffect(() => {
-    api('/icp').then((data: any) => {
+    api('/icp/full').then((data: any) => {
       if (data) {
         setOrgICP({
           verticals: data.verticals || [],
           tech_signals: data.tech_signals || [],
           competitors: data.competitors || [],
+          company_context: data.company_context,
+          disqualifiers: data.disqualifiers,
+          signal_weights: data.signal_weights,
+          buyer_personas: data.buyer_personas,
+          geographies: data.geographies,
+          segment_details: data.segment_details,
         });
       }
     }).catch(() => {});
@@ -971,7 +977,7 @@ function ConfigureTab({
   canEditPipeline: boolean;
   canEditSchedule: boolean;
   canEditExclusions: boolean;
-  orgICP?: { verticals: string[]; tech_signals: string[]; competitors: string[] };
+  orgICP?: { verticals: string[]; tech_signals: string[]; competitors: string[]; company_context?: any; disqualifiers?: any[]; signal_weights?: any[]; buyer_personas?: any; geographies?: any; segment_details?: any };
   onRunStep?: (stepId: string) => void;
   serverTzAbbr: string;
   serverTzName: string;

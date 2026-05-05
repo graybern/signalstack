@@ -28,3 +28,6 @@ Thumbs.db
 # Build / runtime
 *.log
 coverage/
+
+# Company-specific ICP seed files
+*-icp-seed.json

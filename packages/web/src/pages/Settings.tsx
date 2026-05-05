@@ -174,15 +174,58 @@ function OrgSettingsTab() {
 
 // ── ICP Defaults Section ───────────────────────────────────────
 
+function TagInput({ items, onAdd, onRemove, placeholder, colorClass }: {
+  items: string[]; onAdd: (v: string) => void; onRemove: (i: number) => void;
+  placeholder: string; colorClass: string;
+}) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      {items.map((v, i) => (
+        <span key={i} className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium ${colorClass}`}>
+          {v}
+          <button onClick={() => onRemove(i)} className="hover:text-red-500"><X className="w-3 h-3" /></button>
+        </span>
+      ))}
+      <input type="text" placeholder={placeholder}
+        className="px-2.5 py-1 text-xs border border-dashed border-gray-300 rounded-full w-36"
+        onKeyDown={e => {
+          if (e.key === 'Enter' && (e.target as HTMLInputElement).value.trim()) {
+            onAdd((e.target as HTMLInputElement).value.trim());
+            (e.target as HTMLInputElement).value = '';
+          }
+        }} />
+    </div>
+  );
+}
+
 function ICPDefaultsSection() {
   const [config, setConfig] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(['company', 'segments']));
 
   useEffect(() => {
     api('/icp/full').then(data => { setConfig(data); setLoading(false); }).catch(() => setLoading(false));
   }, []);
+
+  const toggleSection = (key: string) => setExpandedSections(prev => {
+    const next = new Set(prev);
+    next.has(key) ? next.delete(key) : next.add(key);
+    return next;
+  });
+
+  const updateCompany = (field: string, value: any) => {
+    setConfig({ ...config, company_context: { ...(config.company_context || {}), [field]: value } });
+  };
+
+  const updateGeo = (field: string, value: any) => {
+    setConfig({ ...config, geographies: { ...(config.geographies || {}), [field]: value } });
+  };
+
+  const updateSegDetail = (seg: string, field: string, value: any) => {
+    setConfig({ ...config, segment_details: { ...(config.segment_details || {}), [seg]: { ...(config.segment_details?.[seg] || {}), [field]: value } } });
+  };
 
   const handleSave = async () => {
     setSaving(true);
@@ -196,6 +239,12 @@ function ICPDefaultsSection() {
           tech_signals: config.tech_signals,
           competitors: config.competitors,
           success_stories: config.success_stories,
+          company_context: config.company_context,
+          geographies: config.geographies,
+          segment_details: config.segment_details,
+          disqualifiers: config.disqualifiers,
+          signal_weights: config.signal_weights,
+          buyer_personas: config.buyer_personas,
         }),
       });
       setMessage({ type: 'success', text: 'ICP defaults saved. Campaigns will inherit these unless they override.' });
@@ -209,8 +258,25 @@ function ICPDefaultsSection() {
   if (loading) return <div className="text-gray-500 text-sm">Loading ICP configuration...</div>;
   if (!config) return <div className="text-red-500 text-sm">Failed to load ICP configuration</div>;
 
+  const company = config.company_context || {};
+  const geo = config.geographies || {};
+  const segDetails = config.segment_details || {};
+  const disqualifiers: any[] = config.disqualifiers || [];
+  const signalWeights: any[] = config.signal_weights || [];
+  const personas = config.buyer_personas || {};
+
+  const SectionHeader = ({ id, title, subtitle }: { id: string; title: string; subtitle?: string }) => (
+    <button onClick={() => toggleSection(id)} className="w-full flex items-center justify-between px-6 py-4 text-left hover:bg-gray-50 transition-colors">
+      <div>
+        <h3 className="text-sm font-semibold text-gray-700">{title}</h3>
+        {subtitle && <p className="text-xs text-gray-400 mt-0.5">{subtitle}</p>}
+      </div>
+      {expandedSections.has(id) ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />}
+    </button>
+  );
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <div className="bg-blue-50 border border-blue-200 rounded-lg px-4 py-3">
         <p className="text-sm text-blue-700">
           These are the <strong>global defaults</strong> inherited by all campaigns. Individual campaigns can override any setting.
@@ -223,98 +289,309 @@ function ICPDefaultsSection() {
         }`}>{message.text}</div>
       )}
 
-      {/* Segments */}
-      <div className="bg-white border border-gray-200 rounded-lg p-6">
-        <h3 className="text-sm font-semibold text-gray-700 mb-4">Segment Definitions</h3>
-        <div className="grid grid-cols-3 gap-4">
-          {Object.entries(config.segments || {}).map(([seg, vals]: [string, any]) => (
-            <div key={seg} className="border border-gray-200 rounded-lg p-4">
-              <p className="text-sm font-bold text-gray-900 mb-3">{seg}</p>
-              <div className="space-y-2">
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="text-xs text-gray-500">VPN Users Min</label>
-                    <input type="number" value={vals.vpn_users_min || ''} onChange={e => setConfig({ ...config, segments: { ...config.segments, [seg]: { ...vals, vpn_users_min: parseInt(e.target.value) || 0 }}})} className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded" />
-                  </div>
-                  <div>
-                    <label className="text-xs text-gray-500">VPN Users Max</label>
-                    <input type="number" value={vals.vpn_users_max || ''} onChange={e => setConfig({ ...config, segments: { ...config.segments, [seg]: { ...vals, vpn_users_max: parseInt(e.target.value) || 0 }}})} className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded" />
-                  </div>
-                </div>
+      {/* ── Company Context ── */}
+      <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+        <SectionHeader id="company" title="Company Context" subtitle="Your company identity — used in all prompts and outreach" />
+        {expandedSections.has('company') && (
+          <div className="px-6 pb-6 space-y-4 border-t border-gray-100 pt-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="text-xs font-medium text-gray-600 block mb-1">Company Name</label>
+                <input type="text" value={company.company_name || ''} onChange={e => updateCompany('company_name', e.target.value)}
+                  placeholder="Acme Corp" className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg" />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-gray-600 block mb-1">Product Name</label>
+                <input type="text" value={company.product_name || ''} onChange={e => updateCompany('product_name', e.target.value)}
+                  placeholder="Acme Platform" className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg" />
               </div>
             </div>
-          ))}
-        </div>
+            <div>
+              <label className="text-xs font-medium text-gray-600 block mb-1">One-Liner</label>
+              <input type="text" value={company.one_liner || ''} onChange={e => updateCompany('one_liner', e.target.value)}
+                placeholder="Brief description of what your product does" className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg" />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="text-xs font-medium text-gray-600 block mb-1">Website</label>
+                <input type="text" value={company.website || ''} onChange={e => updateCompany('website', e.target.value)}
+                  placeholder="https://example.com" className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg" />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-gray-600 block mb-1">Industry Focus</label>
+                <input type="text" value={company.industry_focus || ''} onChange={e => updateCompany('industry_focus', e.target.value)}
+                  placeholder="e.g. Cybersecurity, DevTools, FinTech" className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg" />
+              </div>
+            </div>
+            <div>
+              <label className="text-xs font-medium text-gray-600 block mb-1">Value Propositions</label>
+              <TagInput items={company.value_props || []}
+                onAdd={v => updateCompany('value_props', [...(company.value_props || []), v])}
+                onRemove={i => updateCompany('value_props', (company.value_props || []).filter((_: any, j: number) => j !== i))}
+                placeholder="Add value prop..." colorClass="bg-brand-50 text-brand-700" />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-gray-600 block mb-1">Key Differentiators</label>
+              <TagInput items={company.differentiators || []}
+                onAdd={v => updateCompany('differentiators', [...(company.differentiators || []), v])}
+                onRemove={i => updateCompany('differentiators', (company.differentiators || []).filter((_: any, j: number) => j !== i))}
+                placeholder="Add differentiator..." colorClass="bg-violet-50 text-violet-700" />
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* Verticals & Tech Signals */}
-      <div className="bg-white border border-gray-200 rounded-lg p-6">
-        <h3 className="text-sm font-semibold text-gray-700 mb-4">Target Verticals</h3>
-        <div className="flex flex-wrap gap-2">
-          {(config.verticals || []).map((v: string, i: number) => (
-            <span key={i} className="inline-flex items-center gap-1 px-2.5 py-1 bg-brand-50 text-brand-700 rounded-full text-xs font-medium">
-              {v}
-              <button onClick={() => setConfig({ ...config, verticals: config.verticals.filter((_: any, j: number) => j !== i) })} className="hover:text-red-500"><X className="w-3 h-3" /></button>
-            </span>
-          ))}
-          <input
-            type="text"
-            placeholder="Add vertical..."
-            className="px-2.5 py-1 text-xs border border-dashed border-gray-300 rounded-full w-32"
-            onKeyDown={e => {
-              if (e.key === 'Enter' && (e.target as HTMLInputElement).value.trim()) {
-                setConfig({ ...config, verticals: [...(config.verticals || []), (e.target as HTMLInputElement).value.trim()] });
-                (e.target as HTMLInputElement).value = '';
-              }
-            }}
-          />
-        </div>
+      {/* ── Segments ── */}
+      <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+        <SectionHeader id="segments" title="Segment Definitions" subtitle="Size ranges and details for SMB, Mid-Market, and Enterprise" />
+        {expandedSections.has('segments') && (
+          <div className="px-6 pb-6 border-t border-gray-100 pt-4">
+            <div className="grid grid-cols-3 gap-4">
+              {Object.entries(config.segments || {}).map(([seg, vals]: [string, any]) => (
+                <div key={seg} className="border border-gray-200 rounded-lg p-4">
+                  <p className="text-sm font-bold text-gray-900 mb-3">{seg}</p>
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-xs text-gray-500">VPN Users Min</label>
+                        <input type="number" value={vals.vpn_users_min || ''} onChange={e => setConfig({ ...config, segments: { ...config.segments, [seg]: { ...vals, vpn_users_min: parseInt(e.target.value) || 0 }}})} className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded" />
+                      </div>
+                      <div>
+                        <label className="text-xs text-gray-500">VPN Users Max</label>
+                        <input type="number" value={vals.vpn_users_max || ''} onChange={e => setConfig({ ...config, segments: { ...config.segments, [seg]: { ...vals, vpn_users_max: parseInt(e.target.value) || 0 }}})} className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded" />
+                      </div>
+                    </div>
+                    {segDetails[seg] && (
+                      <>
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <label className="text-xs text-gray-500">Employees Min</label>
+                            <input type="number" value={segDetails[seg]?.employee_min || ''} onChange={e => updateSegDetail(seg, 'employee_min', parseInt(e.target.value) || 0)} className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded" />
+                          </div>
+                          <div>
+                            <label className="text-xs text-gray-500">Employees Max</label>
+                            <input type="number" value={segDetails[seg]?.employee_max || ''} onChange={e => updateSegDetail(seg, 'employee_max', parseInt(e.target.value) || 0)} className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded" />
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <label className="text-xs text-gray-500">Revenue Min</label>
+                            <input type="text" value={segDetails[seg]?.revenue_min || ''} onChange={e => updateSegDetail(seg, 'revenue_min', e.target.value)} placeholder="$20M" className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded" />
+                          </div>
+                          <div>
+                            <label className="text-xs text-gray-500">Revenue Max</label>
+                            <input type="text" value={segDetails[seg]?.revenue_max || ''} onChange={e => updateSegDetail(seg, 'revenue_max', e.target.value)} placeholder="$500M" className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded" />
+                          </div>
+                        </div>
+                        <div>
+                          <label className="text-xs text-gray-500">Notes</label>
+                          <input type="text" value={segDetails[seg]?.notes || ''} onChange={e => updateSegDetail(seg, 'notes', e.target.value)} className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded" />
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
-      <div className="bg-white border border-gray-200 rounded-lg p-6">
-        <h3 className="text-sm font-semibold text-gray-700 mb-4">Tech Signals to Detect</h3>
-        <div className="flex flex-wrap gap-2">
-          {(config.tech_signals || []).map((s: string, i: number) => (
-            <span key={i} className="inline-flex items-center gap-1 px-2.5 py-1 bg-emerald-50 text-emerald-700 rounded-full text-xs font-medium">
-              {s}
-              <button onClick={() => setConfig({ ...config, tech_signals: config.tech_signals.filter((_: any, j: number) => j !== i) })} className="hover:text-red-500"><X className="w-3 h-3" /></button>
-            </span>
-          ))}
-          <input
-            type="text"
-            placeholder="Add signal..."
-            className="px-2.5 py-1 text-xs border border-dashed border-gray-300 rounded-full w-36"
-            onKeyDown={e => {
-              if (e.key === 'Enter' && (e.target as HTMLInputElement).value.trim()) {
-                setConfig({ ...config, tech_signals: [...(config.tech_signals || []), (e.target as HTMLInputElement).value.trim()] });
-                (e.target as HTMLInputElement).value = '';
-              }
-            }}
-          />
-        </div>
+      {/* ── Verticals & Signals ── */}
+      <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+        <SectionHeader id="signals" title="Verticals, Signals & Competitors" subtitle="Target industries, tech signals to detect, and competitors to displace" />
+        {expandedSections.has('signals') && (
+          <div className="px-6 pb-6 space-y-5 border-t border-gray-100 pt-4">
+            <div>
+              <label className="text-xs font-medium text-gray-600 block mb-2">Target Verticals</label>
+              <TagInput items={config.verticals || []}
+                onAdd={v => setConfig({ ...config, verticals: [...(config.verticals || []), v] })}
+                onRemove={i => setConfig({ ...config, verticals: config.verticals.filter((_: any, j: number) => j !== i) })}
+                placeholder="Add vertical..." colorClass="bg-brand-50 text-brand-700" />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-gray-600 block mb-2">Tech Signals to Detect</label>
+              <TagInput items={config.tech_signals || []}
+                onAdd={v => setConfig({ ...config, tech_signals: [...(config.tech_signals || []), v] })}
+                onRemove={i => setConfig({ ...config, tech_signals: config.tech_signals.filter((_: any, j: number) => j !== i) })}
+                placeholder="Add signal..." colorClass="bg-emerald-50 text-emerald-700" />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-gray-600 block mb-2">Competitors to Displace</label>
+              <TagInput items={config.competitors || []}
+                onAdd={v => setConfig({ ...config, competitors: [...(config.competitors || []), v] })}
+                onRemove={i => setConfig({ ...config, competitors: config.competitors.filter((_: any, j: number) => j !== i) })}
+                placeholder="Add competitor..." colorClass="bg-red-50 text-red-700" />
+            </div>
+          </div>
+        )}
       </div>
 
-      <div className="bg-white border border-gray-200 rounded-lg p-6">
-        <h3 className="text-sm font-semibold text-gray-700 mb-4">Competitors to Displace</h3>
-        <div className="flex flex-wrap gap-2">
-          {(config.competitors || []).map((c: string, i: number) => (
-            <span key={i} className="inline-flex items-center gap-1 px-2.5 py-1 bg-red-50 text-red-700 rounded-full text-xs font-medium">
-              {c}
-              <button onClick={() => setConfig({ ...config, competitors: config.competitors.filter((_: any, j: number) => j !== i) })} className="hover:text-red-900"><X className="w-3 h-3" /></button>
-            </span>
-          ))}
-          <input
-            type="text"
-            placeholder="Add competitor..."
-            className="px-2.5 py-1 text-xs border border-dashed border-gray-300 rounded-full w-36"
-            onKeyDown={e => {
-              if (e.key === 'Enter' && (e.target as HTMLInputElement).value.trim()) {
-                setConfig({ ...config, competitors: [...(config.competitors || []), (e.target as HTMLInputElement).value.trim()] });
-                (e.target as HTMLInputElement).value = '';
-              }
-            }}
-          />
-        </div>
+      {/* ── Disqualifiers ── */}
+      <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+        <SectionHeader id="disqualifiers" title="Disqualifiers" subtitle="Hard disqualifiers filter in qualify step, soft ones penalize scoring" />
+        {expandedSections.has('disqualifiers') && (
+          <div className="px-6 pb-6 border-t border-gray-100 pt-4 space-y-3">
+            {disqualifiers.map((dq: any, i: number) => (
+              <div key={i} className="flex items-start gap-3 p-3 bg-gray-50 rounded-lg">
+                <select value={dq.severity || 'soft'}
+                  onChange={e => {
+                    const updated = [...disqualifiers];
+                    updated[i] = { ...dq, severity: e.target.value };
+                    setConfig({ ...config, disqualifiers: updated });
+                  }}
+                  className={`px-2 py-1.5 text-xs font-medium rounded-lg border shrink-0 ${
+                    dq.severity === 'hard' ? 'bg-red-50 border-red-200 text-red-700' : 'bg-amber-50 border-amber-200 text-amber-700'
+                  }`}>
+                  <option value="hard">Hard DQ</option>
+                  <option value="soft">Soft DQ</option>
+                </select>
+                <div className="flex-1 space-y-1.5">
+                  <input type="text" value={dq.signal || ''} placeholder="Signal pattern..."
+                    onChange={e => {
+                      const updated = [...disqualifiers];
+                      updated[i] = { ...dq, signal: e.target.value };
+                      setConfig({ ...config, disqualifiers: updated });
+                    }}
+                    className="w-full px-2.5 py-1.5 text-sm border border-gray-300 rounded" />
+                  <input type="text" value={dq.notes || ''} placeholder="Notes (optional)"
+                    onChange={e => {
+                      const updated = [...disqualifiers];
+                      updated[i] = { ...dq, notes: e.target.value };
+                      setConfig({ ...config, disqualifiers: updated });
+                    }}
+                    className="w-full px-2.5 py-1.5 text-xs border border-gray-200 rounded text-gray-500" />
+                </div>
+                <button onClick={() => setConfig({ ...config, disqualifiers: disqualifiers.filter((_: any, j: number) => j !== i) })}
+                  className="p-1 text-gray-300 hover:text-red-500 shrink-0 mt-1"><Trash2 className="w-3.5 h-3.5" /></button>
+              </div>
+            ))}
+            <button onClick={() => setConfig({ ...config, disqualifiers: [...disqualifiers, { signal: '', severity: 'soft', notes: '' }] })}
+              className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-brand-600 border border-dashed border-brand-300 rounded-lg hover:bg-brand-50">
+              <Plus className="w-3 h-3" /> Add Disqualifier
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* ── Signal Weights ── */}
+      <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+        <SectionHeader id="signal_weights" title="Signal Weights" subtitle="Prioritize buying signals for scoring (1-10 scale)" />
+        {expandedSections.has('signal_weights') && (
+          <div className="px-6 pb-6 border-t border-gray-100 pt-4 space-y-3">
+            {signalWeights.map((sw: any, i: number) => (
+              <div key={i} className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
+                <input type="number" min={1} max={10} value={sw.weight || 5}
+                  onChange={e => {
+                    const updated = [...signalWeights];
+                    updated[i] = { ...sw, weight: parseInt(e.target.value) || 5 };
+                    setConfig({ ...config, signal_weights: updated });
+                  }}
+                  className="w-14 px-2 py-1.5 text-sm font-medium text-center border border-gray-300 rounded shrink-0" />
+                <input type="text" value={sw.signal || ''} placeholder="Signal description..."
+                  onChange={e => {
+                    const updated = [...signalWeights];
+                    updated[i] = { ...sw, signal: e.target.value };
+                    setConfig({ ...config, signal_weights: updated });
+                  }}
+                  className="flex-1 px-2.5 py-1.5 text-sm border border-gray-300 rounded" />
+                <select value={sw.category || 'buying_intent'}
+                  onChange={e => {
+                    const updated = [...signalWeights];
+                    updated[i] = { ...sw, category: e.target.value };
+                    setConfig({ ...config, signal_weights: updated });
+                  }}
+                  className="px-2 py-1.5 text-xs border border-gray-300 rounded bg-white shrink-0">
+                  <option value="buying_intent">Buying Intent</option>
+                  <option value="pain_indicator">Pain Indicator</option>
+                  <option value="tech_fit">Tech Fit</option>
+                  <option value="displacement">Displacement</option>
+                  <option value="urgency">Urgency</option>
+                  <option value="vertical_fit">Vertical Fit</option>
+                </select>
+                <button onClick={() => setConfig({ ...config, signal_weights: signalWeights.filter((_: any, j: number) => j !== i) })}
+                  className="p-1 text-gray-300 hover:text-red-500 shrink-0"><Trash2 className="w-3.5 h-3.5" /></button>
+              </div>
+            ))}
+            <button onClick={() => setConfig({ ...config, signal_weights: [...signalWeights, { signal: '', weight: 5, category: 'buying_intent' }] })}
+              className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-brand-600 border border-dashed border-brand-300 rounded-lg hover:bg-brand-50">
+              <Plus className="w-3 h-3" /> Add Signal Weight
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* ── Buyer Personas ── */}
+      <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+        <SectionHeader id="personas" title="Buyer Personas" subtitle="Target personas for outreach briefs — titles, departments, and guidance" />
+        {expandedSections.has('personas') && (
+          <div className="px-6 pb-6 border-t border-gray-100 pt-4">
+            <div className="grid grid-cols-3 gap-4">
+              {Object.entries(personas).map(([key, p]: [string, any]) => {
+                const updatePersona = (field: string, value: any) => {
+                  setConfig({ ...config, buyer_personas: { ...personas, [key]: { ...p, [field]: value } } });
+                };
+                const colorMap: Record<string, string> = {
+                  champion: 'border-brand-200 bg-brand-50/30',
+                  economic_buyer: 'border-amber-200 bg-amber-50/30',
+                  executive_sponsor: 'border-gray-200 bg-gray-50/30',
+                };
+                return (
+                  <div key={key} className={`border rounded-lg p-4 space-y-3 ${colorMap[key] || 'border-gray-200'}`}>
+                    <p className="text-sm font-bold text-gray-900">{p.label || key}</p>
+                    <div>
+                      <label className="text-xs text-gray-500 mb-1 block">Target Titles</label>
+                      <TagInput items={p.titles || []}
+                        onAdd={v => updatePersona('titles', [...(p.titles || []), v])}
+                        onRemove={i => updatePersona('titles', (p.titles || []).filter((_: any, j: number) => j !== i))}
+                        placeholder="Add title..." colorClass="bg-white text-gray-700 border border-gray-200" />
+                    </div>
+                    <div>
+                      <label className="text-xs text-gray-500 mb-1 block">Departments</label>
+                      <TagInput items={p.departments || []}
+                        onAdd={v => updatePersona('departments', [...(p.departments || []), v])}
+                        onRemove={i => updatePersona('departments', (p.departments || []).filter((_: any, j: number) => j !== i))}
+                        placeholder="Add dept..." colorClass="bg-white text-gray-700 border border-gray-200" />
+                    </div>
+                    <div>
+                      <label className="text-xs text-gray-500 mb-1 block">Guidance</label>
+                      <textarea value={p.notes || ''} onChange={e => updatePersona('notes', e.target.value)}
+                        rows={2} className="w-full px-2.5 py-1.5 text-xs border border-gray-200 rounded resize-none" />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ── Geographies ── */}
+      <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+        <SectionHeader id="geo" title="Target Geographies" subtitle="Preferred regions and countries for prospect discovery" />
+        {expandedSections.has('geo') && (
+          <div className="px-6 pb-6 space-y-4 border-t border-gray-100 pt-4">
+            <div>
+              <label className="text-xs font-medium text-gray-600 block mb-2">Target Regions</label>
+              <TagInput items={geo.target_regions || []}
+                onAdd={v => updateGeo('target_regions', [...(geo.target_regions || []), v])}
+                onRemove={i => updateGeo('target_regions', (geo.target_regions || []).filter((_: any, j: number) => j !== i))}
+                placeholder="Add region..." colorClass="bg-blue-50 text-blue-700" />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-gray-600 block mb-2">Target Countries</label>
+              <TagInput items={geo.target_countries || []}
+                onAdd={v => updateGeo('target_countries', [...(geo.target_countries || []), v])}
+                onRemove={i => updateGeo('target_countries', (geo.target_countries || []).filter((_: any, j: number) => j !== i))}
+                placeholder="Add country..." colorClass="bg-blue-50 text-blue-700" />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-gray-600 block mb-1">Notes</label>
+              <input type="text" value={geo.notes || ''} onChange={e => updateGeo('notes', e.target.value)}
+                placeholder="e.g. Prioritize US-headquartered companies" className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg" />
+            </div>
+          </div>
+        )}
       </div>
 
       <button onClick={handleSave} disabled={saving} className="flex items-center gap-2 px-5 py-2 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700 disabled:opacity-50">

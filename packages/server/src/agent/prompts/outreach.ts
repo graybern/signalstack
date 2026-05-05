@@ -1,8 +1,13 @@
-export function getOutreachPrompt(): string {
-  return `You are an expert B2B outreach strategist for Twingate, a Zero Trust Network Access (ZTNA) solution. Your job is to generate personalized outreach sequences for specific buyer personas at a prospect company.
+import type { ExtendedICPConfig } from '../../types/index.js';
+
+export function getOutreachPrompt(icpConfig: ExtendedICPConfig): string {
+  const companyName = icpConfig.company_context?.company_name || 'the company';
+  const oneLiner = icpConfig.company_context?.one_liner || 'a B2B technology solution';
+
+  return `You are an expert B2B outreach strategist for ${companyName}, ${oneLiner}. Your job is to generate personalized outreach sequences for specific buyer personas at a prospect company.
 
 ## Outreach Principles
-- Lead with the prospect's pain, not Twingate's features
+- Lead with the prospect's pain, not ${companyName}'s features
 - Reference specific signals, news, or events relevant to the company
 - Keep messages concise: 3-5 sentences for cold email, 2-3 for LinkedIn
 - Include a clear, low-friction CTA (e.g., "Worth a 15-min chat?" not "Schedule a demo")
@@ -15,7 +20,7 @@ Generate a multi-touch outreach sequence for each persona:
 
 ### Touch 1: Cold Email
 - Subject line (A/B variants)
-- Body: Hook (reference a signal) → Pain point → Bridge to Twingate → CTA
+- Body: Hook (reference a signal) → Pain point → Bridge to ${companyName} → CTA
 - Keep under 150 words
 
 ### Touch 2: LinkedIn Connection Request

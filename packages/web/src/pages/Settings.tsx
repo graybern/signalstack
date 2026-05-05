@@ -245,6 +245,7 @@ function ICPDefaultsSection() {
           disqualifiers: config.disqualifiers,
           signal_weights: config.signal_weights,
           buyer_personas: config.buyer_personas,
+          excluded_domain_patterns: config.excluded_domain_patterns,
         }),
       });
       setMessage({ type: 'success', text: 'ICP defaults saved. Campaigns will inherit these unless they override.' });
@@ -262,6 +263,7 @@ function ICPDefaultsSection() {
   const geo = config.geographies || {};
   const segDetails = config.segment_details || {};
   const disqualifiers: any[] = config.disqualifiers || [];
+  const excludedDomainPatterns: string[] = config.excluded_domain_patterns || [];
   const signalWeights: any[] = config.signal_weights || [];
   const personas = config.buyer_personas || {};
 
@@ -470,6 +472,41 @@ function ICPDefaultsSection() {
               className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-brand-600 border border-dashed border-brand-300 rounded-lg hover:bg-brand-50">
               <Plus className="w-3 h-3" /> Add Disqualifier
             </button>
+          </div>
+        )}
+      </div>
+
+      {/* ── Excluded Domain Patterns ── */}
+      <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+        <SectionHeader id="excluded_domains" title="Excluded Domain Patterns" subtitle="Domains matching these suffixes are auto-disqualified in the qualify step" />
+        {expandedSections.has('excluded_domains') && (
+          <div className="px-6 pb-6 border-t border-gray-100 pt-4 space-y-3">
+            <div className="flex flex-wrap gap-2">
+              {excludedDomainPatterns.map((pattern: string, i: number) => (
+                <span key={i} className="inline-flex items-center gap-1 px-2.5 py-1 text-sm bg-red-50 text-red-700 border border-red-200 rounded-lg">
+                  <code className="text-xs">{pattern}</code>
+                  <button onClick={() => setConfig({ ...config, excluded_domain_patterns: excludedDomainPatterns.filter((_: string, j: number) => j !== i) })}
+                    className="ml-0.5 text-red-300 hover:text-red-600"><X className="w-3 h-3" /></button>
+                </span>
+              ))}
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                placeholder=".gov, .mil, .edu..."
+                className="flex-1 px-2.5 py-1.5 text-sm border border-gray-300 rounded"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    const value = (e.target as HTMLInputElement).value.trim();
+                    if (value && !excludedDomainPatterns.includes(value)) {
+                      setConfig({ ...config, excluded_domain_patterns: [...excludedDomainPatterns, value] });
+                      (e.target as HTMLInputElement).value = '';
+                    }
+                  }
+                }}
+              />
+              <span className="text-xs text-gray-400">Press Enter to add</span>
+            </div>
           </div>
         )}
       </div>

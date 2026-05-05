@@ -1,4 +1,4 @@
-import { Search, Filter, Database, BarChart3, FileText, ChevronDown, ChevronUp, Info, Play, CheckCircle } from 'lucide-react';
+import { Search, Filter, Database, BarChart3, FileText, ChevronDown, ChevronUp, Info, Play, CheckCircle, Sparkles } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { api } from '../api/client';
 
@@ -69,6 +69,7 @@ interface FunnelStepConfig {
   min_enrichment_sources?: number;
   // Audit levers
   audit_quality_threshold?: number;
+  audit_use_ai?: boolean;
 }
 
 interface FunnelConfig {
@@ -1557,17 +1558,47 @@ function AuditConfig({ step, updateStep }: {
   updateStep: (id: string, patch: Partial<FunnelStepConfig>) => void;
 }) {
   const threshold = step.audit_quality_threshold ?? 60;
+  const useAi = step.audit_use_ai === true;
 
   return (
     <div className="space-y-4">
-      <div className="bg-teal-50 border border-teal-200 rounded-lg px-4 py-3">
-        <p className="text-xs text-teal-700">
-          Rules-based quality audit — no AI cost. Checks brief completeness, persona quality, evidence grounding, source citations, and competitive displacement. Briefs below the threshold are flagged.
+      <div className={`${useAi ? 'bg-violet-50 border-violet-200' : 'bg-teal-50 border-teal-200'} border rounded-lg px-4 py-3`}>
+        <p className={`text-xs ${useAi ? 'text-violet-700' : 'text-teal-700'}`}>
+          {useAi
+            ? 'Rules-based checks + AI quality review. AI evaluates relevance, accuracy, actionability, persona quality, and completeness. Combined score (30% rules + 70% AI).'
+            : 'Rules-based quality audit — no AI cost. Checks brief completeness, persona quality, evidence grounding, source citations, and competitive displacement.'}
         </p>
       </div>
 
+      {/* AI Review Toggle */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Sparkles className={`w-4 h-4 ${useAi ? 'text-violet-500' : 'text-gray-400'}`} />
+          <label className="text-xs font-medium text-gray-700">AI Quality Review</label>
+        </div>
+        <button
+          onClick={() => updateStep(step.id, { audit_use_ai: !useAi })}
+          className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${useAi ? 'bg-violet-500' : 'bg-gray-300'}`}
+        >
+          <span className={`inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform ${useAi ? 'translate-x-4.5' : 'translate-x-0.5'}`} />
+        </button>
+      </div>
+
+      {/* AI Model Selector */}
+      {useAi && (
+        <div className="pl-6 space-y-3">
+          <ModelSelect value={step.model} onChange={v => updateStep(step.id, { model: v })} recommended="claude-haiku-4-5@20251001" />
+          <p className="text-[10px] text-violet-500">
+            AI review adds ~$0.003/lead with Haiku, ~$0.04/lead with Sonnet.
+          </p>
+        </div>
+      )}
+
+      {/* Threshold slider */}
       <div>
-        <label className="text-xs font-medium text-gray-700 block mb-1.5">Quality Threshold (0-100)</label>
+        <label className="text-xs font-medium text-gray-700 block mb-1.5">
+          Quality Threshold (0-100){useAi ? ' — combined score' : ''}
+        </label>
         <div className="flex items-center gap-3">
           <input
             type="range"
@@ -1576,17 +1607,18 @@ function AuditConfig({ step, updateStep }: {
             step={5}
             value={threshold}
             onChange={e => updateStep(step.id, { audit_quality_threshold: parseInt(e.target.value) })}
-            className="flex-1 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-teal-600"
+            className={`flex-1 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer ${useAi ? 'accent-violet-600' : 'accent-teal-600'}`}
           />
           <span className={`text-sm font-bold min-w-[3ch] text-right ${
             threshold >= 80 ? 'text-red-600' : threshold >= 60 ? 'text-amber-600' : 'text-green-600'
           }`}>{threshold}</span>
         </div>
         <p className="text-[10px] text-gray-400 mt-1">
-          Briefs scoring below this threshold are flagged in the activity log. Higher = stricter quality bar.
+          Briefs scoring below this threshold are flagged. Higher = stricter quality bar.
         </p>
       </div>
 
+      {/* Audit checks grid */}
       <div className="bg-gray-50 rounded-lg p-3">
         <p className="text-xs font-medium text-gray-700 mb-2">Audit checks performed:</p>
         <div className="grid grid-cols-2 gap-1.5 text-[11px] text-gray-500">
@@ -1598,6 +1630,12 @@ function AuditConfig({ step, updateStep }: {
           <div className="flex items-center gap-1"><CheckCircle className="w-3 h-3 text-teal-500" /> Why-now triggers</div>
           <div className="flex items-center gap-1"><CheckCircle className="w-3 h-3 text-teal-500" /> Competitive displacement</div>
           <div className="flex items-center gap-1"><CheckCircle className="w-3 h-3 text-teal-500" /> Scoring consistency</div>
+          {useAi && (
+            <div className="flex items-center gap-1 col-span-2 mt-1 pt-1 border-t border-gray-200">
+              <Sparkles className="w-3 h-3 text-violet-500" />
+              <span className="text-violet-600 font-medium">AI: relevance, accuracy, actionability, persona quality, completeness</span>
+            </div>
+          )}
         </div>
       </div>
     </div>

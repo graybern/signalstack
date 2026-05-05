@@ -3,7 +3,7 @@ import { v4 as uuid } from 'uuid';
 import { getDb } from '../db/schema.js';
 import { authenticate, requireOperator, requireMember, AuthRequest } from '../auth/middleware.js';
 import { runCampaign } from '../agent/campaignOrchestrator.js';
-import { getSetting, getDefaultPipelineConfig, getDefaultPromptConfig } from './icp.js';
+import { getSetting, getDefaultPipelineConfig, getDefaultPromptConfig, getDefaultExcludedDomainPatterns } from './icp.js';
 import { registerCampaignCron, unregisterCampaignCron } from '../scheduler/campaignScheduler.js';
 import { logActivity, computeChanges } from '../services/activityLog.js';
 import { sendTestNotification } from '../services/notificationDispatcher.js';
@@ -255,6 +255,7 @@ router.get('/:id/config', authenticate, (req: AuthRequest, res: Response) => {
     buyer_personas: getSetting('icp.buyer_personas', {}),
     geographies: getSetting('icp.geographies', {}),
     segment_details: getSetting('icp.segment_details', {}),
+    excluded_domain_patterns: getSetting('icp.excluded_domain_patterns', getDefaultExcludedDomainPatterns()),
   };
 
   res.json({

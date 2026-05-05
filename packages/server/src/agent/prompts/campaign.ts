@@ -50,6 +50,15 @@ ${campaign.target_signals.map(s => `- ${s}`).join('\n')}
 ${campaign.anti_patterns.map(a => `- ${a}`).join('\n')}
 ` : '';
 
+  // ICP disqualifiers — surface hard DQs to prevent LLM from finding them
+  const hardDqs = (icpConfig.disqualifiers || []).filter(d => d.severity === 'hard');
+  const excludedDomains = icpConfig.excluded_domain_patterns || [];
+  const disqualifiersSection = (hardDqs.length > 0 || excludedDomains.length > 0)
+    ? `## Disqualified Company Types (DO NOT recommend)
+${hardDqs.map(d => `- ${d.signal}${d.notes ? ` — ${d.notes}` : ''}`).join('\n')}
+${excludedDomains.length > 0 ? `- Companies with domains ending in: ${excludedDomains.join(', ')}` : ''}
+` : '';
+
   // Search Patterns (rich vertical definitions) — NEW
   const searchPatternsSection = (campaign.search_patterns || []).length > 0
     ? `## Vertical Search Patterns
@@ -232,7 +241,7 @@ ${companySection}
 ## Research Pattern: ${campaign.name}
 ${campaign.pattern_thesis}
 
-${valuePropSection}${exampleSection}${searchPatternsSection}${signalSection}${categorySection}${antiPatternSection}${techSignalsSection}${competitorsSection}${buyerPersonasSection}${successStoriesSection}
+${valuePropSection}${exampleSection}${searchPatternsSection}${signalSection}${categorySection}${antiPatternSection}${disqualifiersSection}${techSignalsSection}${competitorsSection}${buyerPersonasSection}${successStoriesSection}
 ## Exclusion List (DO NOT recommend these)
 ${exclusionList}
 

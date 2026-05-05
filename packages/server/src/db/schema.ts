@@ -494,6 +494,12 @@ function initSchema(db: Database.Database) {
   if (!leadColsStage.find(c => c.name === 'audit_issues')) {
     db.exec("ALTER TABLE leads ADD COLUMN audit_issues TEXT");
   }
+  if (!leadColsStage.find(c => c.name === 'linkedin_company_url')) {
+    db.exec("ALTER TABLE leads ADD COLUMN linkedin_company_url TEXT");
+  }
+  if (!leadColsStage.find(c => c.name === 'ai_audit_result')) {
+    db.exec("ALTER TABLE leads ADD COLUMN ai_audit_result TEXT");
+  }
   db.exec(`CREATE INDEX IF NOT EXISTS idx_leads_pipeline_stage ON leads(pipeline_stage)`);
 
   // Run activity log — persistent log of AI thinking/reasoning during runs

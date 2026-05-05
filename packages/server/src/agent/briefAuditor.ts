@@ -1,7 +1,9 @@
-import type { AuditResult, AuditIssue } from '../types/index.js';
+import type { AuditResult, AuditIssue, ExtendedICPConfig } from '../types/index.js';
 import type { BriefResult, PersonaBrief } from './briefWriter.js';
 import type { ResearchCandidate } from './researcher.js';
 import type { ScoringResult } from './scorer.js';
+import type { TokenTracker } from './tokenTracker.js';
+import { createAIClient, getAIConfig, resolveModel } from '../config/vertexConfig.js';
 
 interface AuditInput {
   brief: BriefResult;
@@ -292,4 +294,169 @@ export function auditBrief(input: AuditInput, threshold: number = 60): AuditResu
     issues: allIssues,
     checks,
   };
+}
+
+// ── AI-powered audit ────────────────────────────────────────────────
+
+interface AIAuditInput {
+  brief: BriefResult;
+  candidate: ResearchCandidate;
+  score: ScoringResult;
+  icpConfig: ExtendedICPConfig;
+}
+
+function getAIAuditPrompt(icpConfig: ExtendedICPConfig): string {
+  const companyName = icpConfig.company_context?.company_name || 'the company';
+  const productName = icpConfig.company_context?.product_name || companyName;
+  const valueProps = icpConfig.company_context?.value_props || [];
+  const differentiators = icpConfig.company_context?.differentiators || [];
+
+  return `You are a senior sales operations analyst reviewing outbound lead briefs for quality before they reach account executives.
+
+Your job is to evaluate whether a brief is accurate, relevant, actionable, and would actually help an AE have a productive conversation.
+
+## Product Context
+${companyName}${productName !== companyName ? ` (${productName})` : ''}
+${valueProps.length > 0 ? `Value Props: ${valueProps.join('; ')}` : ''}
+${differentiators.length > 0 ? `Differentiators: ${differentiators.join('; ')}` : ''}
+
+## Evaluation Criteria
+
+Score each dimension 1-10 and provide specific feedback:
+
+1. **relevance** (weight: 25%) — Does the pain hypothesis and outreach angle actually make sense for this specific company? Would an AE read this and think "yes, this is a real opportunity" or "this is generic filler"?
+
+2. **accuracy** (weight: 20%) — Are claims supported by evidence? Are there any red flags (e.g., claiming confirmed facts without sources, fabricated-looking names/titles, contradictory information)?
+
+3. **actionability** (weight: 25%) — Could an AE immediately act on this? Are the outreach messages specific enough? Do talking points reference real signals, not generic value props?
+
+4. **persona_quality** (weight: 15%) — Are the personas realistic and well-targeted? Is the champion someone who would actually evaluate this type of solution? Are outreach messages personalized to the company?
+
+5. **completeness** (weight: 15%) — Are there obvious gaps an AE would need to fill before reaching out? How much additional research would be needed?
+
+## Output Format
+Return a JSON object:
+\`\`\`json
+{
+  "overall_score": 1-100,
+  "verdict": "pass" | "needs_work" | "fail",
+  "summary": "1-2 sentence overall assessment",
+  "dimensions": {
+    "relevance": { "score": 1-10, "feedback": "string" },
+    "accuracy": { "score": 1-10, "feedback": "string" },
+    "actionability": { "score": 1-10, "feedback": "string" },
+    "persona_quality": { "score": 1-10, "feedback": "string" },
+    "completeness": { "score": 1-10, "feedback": "string" }
+  },
+  "issues": [
+    { "severity": "error|warning|info", "message": "string" }
+  ],
+  "strengths": ["string"]
+}
+\`\`\`
+
+Return ONLY the JSON object.`;
+}
+
+function extractJson(text: string): string {
+  const codeBlockMatch = text.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/);
+  if (codeBlockMatch) return codeBlockMatch[1].trim();
+  const jsonMatch = text.match(/(\{[\s\S]*\})/);
+  if (jsonMatch) return jsonMatch[1].trim();
+  return text.trim();
+}
+
+export interface AIAuditResult {
+  overall_score: number;
+  verdict: 'pass' | 'needs_work' | 'fail';
+  summary: string;
+  dimensions: Record<string, { score: number; feedback: string }>;
+  issues: AuditIssue[];
+  strengths: string[];
+}
+
+export async function aiAuditBrief(
+  input: AIAuditInput,
+  model?: string,
+  tracker?: TokenTracker
+): Promise<AIAuditResult> {
+  const { brief, candidate, score, icpConfig } = input;
+  const aiConfig = getAIConfig();
+  const client = await createAIClient();
+  const auditModel = model || 'claude-haiku-4-5@20251001';
+
+  const systemPrompt = getAIAuditPrompt(icpConfig);
+
+  const userMessage = `Review this lead brief:
+
+## Company: ${candidate.company_name}
+- Segment: ${candidate.segment}
+- Employees: ~${candidate.employee_count_estimate || 'Unknown'}
+- Fit Score: ${score.fit_score}/100 (${score.confidence} confidence)
+
+## Brief Content
+**Company Snapshot:** ${brief.company_snapshot}
+
+**Pain Hypotheses (${brief.pain_hypotheses?.length || 0}):**
+${(brief.pain_hypotheses || []).map((p, i) => `${i + 1}. ${p.claim} [${p.evidence_strength || 'unknown'}]`).join('\n')}
+
+**Why Now (${brief.why_now?.length || 0}):**
+${(brief.why_now || []).map((t, i) => `${i + 1}. ${t}`).join('\n')}
+
+**Personas (${brief.personas?.length || 0}):**
+${(brief.personas || []).map(p => `- ${p.role_type}: ${p.name || '(unnamed)'} — ${p.title || '(no title)'}`).join('\n')}
+
+**Outreach Strategy:** ${brief.outreach_strategy || '(none)'}
+
+**Sources (${brief.source_citations?.length || 0}):**
+${(brief.source_citations || []).map(s => `- [${s.type}] ${s.label}`).join('\n')}
+
+**Tech Stack:** VPN: ${brief.tech_stack?.vpn_product?.product || 'Unknown'} (${brief.tech_stack?.vpn_product?.confidence || 'unknown'})
+
+**Competitive Displacement:**
+- Current: ${brief.competitive_displacement?.likely_current?.join(', ') || 'Unknown'}
+- Wedge: ${brief.competitive_displacement?.twingate_wedge?.join('; ') || 'None identified'}
+
+## Candidate Signals (${candidate.signals.length})
+${candidate.signals.slice(0, 10).map(s => `- ${s}`).join('\n')}
+
+Evaluate this brief.`;
+
+  try {
+    const stream = client.messages.stream({
+      model: resolveModel(auditModel, aiConfig.provider),
+      max_tokens: 2048,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: userMessage }],
+    } as any);
+    const finalMessage = await stream.finalMessage();
+    if (tracker) tracker.addUsage(finalMessage);
+
+    const rawText = finalMessage.content.find((b: any) => b.type === 'text')?.text || '';
+    const jsonStr = extractJson(rawText);
+    const result = JSON.parse(jsonStr);
+
+    return {
+      overall_score: Math.min(100, Math.max(0, result.overall_score || 0)),
+      verdict: result.verdict || 'needs_work',
+      summary: result.summary || '',
+      dimensions: result.dimensions || {},
+      issues: (result.issues || []).map((i: any) => ({
+        check: 'ai_review',
+        severity: i.severity || 'info',
+        message: i.message || '',
+      })),
+      strengths: result.strengths || [],
+    };
+  } catch (err) {
+    console.error(`[aiAudit] Failed for ${candidate.company_name}:`, err);
+    return {
+      overall_score: 0,
+      verdict: 'fail',
+      summary: 'AI audit failed — review manually',
+      dimensions: {},
+      issues: [{ check: 'ai_review', severity: 'error', message: `AI audit error: ${err instanceof Error ? err.message : String(err)}` }],
+      strengths: [],
+    };
+  }
 }

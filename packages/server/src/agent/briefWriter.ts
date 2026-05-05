@@ -196,7 +196,11 @@ Generate the full lead brief as a JSON object.${outreachTone ? `\n\n## Outreach 
         proof_points_to_use: [],
       },
       outreach_strategy: result.outreach_strategy || '',
-      source_citations: result.source_citations || [],
+      source_citations: (result.source_citations || []).map((s: any, i: number) => ({
+        ...s,
+        id: s.id ?? i + 1,
+        confidence: s.confidence || 'inferred',
+      })),
       why_now: result.why_now || [],
       brief_markdown: result.brief_markdown || '',
       thinking: thinkingText || undefined,

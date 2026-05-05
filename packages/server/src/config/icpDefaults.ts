@@ -67,7 +67,14 @@ export function getDefaultDisqualifiers() {
   return [
     { signal: 'Fewer than 20 employees', severity: 'hard' as const, notes: 'Too small for outbound' },
     { signal: 'Company is a direct competitor', severity: 'hard' as const, notes: 'They build the same thing' },
+    { signal: 'Government or public sector entity', severity: 'hard' as const, notes: 'No FedRAMP support' },
+    { signal: 'Federal contractor (primary revenue)', severity: 'hard' as const, notes: 'Government-dependent revenue' },
+    { signal: 'Defense contractor', severity: 'hard' as const, notes: 'ITAR/classified requirements' },
   ];
+}
+
+export function getDefaultExcludedDomainPatterns() {
+  return ['.gov', '.mil', '.gov.uk', '.gov.au', '.gc.ca'];
 }
 
 export function getDefaultSignalWeights() {

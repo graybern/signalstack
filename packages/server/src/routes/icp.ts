@@ -11,6 +11,7 @@ import {
   getDefaultDisqualifiers,
   getDefaultSignalWeights,
   getDefaultBuyerPersonas,
+  getDefaultExcludedDomainPatterns,
 } from '../config/icpDefaults.js';
 
 const router = Router();
@@ -46,7 +47,7 @@ router.put('/', authenticate, requireOperator, (req: AuthRequest, res: Response)
   );
 
   // Also save extended ICP fields to app_settings
-  const extendedFields = ['company_context', 'geographies', 'segment_details', 'disqualifiers', 'signal_weights', 'buyer_personas'];
+  const extendedFields = ['company_context', 'geographies', 'segment_details', 'disqualifiers', 'signal_weights', 'buyer_personas', 'excluded_domain_patterns'];
   for (const key of extendedFields) {
     if (body[key] !== undefined) {
       saveSetting(`icp.${key}`, body[key], req.user!.id);
@@ -78,6 +79,7 @@ router.get('/full', authenticate, (_req: AuthRequest, res: Response) => {
     disqualifiers: getSetting('icp.disqualifiers', getDefaultDisqualifiers()),
     signal_weights: getSetting('icp.signal_weights', getDefaultSignalWeights()),
     buyer_personas: getSetting('icp.buyer_personas', getDefaultBuyerPersonas()),
+    excluded_domain_patterns: getSetting('icp.excluded_domain_patterns', getDefaultExcludedDomainPatterns()),
   };
 
   res.json({ ...base, ...extended });
@@ -202,5 +204,5 @@ function getDefaultFunnelConfig() {
   };
 }
 
-export { getDefaultICP, getDefaultPipelineConfig, getDefaultPromptConfig, getDefaultFunnelConfig, getSetting, saveSetting, getDefaultCompanyContext, getDefaultDisqualifiers, getDefaultSignalWeights, getDefaultBuyerPersonas, getDefaultSegmentDetails, getDefaultGeographies };
+export { getDefaultICP, getDefaultPipelineConfig, getDefaultPromptConfig, getDefaultFunnelConfig, getSetting, saveSetting, getDefaultCompanyContext, getDefaultDisqualifiers, getDefaultSignalWeights, getDefaultBuyerPersonas, getDefaultSegmentDetails, getDefaultGeographies, getDefaultExcludedDomainPatterns };
 export default router;

@@ -225,11 +225,18 @@ async function enrichSingleCandidate(
 function mergeEnrichments(enrichments: Partial<CompanyEnrichment>[]): CompanyEnrichment {
   const merged: CompanyEnrichment = {};
 
+  const EMPLOYEE_SOURCE_PRIORITY: Record<string, number> = {
+    salesforce: 5, linkedin: 4, apollo: 3, crunchbase: 2, wikipedia: 1,
+  };
+
   for (const e of enrichments) {
-    // Employee count — prefer CRM/Crunchbase over other sources
-    if (e.employee_count && !merged.employee_count) {
-      merged.employee_count = e.employee_count;
-      merged.employee_count_source = e.employee_count_source;
+    if (e.employee_count) {
+      const newPriority = EMPLOYEE_SOURCE_PRIORITY[e.employee_count_source || ''] || 0;
+      const existingPriority = EMPLOYEE_SOURCE_PRIORITY[merged.employee_count_source || ''] || 0;
+      if (!merged.employee_count || newPriority > existingPriority) {
+        merged.employee_count = e.employee_count;
+        merged.employee_count_source = e.employee_count_source;
+      }
     }
 
     // Simple fields — first non-null wins
@@ -364,9 +371,14 @@ function applyCandidateEnrichment(
   const enrichmentNotes: string[] = [];
 
   // Override with better data
-  if (enrichment.employee_count && (!candidate.employee_count_estimate || candidate.employee_count_estimate === 0)) {
-    updated.employee_count_estimate = enrichment.employee_count;
-    enrichmentNotes.push(`Employee count (${enrichment.employee_count_source}): ${enrichment.employee_count}`);
+  if (enrichment.employee_count) {
+    if (!candidate.employee_count_estimate || candidate.employee_count_estimate === 0) {
+      updated.employee_count_estimate = enrichment.employee_count;
+      enrichmentNotes.push(`Employee count (${enrichment.employee_count_source}): ${enrichment.employee_count}`);
+    } else if (enrichment.employee_count_source && ['salesforce', 'linkedin', 'apollo'].includes(enrichment.employee_count_source)) {
+      updated.employee_count_estimate = enrichment.employee_count;
+      enrichmentNotes.push(`Employee count updated from ${enrichment.employee_count_source}: ${enrichment.employee_count}`);
+    }
   }
 
   if (enrichment.hq_location && !candidate.hq_location) {
@@ -387,6 +399,10 @@ function applyCandidateEnrichment(
 
   if (enrichment.investors?.length && !candidate.investors) {
     updated.investors = enrichment.investors.join(', ');
+  }
+
+  if (enrichment.linkedin_url) {
+    updated.linkedin_company_url = enrichment.linkedin_url;
   }
 
   // Add enrichment signals

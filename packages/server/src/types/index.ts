@@ -176,9 +176,11 @@ export interface CompetitiveDisplacement {
 }
 
 export interface SourceCitation {
+  id?: number;
   type: string;
   url: string;
   label: string;
+  confidence?: 'confirmed' | 'inferred';
 }
 
 export interface LeadBriefFull extends Lead {
@@ -316,6 +318,7 @@ export interface FunnelStepConfig {
 
   // ── Audit levers ──
   audit_quality_threshold?: number;
+  audit_use_ai?: boolean;
 }
 
 export interface FunnelConfig {
@@ -465,6 +468,7 @@ export interface ExtendedICPConfig extends ICPConfigParsed {
     departments: string[];
     notes: string;
   }>;
+  excluded_domain_patterns?: string[];
   prompt_config?: {
     research_preamble: string;
     research_additional_instructions: string;

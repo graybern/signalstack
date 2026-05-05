@@ -19,6 +19,7 @@ export interface ResearchCandidate {
   notes: string;
   enrichment_source_count?: number;
   domain_validated?: boolean;
+  linkedin_company_url?: string;
 }
 
 function extractJson(text: string): string {

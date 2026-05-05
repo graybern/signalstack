@@ -4,7 +4,7 @@ import { createAIClient, getAIConfig, resolveModel } from '../config/vertexConfi
 import { getDb } from '../db/schema.js';
 import { scoreCandidate } from './scorer.js';
 import { generateBrief } from './briefWriter.js';
-import { auditBrief } from './briefAuditor.js';
+import { auditBrief, aiAuditBrief } from './briefAuditor.js';
 import { getCampaignResearchPrompt } from './prompts/campaign.js';
 import { TokenTracker, MultiModelTokenTracker } from './tokenTracker.js';
 import { ActivityLogger } from './activityLogger.js';
@@ -101,9 +101,7 @@ function executeQualifyStep(
   const icpSoftDqs = (icpConfig.disqualifiers || []).filter(d => d.severity === 'soft');
   const limit = step.candidate_limit || candidates.length;
 
-  // Check if ICP has a government-related hard DQ for domain-pattern matching
-  const hasGovDq = icpHardDqs.some(d => d.toLowerCase().includes('government') || d.toLowerCase().includes('public sector'));
-  const govDomainSuffixes = ['.gov', '.mil', '.gov.uk', '.gov.au', '.gc.ca'];
+  const excludedDomainPatterns = icpConfig.excluded_domain_patterns || ['.gov', '.mil', '.gov.uk', '.gov.au', '.gc.ca'];
 
   const qualified: ResearchCandidate[] = [];
   let disqualified = 0;
@@ -111,12 +109,12 @@ function executeQualifyStep(
   for (const c of candidates) {
     const searchText = `${c.notes} ${c.signals.join(' ')} ${c.company_name} ${c.domain}`.toLowerCase();
 
-    // Domain-pattern disqualification (.gov/.mil) — only when ICP has government hard DQ
-    if (hasGovDq && c.domain) {
+    // Domain-pattern disqualification — configurable via ICP excluded_domain_patterns
+    if (c.domain && excludedDomainPatterns.length > 0) {
       const domainLower = c.domain.toLowerCase();
-      const govMatch = govDomainSuffixes.find(suffix => domainLower.endsWith(suffix));
-      if (govMatch) {
-        logger.thinking('qualify', `Disqualified ${c.company_name}: ${govMatch} domain matches ICP government hard DQ`);
+      const domainMatch = excludedDomainPatterns.find(suffix => domainLower.endsWith(suffix.toLowerCase()));
+      if (domainMatch) {
+        logger.thinking('qualify', `Disqualified ${c.company_name}: domain matches excluded pattern "${domainMatch}"`);
         disqualified++;
         continue;
       }
@@ -340,8 +338,8 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
         fit_score, fit_score_label, confidence, why_now, score_breakdown,
         pain_hypotheses, tech_stack, competitive_displacement,
         outreach_strategy, source_citations, brief_markdown, signal_count,
-        pipeline_stage, candidate_data, lead_status, scorer_thinking, brief_thinking, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        pipeline_stage, candidate_data, lead_status, scorer_thinking, brief_thinking, linkedin_company_url, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
       ON CONFLICT(id) DO UPDATE SET
         segment = excluded.segment,
         hq_location = excluded.hq_location,
@@ -369,6 +367,7 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
         lead_status = excluded.lead_status,
         scorer_thinking = COALESCE(excluded.scorer_thinking, leads.scorer_thinking),
         brief_thinking = COALESCE(excluded.brief_thinking, leads.brief_thinking),
+        linkedin_company_url = COALESCE(excluded.linkedin_company_url, leads.linkedin_company_url),
         run_id = excluded.run_id`
     );
 
@@ -416,7 +415,8 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
             JSON.stringify(candidateData),
             leadStatus,
             thinking?.scorer || null,
-            thinking?.brief || null
+            thinking?.brief || null,
+            c.linkedin_company_url || null
           );
         }
       });
@@ -852,45 +852,71 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
           }
           emitProgress('audit');
           const threshold = step.audit_quality_threshold ?? 60;
-          logger.phaseStart('audit', `Auditing ${briefResults.length} briefs (threshold: ${threshold}/100)...`);
+          const useAiAudit = step.audit_use_ai === true;
+          const auditModel = step.model || 'claude-haiku-4-5@20251001';
+          logger.phaseStart('audit', `Auditing ${briefResults.length} briefs (threshold: ${threshold}/100${useAiAudit ? `, AI: ${auditModel}` : ', rules-only'})...`);
 
+          const auditTracker = useAiAudit ? tracker.getTrackerForModel(auditModel) : undefined;
           const auditResults: { company: string; score: number; passed: boolean; issues: number; errorCount: number; warnCount: number }[] = [];
 
           for (const { candidate, score, brief } of briefResults) {
-            const audit = auditBrief({ brief, candidate, score }, threshold);
+            const rulesAudit = auditBrief({ brief, candidate, score }, threshold);
+            let finalScore = rulesAudit.score;
+            let allIssues = [...rulesAudit.issues];
+            let aiResultJson: string | null = null;
+
+            if (useAiAudit) {
+              try {
+                logger.thinking('audit', `Running AI review for ${candidate.company_name}...`);
+                const aiResult = await aiAuditBrief(
+                  { brief, candidate, score, icpConfig },
+                  auditModel,
+                  auditTracker
+                );
+                finalScore = Math.round(rulesAudit.score * 0.3 + aiResult.overall_score * 0.7);
+                allIssues = [...rulesAudit.issues, ...aiResult.issues];
+                aiResultJson = JSON.stringify(aiResult);
+
+                logger.thinking('audit', `AI audit for ${candidate.company_name}: ${aiResult.verdict} (${aiResult.overall_score}/100) — ${aiResult.summary}`);
+              } catch (err) {
+                logger.thinking('audit', `AI audit failed for ${candidate.company_name}, using rules-only score: ${err instanceof Error ? err.message : String(err)}`);
+              }
+            }
+
+            const passed = finalScore >= threshold;
             auditResults.push({
               company: candidate.company_name,
-              score: audit.score,
-              passed: audit.passed,
-              issues: audit.issues.length,
-              errorCount: audit.issues.filter(i => i.severity === 'error').length,
-              warnCount: audit.issues.filter(i => i.severity === 'warning').length,
+              score: finalScore,
+              passed,
+              issues: allIssues.length,
+              errorCount: allIssues.filter(i => i.severity === 'error').length,
+              warnCount: allIssues.filter(i => i.severity === 'warning').length,
             });
 
-            // Persist audit results to lead
             const leadId = getLeadId(candidate.company_name);
             try {
-              db.prepare('UPDATE leads SET audit_score = ?, audit_issues = ?, pipeline_stage = ? WHERE id = ? AND run_id = ?')
-                .run(audit.score, JSON.stringify(audit.issues), 'audited', leadId, runId);
+              db.prepare('UPDATE leads SET audit_score = ?, audit_issues = ?, ai_audit_result = ?, pipeline_stage = ? WHERE id = ? AND run_id = ?')
+                .run(finalScore, JSON.stringify(allIssues), aiResultJson, 'audited', leadId, runId);
             } catch { /* column may not exist yet */ }
 
-            if (audit.passed) {
-              logger.finding('audit', candidate.company_name, `Audit passed (${audit.score}/100)`, {
-                checks: Object.fromEntries(Object.entries(audit.checks).map(([k, v]) => [k, `${v.score}pts ${v.passed ? '✓' : '✗'}`])),
+            if (passed) {
+              logger.finding('audit', candidate.company_name, `Audit passed (${finalScore}/100${useAiAudit ? ' combined' : ''})`, {
+                checks: Object.fromEntries(Object.entries(rulesAudit.checks).map(([k, v]) => [k, `${v.score}pts ${v.passed ? '✓' : '✗'}`])),
               });
             } else {
-              const topIssues = audit.issues.filter(i => i.severity === 'error').slice(0, 3).map(i => i.message);
-              logger.thinking('audit', `${candidate.company_name}: below threshold (${audit.score}/${threshold}) — ${topIssues.join('; ')}`);
+              const topIssues = allIssues.filter(i => i.severity === 'error').slice(0, 3).map(i => i.message);
+              logger.thinking('audit', `${candidate.company_name}: below threshold (${finalScore}/${threshold}) — ${topIssues.join('; ')}`);
             }
           }
 
           const passCount = auditResults.filter(r => r.passed).length;
           const avgScore = Math.round(auditResults.reduce((s, r) => s + r.score, 0) / auditResults.length);
-          logger.phaseComplete('audit', `Audit complete — ${passCount}/${auditResults.length} passed (avg: ${avgScore}/100)`, {
+          logger.phaseComplete('audit', `Audit complete — ${passCount}/${auditResults.length} passed (avg: ${avgScore}/100${useAiAudit ? ', AI-powered' : ''})`, {
             passed: passCount,
             failed: auditResults.length - passCount,
             avg_score: avgScore,
             threshold,
+            ai_enabled: useAiAudit,
           });
           break;
         }
@@ -1295,4 +1321,137 @@ function loadMergedExclusions(campaignExclusionConfig?: { additions?: any[]; exe
   }));
 
   return [...filtered, ...additions];
+}
+
+// ── Single-lead brief rerun ─────────────────────────────────────────
+
+export async function rerunBriefForLead(leadId: string): Promise<{ success: boolean; audit_score?: number; error?: string }> {
+  const db = getDb();
+  const lead = db.prepare('SELECT * FROM leads WHERE id = ?').get(leadId) as any;
+  if (!lead) return { success: false, error: 'Lead not found' };
+  if (!lead.campaign_id) return { success: false, error: 'Lead has no campaign' };
+
+  const campaignRow = db.prepare('SELECT * FROM campaigns WHERE id = ?').get(lead.campaign_id);
+  if (!campaignRow) return { success: false, error: 'Campaign not found' };
+  const campaign = parseCampaignRow(campaignRow);
+  const { pipelineConfig, icpConfig, promptConfig } = loadCampaignConfig(campaign);
+
+  const funnelConfig = campaign.funnel_config || buildLegacyFunnel(pipelineConfig);
+  const briefStep = funnelConfig.steps.find((s: FunnelStepConfig) => s.id === 'brief');
+  const auditStep = funnelConfig.steps.find((s: FunnelStepConfig) => s.id === 'audit');
+  const aiConfig = getAIConfig();
+  const model = briefStep?.model || aiConfig.defaultModel;
+
+  const candidateData = lead.candidate_data ? JSON.parse(lead.candidate_data) : {};
+  const candidate: ResearchCandidate = {
+    company_name: lead.company_name,
+    domain: lead.website || lead.domain || '',
+    segment: lead.segment || 'MM',
+    employee_count_estimate: lead.employee_count,
+    hq_location: lead.hq_location,
+    founded_year: lead.founded_year,
+    funding_stage: lead.funding_stage,
+    total_funding: lead.total_funding,
+    investors: lead.investors,
+    signals: candidateData.signals || [],
+    sources: candidateData.sources || [],
+    notes: candidateData.notes || '',
+    enrichment_source_count: candidateData.enrichment_source_count,
+    domain_validated: candidateData.domain_validated,
+  };
+
+  const scoreBreakdown = lead.score_breakdown ? JSON.parse(lead.score_breakdown) : {};
+  const score: ScoringResult = {
+    fit_score: lead.fit_score || 0,
+    fit_score_label: lead.fit_score_label || '',
+    confidence: lead.confidence || 'medium',
+    score_breakdown: scoreBreakdown,
+    reasoning: candidateData.reasoning,
+  };
+
+  const tracker = new TokenTracker(model);
+  const briefTone = briefStep?.outreach_tone || promptConfig?.outreach_tone;
+
+  const brief = await generateBrief(
+    candidate, score, icpConfig, model, tracker,
+    briefStep?.prompt_instructions, briefTone, briefStep,
+    { runId: lead.run_id, campaignId: lead.campaign_id, phase: 'brief-rerun' }
+  );
+
+  // Update lead with new brief data
+  db.prepare(`UPDATE leads SET
+    brief_markdown = ?, pain_hypotheses = ?, tech_stack = ?,
+    competitive_displacement = ?, outreach_strategy = ?,
+    source_citations = ?, why_now = ?, brief_thinking = ?,
+    signal_count = ?, pipeline_stage = 'briefed'
+    WHERE id = ?`
+  ).run(
+    brief.brief_markdown || null,
+    brief.pain_hypotheses ? JSON.stringify(brief.pain_hypotheses) : null,
+    brief.tech_stack ? JSON.stringify(brief.tech_stack) : null,
+    brief.competitive_displacement ? JSON.stringify(brief.competitive_displacement) : null,
+    brief.outreach_strategy || null,
+    brief.source_citations ? JSON.stringify(brief.source_citations) : null,
+    brief.why_now ? JSON.stringify(brief.why_now) : null,
+    brief.thinking || null,
+    brief.source_citations?.length || candidate.signals.length || 0,
+    leadId
+  );
+
+  // Replace personas
+  db.prepare('DELETE FROM personas WHERE lead_id = ?').run(leadId);
+  const insertPersona = db.prepare(
+    `INSERT INTO personas (id, lead_id, role_type, name, title, linkedin_url, department, tenure, outreach_angle, talking_points, outreach_message, social_signals, buying_signals, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))`
+  );
+  for (const persona of brief.personas) {
+    insertPersona.run(
+      uuidv4(), leadId,
+      persona.role_type, persona.name, persona.title,
+      persona.linkedin_url, persona.department, persona.tenure,
+      persona.outreach_angle, persona.talking_points,
+      persona.outreach_message, persona.social_signals,
+      persona.buying_signals
+    );
+  }
+
+  // Run audit if enabled
+  let auditScore: number | undefined;
+  if (auditStep?.enabled !== false) {
+    const threshold = auditStep?.audit_quality_threshold ?? 60;
+    const rulesAudit = auditBrief({ brief, candidate, score }, threshold);
+    let finalScore = rulesAudit.score;
+    let allIssues = [...rulesAudit.issues];
+    let aiResultJson: string | null = null;
+
+    if (auditStep?.audit_use_ai === true) {
+      try {
+        const aiResult = await aiAuditBrief(
+          { brief, candidate, score, icpConfig },
+          auditStep.model || 'claude-haiku-4-5@20251001',
+          tracker
+        );
+        finalScore = Math.round(rulesAudit.score * 0.3 + aiResult.overall_score * 0.7);
+        allIssues = [...rulesAudit.issues, ...aiResult.issues];
+        aiResultJson = JSON.stringify(aiResult);
+      } catch (err) {
+        console.error(`[rerunBrief] AI audit failed for ${lead.company_name}:`, err);
+      }
+    }
+
+    auditScore = finalScore;
+    try {
+      db.prepare('UPDATE leads SET audit_score = ?, audit_issues = ?, ai_audit_result = ?, pipeline_stage = ? WHERE id = ?')
+        .run(finalScore, JSON.stringify(allIssues), aiResultJson, 'audited', leadId);
+    } catch { /* column may not exist */ }
+  }
+
+  eventBus.emit('lead.scored', {
+    lead_id: leadId,
+    company_name: lead.company_name,
+    fit_score: score.fit_score,
+    fit_score_label: score.fit_score_label || '',
+    confidence: score.confidence || 'medium',
+  });
+
+  return { success: true, audit_score: auditScore };
 }

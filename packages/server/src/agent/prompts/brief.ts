@@ -69,7 +69,7 @@ A concise summary of the company including:
 
 ### 2. Pain Hypotheses
 Identify specific pain points this company likely experiences that ${companyName} can address. Each hypothesis should include:
-- A clear claim about the pain point
+- A clear claim about the pain point — include inline source references using [N] format where N matches a source_citation id (e.g., "Recently migrated to AWS [3] suggesting cloud-first strategy")
 - Why it matters to this specific company (tied to their business context)
 - **Evidence strength**: "confirmed" (directly supported by a source/signal) or "inferred" (logical deduction from company profile)
 
@@ -111,13 +111,18 @@ A strategic recommendation for how to approach this account:
 - Recommended discovery questions to ask
 
 ### 7. Source Citations
-List all sources used in researching this brief:
+List all sources used in researching this brief. Each citation must have:
+- **id**: Sequential number (1, 2, 3...) — used for inline references throughout the brief
 - Type (e.g., "career_page", "press_release", "crunchbase", "linkedin", "g2_review", "github", "dns_fingerprint")
 - URL (if available)
 - Label describing what information came from this source
+- **confidence**: "confirmed" (you directly observed this data) or "inferred" (deduced from context)
 
 ### 8. Why Now
-List 2-4 specific reasons why now is the right time to engage this prospect. Each reason should cite a specific signal or data point, not generic trends.
+List 2-4 specific reasons why now is the right time to engage this prospect. Each reason should cite a specific signal or data point using [N] inline references, not generic trends.
+
+## Inline Source References
+IMPORTANT: Throughout all text fields (company_snapshot, pain hypothesis claims, why_now items, competitive displacement entries), include inline source references using the format [N] where N matches the source_citation id. Every factual claim should be attributed. Example: "Company recently migrated to AWS [3] and posted 5 VPN engineer roles [1], indicating infrastructure modernization."
 
 ### 9. Brief Markdown
 A complete, formatted markdown version of the brief suitable for display in a dashboard. Include all sections above in readable format.
@@ -161,7 +166,7 @@ Return a JSON object with this exact structure:
   },
   "outreach_strategy": "string",
   "source_citations": [
-    { "type": "string", "url": "string", "label": "string" }
+    { "id": 1, "type": "string", "url": "string", "label": "string", "confidence": "confirmed|inferred" }
   ],
   "why_now": ["string"],
   "brief_markdown": "string"

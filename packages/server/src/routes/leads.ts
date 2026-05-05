@@ -239,6 +239,18 @@ router.get('/:id', authenticate, (req: AuthRequest, res: Response) => {
   res.json(parseLead(lead));
 });
 
+router.post('/:id/rerun-brief', authenticate, requireAdmin, async (req: AuthRequest, res: Response) => {
+  try {
+    const { rerunBriefForLead } = await import('../agent/campaignOrchestrator.js');
+    res.json({ status: 'started', lead_id: req.params.id });
+    rerunBriefForLead(req.params.id).catch(err => {
+      console.error(`[rerun-brief] Failed for lead ${req.params.id}:`, err);
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Failed to start brief rerun' });
+  }
+});
+
 router.post('/:id/feedback', authenticate, (req: AuthRequest, res: Response) => {
   const { verdict, reason, retry_date } = req.body;
 
@@ -378,6 +390,7 @@ function parseLead(row: any) {
   try { lead.outreach_strategy_parsed = JSON.parse(row.outreach_strategy); } catch { lead.outreach_strategy_parsed = null; }
   try { lead.candidate_data_parsed = JSON.parse(row.candidate_data); } catch { lead.candidate_data_parsed = null; }
   try { lead.audit_issues_parsed = JSON.parse(row.audit_issues); } catch { lead.audit_issues_parsed = null; }
+  try { lead.ai_audit = JSON.parse(row.ai_audit_result); } catch { lead.ai_audit = null; }
 
   let signalCount = 0;
   if (lead.sources_parsed && Array.isArray(lead.sources_parsed)) signalCount += lead.sources_parsed.length;

@@ -8,6 +8,7 @@ import {
   getDefaultBuyerPersonas,
   getDefaultSegmentDetails,
   getDefaultGeographies,
+  getDefaultExcludedDomainPatterns,
 } from '../../config/icpDefaults.js';
 import type { ExtendedICPConfig } from '../../types/index.js';
 
@@ -50,6 +51,7 @@ export function loadExtendedIcpConfig(
     disqualifiers: getSetting('icp.disqualifiers', getDefaultDisqualifiers()),
     signal_weights: getSetting('icp.signal_weights', getDefaultSignalWeights()),
     buyer_personas: getSetting('icp.buyer_personas', getDefaultBuyerPersonas()),
+    excluded_domain_patterns: getSetting('icp.excluded_domain_patterns', getDefaultExcludedDomainPatterns()),
     prompt_config: promptConfig,
   };
 
@@ -60,6 +62,7 @@ export function loadExtendedIcpConfig(
     if (icpOverrides.geographies) extended.geographies = { ...extended.geographies, ...icpOverrides.geographies };
     if (icpOverrides.company_context) extended.company_context = { ...extended.company_context, ...icpOverrides.company_context };
     if (icpOverrides.segment_details) extended.segment_details = { ...extended.segment_details, ...icpOverrides.segment_details };
+    if (icpOverrides.excluded_domain_patterns) extended.excluded_domain_patterns = icpOverrides.excluded_domain_patterns;
   }
 
   return extended;

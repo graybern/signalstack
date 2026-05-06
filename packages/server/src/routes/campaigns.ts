@@ -654,14 +654,37 @@ router.post('/:id/run', authenticate, requireMember, async (req: AuthRequest, re
   if (activeRun) return res.status(409).json({ error: 'A campaign run is already in progress' });
 
   // Accept optional steps to run individually
-  const validStepIds = new Set(['discover', 'qualify', 'enrich', 'score', 'brief']);
+  const validStepIds = new Set(['discover', 'qualify', 'enrich', 'score', 'brief', 'audit']);
   const rawSteps = req.body?.steps;
-  const requestedSteps: string[] | undefined = Array.isArray(rawSteps)
+  let requestedSteps: string[] | undefined = Array.isArray(rawSteps)
     ? rawSteps.filter((s: any) => typeof s === 'string' && validStepIds.has(s))
     : undefined;
 
+  // Accept optional lead_ids for targeted stage reruns
+  let targetLeadIds: string[] | undefined;
+  const rawLeadIds = req.body?.lead_ids;
+  if (Array.isArray(rawLeadIds) && rawLeadIds.length > 0) {
+    const validLeadIds = rawLeadIds.filter((id: any) => typeof id === 'string');
+    if (validLeadIds.length > 0) {
+      const placeholders = validLeadIds.map(() => '?').join(',');
+      const validCount = (db.prepare(
+        `SELECT COUNT(*) as c FROM leads WHERE campaign_id = ? AND id IN (${placeholders})`
+      ).get(req.params.id, ...validLeadIds) as any).c;
+      if (validCount !== validLeadIds.length) {
+        return res.status(400).json({ error: `Some lead IDs do not belong to this campaign` });
+      }
+      targetLeadIds = validLeadIds;
+    }
+    if (requestedSteps?.includes('discover')) {
+      return res.status(400).json({ error: 'Cannot run discover step with specific lead IDs' });
+    }
+    if (!requestedSteps?.length) {
+      requestedSteps = ['brief'];
+    }
+  }
+
   // runCampaign inserts the pipeline_runs record synchronously, then does async AI work
-  const runPromise = runCampaign(req.params.id, req.user!.id, requestedSteps);
+  const runPromise = runCampaign(req.params.id, req.user!.id, requestedSteps, targetLeadIds);
   runPromise.catch(err => {
     console.error('Campaign run failed:', err);
   });
@@ -672,7 +695,12 @@ router.post('/:id/run', authenticate, requireMember, async (req: AuthRequest, re
     "SELECT id FROM pipeline_runs WHERE campaign_id = ? ORDER BY created_at DESC LIMIT 1"
   ).get(req.params.id) as any;
 
-  res.json({ message: 'Campaign run triggered', status: 'running', run_id: newRun?.id || null });
+  res.json({
+    message: targetLeadIds ? 'Stage rerun triggered' : 'Campaign run triggered',
+    status: 'running',
+    run_id: newRun?.id || null,
+    targeted_leads: targetLeadIds?.length || 0,
+  });
 });
 
 export default router;

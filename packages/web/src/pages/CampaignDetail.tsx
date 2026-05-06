@@ -8,7 +8,7 @@ import {
   Layers, Settings, Clock, Shield, Rss, Copy, Check, Calendar,
   Search, Send, Globe, Hash, Plus, Trash2, Power, Crosshair,
   BarChart3, DollarSign, Activity, Eye, ExternalLink,
-  ArrowUpDown, ArrowUp, ArrowDown, Filter, X,
+  ArrowUpDown, ArrowUp, ArrowDown, Filter, X, RefreshCw,
 } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
@@ -101,6 +101,8 @@ export function CampaignDetail() {
   const [leadSort, setLeadSort] = useState<'fit_score' | 'company_name' | 'created_at' | 'segment'>('fit_score');
   const [leadSortDir, setLeadSortDir] = useState<'asc' | 'desc'>('desc');
   const [leadSegmentFilter, setLeadSegmentFilter] = useState<string>('');
+  const [selectedLeadIds, setSelectedLeadIds] = useState<Set<string>>(new Set());
+  const [bulkRunning, setBulkRunning] = useState(false);
 
   // Configure state
   const [configTab, setConfigTab] = useState<'definition' | 'funnel' | 'schedule' | 'exclusions' | 'feed'>('definition');
@@ -222,6 +224,25 @@ export function CampaignDetail() {
       }
     } catch (err: any) {
       alert(err.message);
+    }
+  };
+
+  const triggerBulkRerun = async (stage: string, leadIds: string[]) => {
+    if (!id || leadIds.length === 0) return;
+    setBulkRunning(true);
+    try {
+      const result = await api<{ run_id: string }>(`/campaigns/${id}/run`, {
+        method: 'POST',
+        body: JSON.stringify({ steps: [stage], lead_ids: leadIds }),
+      });
+      if (result.run_id) {
+        setActiveRunId(result.run_id);
+      }
+    } catch (err: any) {
+      alert(err.message);
+    } finally {
+      setBulkRunning(false);
+      setSelectedLeadIds(new Set());
     }
   };
 
@@ -510,6 +531,11 @@ export function CampaignDetail() {
           leadSortDir={leadSortDir}
           setLeadSortDir={setLeadSortDir}
           segments={segments}
+          selectedLeadIds={selectedLeadIds}
+          setSelectedLeadIds={setSelectedLeadIds}
+          bulkRunning={bulkRunning}
+          onBulkRerun={triggerBulkRerun}
+          canRerun={permissions.canRunCampaign(user?.role)}
         />
       )}
 
@@ -810,6 +836,7 @@ function LeadsTab({
   campaign, filteredLeads, leadSearch, setLeadSearch,
   leadRunFilter, setLeadRunFilter, leadSegmentFilter, setLeadSegmentFilter,
   leadSort, setLeadSort, leadSortDir, setLeadSortDir, segments,
+  selectedLeadIds, setSelectedLeadIds, bulkRunning, onBulkRerun, canRerun,
 }: {
   campaign: CampaignFull;
   filteredLeads: any[];
@@ -824,7 +851,13 @@ function LeadsTab({
   leadSortDir: 'asc' | 'desc';
   setLeadSortDir: (d: 'asc' | 'desc') => void;
   segments: string[];
+  selectedLeadIds: Set<string>;
+  setSelectedLeadIds: (ids: Set<string>) => void;
+  bulkRunning: boolean;
+  onBulkRerun: (stage: string, leadIds: string[]) => void;
+  canRerun: boolean;
 }) {
+  const [bulkStage, setBulkStage] = useState('brief');
   if (campaign.leads.length === 0) {
     return (
       <div className="text-center py-16 bg-white rounded-xl border border-gray-200">
@@ -900,6 +933,18 @@ function LeadsTab({
         <table className="w-full text-sm">
           <thead>
             <tr className="bg-gray-50 border-b border-gray-200">
+              {canRerun && (
+                <th className="pl-4 pr-2 py-3 w-8">
+                  <input
+                    type="checkbox"
+                    checked={selectedLeadIds.size === filteredLeads.length && filteredLeads.length > 0}
+                    onChange={(e) => {
+                      setSelectedLeadIds(e.target.checked ? new Set(filteredLeads.map((l: any) => l.id)) : new Set());
+                    }}
+                    className="rounded border-gray-300 text-brand-600 focus:ring-brand-500"
+                  />
+                </th>
+              )}
               <th className="px-4 py-3 text-left">
                 <button onClick={() => handleSort('company_name')} className="flex items-center gap-1.5 text-xs font-medium text-gray-500 uppercase hover:text-gray-700">
                   Company <SortIcon col="company_name" />
@@ -925,12 +970,26 @@ function LeadsTab({
           </thead>
           <tbody className="divide-y divide-gray-100">
             {filteredLeads.length === 0 ? (
-              <tr><td colSpan={5} className="px-4 py-8 text-center text-gray-500">No leads match filters</td></tr>
+              <tr><td colSpan={canRerun ? 6 : 5} className="px-4 py-8 text-center text-gray-500">No leads match filters</td></tr>
             ) : filteredLeads.map((lead: any) => {
               const runIndex = campaign.runs.findIndex((r: any) => r.id === lead.run_id);
               const runLabel = runIndex >= 0 ? `Run ${campaign.runs.length - runIndex}` : '';
               return (
-                <tr key={lead.id} className="hover:bg-gray-50 transition-colors">
+                <tr key={lead.id} className={`hover:bg-gray-50 transition-colors ${selectedLeadIds.has(lead.id) ? 'bg-brand-50/40' : ''}`}>
+                  {canRerun && (
+                    <td className="pl-4 pr-2 py-3 w-8">
+                      <input
+                        type="checkbox"
+                        checked={selectedLeadIds.has(lead.id)}
+                        onChange={(e) => {
+                          const next = new Set(selectedLeadIds);
+                          if (e.target.checked) next.add(lead.id); else next.delete(lead.id);
+                          setSelectedLeadIds(next);
+                        }}
+                        className="rounded border-gray-300 text-brand-600 focus:ring-brand-500"
+                      />
+                    </td>
+                  )}
                   <td className="px-4 py-3">
                     <Link to={`/leads/${lead.id}`} className="font-medium text-gray-900 hover:text-brand-600">
                       {lead.company_name}
@@ -953,6 +1012,39 @@ function LeadsTab({
           </tbody>
         </table>
       </div>
+
+      {/* Bulk action bar */}
+      {canRerun && selectedLeadIds.size > 0 && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-3 px-5 py-3 bg-gray-900 text-white rounded-xl shadow-2xl z-50">
+          <span className="text-sm font-medium">{selectedLeadIds.size} lead{selectedLeadIds.size > 1 ? 's' : ''} selected</span>
+          <div className="w-px h-5 bg-gray-700" />
+          <select
+            value={bulkStage}
+            onChange={e => setBulkStage(e.target.value)}
+            className="bg-gray-800 text-white text-sm rounded-lg px-2 py-1.5 border border-gray-700 focus:ring-brand-500 focus:border-brand-500"
+          >
+            <option value="qualify">Qualify</option>
+            <option value="enrich">Enrich</option>
+            <option value="score">Score</option>
+            <option value="brief">Brief</option>
+            <option value="audit">Audit</option>
+          </select>
+          <button
+            onClick={() => onBulkRerun(bulkStage, Array.from(selectedLeadIds))}
+            disabled={bulkRunning}
+            className="flex items-center gap-1.5 px-4 py-1.5 bg-brand-600 text-white rounded-lg text-sm font-medium hover:bg-brand-700 disabled:opacity-50 transition-colors"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${bulkRunning ? 'animate-spin' : ''}`} />
+            {bulkRunning ? 'Running...' : `Run ${bulkStage}`}
+          </button>
+          <button
+            onClick={() => setSelectedLeadIds(new Set())}
+            className="text-gray-400 hover:text-white transition-colors"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
     </div>
   );
 }

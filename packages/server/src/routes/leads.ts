@@ -241,13 +241,47 @@ router.get('/:id', authenticate, (req: AuthRequest, res: Response) => {
 
 router.post('/:id/rerun-brief', authenticate, requireAdmin, async (req: AuthRequest, res: Response) => {
   try {
-    const { rerunBriefForLead } = await import('../agent/campaignOrchestrator.js');
-    res.json({ status: 'started', lead_id: req.params.id });
-    rerunBriefForLead(req.params.id).catch(err => {
-      console.error(`[rerun-brief] Failed for lead ${req.params.id}:`, err);
+    const { runCampaign } = await import('../agent/campaignOrchestrator.js');
+    const { eventBus } = await import('../events/eventBus.js');
+    const leadId = req.params.id;
+    const db = getDb();
+    const lead = db.prepare('SELECT id, campaign_id, company_name FROM leads WHERE id = ?').get(leadId) as any;
+    if (!lead) return res.status(404).json({ error: 'Lead not found' });
+    if (!lead.campaign_id) return res.status(400).json({ error: 'Lead has no campaign' });
+
+    const validRerunStages = ['qualify', 'enrich', 'score', 'brief', 'audit'];
+    const stage = req.body?.stage;
+    const steps = stage && validRerunStages.includes(stage) ? [stage] : ['brief'];
+
+    const activeRun = db.prepare(
+      "SELECT id FROM pipeline_runs WHERE campaign_id = ? AND status IN ('pending','running') LIMIT 1"
+    ).get(lead.campaign_id) as any;
+    if (activeRun) {
+      return res.status(409).json({ error: 'A run is already in progress for this campaign' });
+    }
+
+    res.json({ status: 'started', lead_id: lead.id, steps });
+
+    runCampaign(lead.campaign_id, req.user!.id, steps, [lead.id]).catch(err => {
+      console.error(`[rerun-stage] Failed for lead ${lead.id}:`, err);
+      eventBus.emit('lead.stage_rerun', {
+        lead_id: lead.id,
+        company_name: lead.company_name,
+        stage: steps[0],
+        status: 'failed',
+        message: err instanceof Error ? err.message : 'Stage rerun failed',
+      });
+      if (steps[0] === 'brief') {
+        eventBus.emit('lead.brief_rerun', {
+          lead_id: lead.id,
+          company_name: lead.company_name,
+          status: 'failed',
+          message: err instanceof Error ? err.message : 'Brief rerun failed',
+        });
+      }
     });
   } catch (err: any) {
-    res.status(500).json({ error: err.message || 'Failed to start brief rerun' });
+    res.status(500).json({ error: err.message || 'Failed to start stage rerun' });
   }
 });
 

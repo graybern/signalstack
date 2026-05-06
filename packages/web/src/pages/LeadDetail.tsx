@@ -1,8 +1,9 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import { useAuthContext } from '../App';
 import { permissions } from '../utils/permissions';
+import { useEventStream } from '../hooks/useEventStream';
 import { formatDate } from '../utils/dates';
 import { ScoreBadge, ScoreLabel, ConfidenceBadge, SegmentBadge } from '../components/ScoreBadge';
 import {
@@ -47,6 +48,8 @@ export function LeadDetail() {
   const [lead, setLead] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [rerunning, setRerunning] = useState(false);
+  const [rerunStatus, setRerunStatus] = useState<string | null>(null);
+  const [rerunError, setRerunError] = useState<string | null>(null);
   const [feedbackLoading, setFeedbackLoading] = useState(false);
   const [feedbackReason, setFeedbackReason] = useState('');
   const [retryDate, setRetryDate] = useState('');
@@ -56,7 +59,10 @@ export function LeadDetail() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [showBriefMenu, setShowBriefMenu] = useState(false);
+  const [rerunStage, setRerunStage] = useState<string>('brief');
+  const [showRerunMenu, setShowRerunMenu] = useState(false);
   const briefMenuRef = useRef<HTMLDivElement>(null);
+  const rerunMenuRef = useRef<HTMLDivElement>(null);
 
   const handleDeleteLead = async () => {
     setDeleting(true);
@@ -93,26 +99,60 @@ export function LeadDetail() {
       if (briefMenuRef.current && !briefMenuRef.current.contains(e.target as Node)) {
         setShowBriefMenu(false);
       }
+      if (rerunMenuRef.current && !rerunMenuRef.current.contains(e.target as Node)) {
+        setShowRerunMenu(false);
+      }
     }
-    if (showBriefMenu) document.addEventListener('mousedown', handleClickOutside);
+    if (showBriefMenu || showRerunMenu) document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [showBriefMenu]);
+  }, [showBriefMenu, showRerunMenu]);
 
-  const fetchLead = () => api(`/leads/${id}`).then(setLead);
+  const fetchLead = useCallback(() => api(`/leads/${id}`).then(setLead), [id]);
   useEffect(() => {
     fetchLead().finally(() => setLoading(false));
   }, [id]);
 
-  const handleRerunBrief = async () => {
+  // SSE subscription for stage rerun progress
+  const { subscribe } = useEventStream({ types: ['lead.brief_rerun', 'lead.stage_rerun'], enabled: rerunning });
+  useEffect(() => {
+    if (!rerunning) return;
+    const unsubs: (() => void)[] = [];
+    const handleEvent = (event: any) => {
+      if (event.data?.lead_id !== id) return;
+      const { status, message } = event.data;
+      setRerunStatus(message || status);
+      if (status === 'completed') {
+        fetchLead().finally(() => {
+          setRerunning(false);
+          setTimeout(() => setRerunStatus(null), 4000);
+        });
+      } else if (status === 'failed') {
+        setRerunning(false);
+        setRerunError(message || 'Stage rerun failed');
+        setTimeout(() => { setRerunStatus(null); setRerunError(null); }, 6000);
+      }
+    };
+    unsubs.push(subscribe('lead.stage_rerun', handleEvent));
+    unsubs.push(subscribe('lead.brief_rerun', handleEvent));
+    return () => unsubs.forEach(fn => fn());
+  }, [rerunning, id, subscribe, fetchLead]);
+
+  const handleRerunStage = async (stage: string = 'brief') => {
     setRerunning(true);
+    setRerunStage(stage);
+    setRerunStatus(`Starting ${stage} rerun...`);
+    setRerunError(null);
+    setShowRerunMenu(false);
     try {
-      await api(`/leads/${id}/rerun-brief`, { method: 'POST' });
-      await new Promise(r => setTimeout(r, 8000));
-      await fetchLead();
-    } catch (err) {
+      await api(`/leads/${id}/rerun-brief`, {
+        method: 'POST',
+        body: JSON.stringify({ stage }),
+      });
+    } catch (err: any) {
       console.error('Rerun failed:', err);
-    } finally {
       setRerunning(false);
+      setRerunError(err?.message || `Failed to start ${stage} rerun`);
+      setTimeout(() => setRerunError(null), 6000);
     }
   };
 
@@ -199,14 +239,58 @@ export function LeadDetail() {
         </Link>
         <div className="flex items-center gap-2">
           {permissions.canAccessSettings(user?.role) && lead?.campaign_id && (
-            <button
-              onClick={handleRerunBrief}
-              disabled={rerunning}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-amber-300 text-amber-700 rounded-lg hover:bg-amber-50 disabled:opacity-50"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${rerunning ? 'animate-spin' : ''}`} />
-              {rerunning ? 'Rerunning...' : 'Rerun Brief'}
-            </button>
+            <div className="flex items-center gap-2">
+              <div className="relative" ref={rerunMenuRef}>
+                <div className="flex">
+                  <button
+                    onClick={() => handleRerunStage(rerunStage)}
+                    disabled={rerunning}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 text-sm border rounded-l-lg disabled:opacity-50 transition-colors ${
+                      rerunError ? 'border-red-300 text-red-700 bg-red-50' :
+                      rerunStatus && !rerunning ? 'border-green-300 text-green-700 bg-green-50' :
+                      'border-amber-300 text-amber-700 hover:bg-amber-50'
+                    }`}
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${rerunning ? 'animate-spin' : ''}`} />
+                    {rerunError ? 'Failed' :
+                     rerunning ? `Rerunning ${rerunStage}...` :
+                     rerunStatus ? 'Done' :
+                     `Rerun ${rerunStage.charAt(0).toUpperCase() + rerunStage.slice(1)}`}
+                  </button>
+                  <button
+                    onClick={() => setShowRerunMenu(!showRerunMenu)}
+                    disabled={rerunning}
+                    className={`px-1.5 py-1.5 text-sm border border-l-0 rounded-r-lg disabled:opacity-50 transition-colors ${
+                      rerunError ? 'border-red-300 text-red-700 bg-red-50' :
+                      rerunStatus && !rerunning ? 'border-green-300 text-green-700 bg-green-50' :
+                      'border-amber-300 text-amber-700 hover:bg-amber-50'
+                    }`}
+                  >
+                    <ChevronDown className="w-3 h-3" />
+                  </button>
+                </div>
+                {showRerunMenu && (
+                  <div className="absolute right-0 top-full mt-1 w-36 bg-white border border-gray-200 rounded-lg shadow-lg z-20 py-1">
+                    {(['qualify', 'enrich', 'score', 'brief', 'audit'] as const).map(stage => (
+                      <button
+                        key={stage}
+                        onClick={() => handleRerunStage(stage)}
+                        className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-50 capitalize ${
+                          stage === rerunStage ? 'text-amber-700 font-medium bg-amber-50' : 'text-gray-700'
+                        }`}
+                      >
+                        {stage}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              {(rerunStatus || rerunError) && (
+                <span className={`text-xs ${rerunError ? 'text-red-600' : rerunning ? 'text-amber-600' : 'text-green-600'}`}>
+                  {rerunError || rerunStatus}
+                </span>
+              )}
+            </div>
           )}
           {lead?.brief_markdown && (
             <div className="relative" ref={briefMenuRef}>

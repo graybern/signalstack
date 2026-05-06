@@ -52,6 +52,21 @@ export interface EventPayloads {
     new_status: string;
     changed_by?: string;
   };
+  'lead.brief_rerun': {
+    lead_id: string;
+    company_name: string;
+    status: 'generating' | 'auditing' | 'completed' | 'failed';
+    message?: string;
+    audit_score?: number;
+  };
+  'lead.stage_rerun': {
+    lead_id: string;
+    company_name: string;
+    stage: string;
+    status: 'started' | 'processing' | 'completed' | 'failed';
+    message?: string;
+    run_id?: string;
+  };
   'campaign.started': {
     campaign_id: string;
     campaign_name: string;
@@ -239,6 +254,7 @@ export class EventBus {
       'lead.qualified',
       'lead.disqualified',
       'lead.status_changed',
+      'lead.brief_rerun',
       'campaign.started',
       'campaign.progress',
       'campaign.completed',

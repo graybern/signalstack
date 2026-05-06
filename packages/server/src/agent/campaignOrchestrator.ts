@@ -232,7 +232,7 @@ function executeQualifyStep(
   return qualified;
 }
 
-export async function runCampaign(campaignId: string, triggeredBy: string | null, requestedSteps?: string[]): Promise<string> {
+export async function runCampaign(campaignId: string, triggeredBy: string | null, requestedSteps?: string[], targetLeadIds?: string[]): Promise<string> {
   const db = getDb();
   const runId = uuidv4();
 
@@ -243,9 +243,14 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
 
   // Create pipeline run record
   db.prepare(
-    `INSERT INTO pipeline_runs (id, triggered_by, campaign_id, status, started_at, steps_run, created_at)
-     VALUES (?, ?, ?, 'running', datetime('now'), ?, datetime('now'))`
-  ).run(runId, triggeredBy, campaignId, requestedSteps ? JSON.stringify(requestedSteps) : null);
+    `INSERT INTO pipeline_runs (id, triggered_by, campaign_id, status, started_at, steps_run, target_lead_ids, run_type, created_at)
+     VALUES (?, ?, ?, 'running', datetime('now'), ?, ?, ?, datetime('now'))`
+  ).run(
+    runId, triggeredBy, campaignId,
+    requestedSteps ? JSON.stringify(requestedSteps) : null,
+    targetLeadIds?.length ? JSON.stringify(targetLeadIds) : null,
+    targetLeadIds?.length ? 'stage_rerun' : 'campaign',
+  );
 
   const logger = new ActivityLogger(runId, campaignId);
   const controller = registerRun(runId);
@@ -426,9 +431,17 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
     // When running mid-pipeline steps individually, load existing leads
     const startsAfterDiscover = requestedSteps?.length && !requestedSteps.includes('discover');
     if (startsAfterDiscover) {
-      const existingLeads = db.prepare(
-        `SELECT * FROM leads WHERE campaign_id = ? ORDER BY fit_score DESC`
-      ).all(campaignId) as any[];
+      let existingLeads: any[];
+      if (targetLeadIds?.length) {
+        const placeholders = targetLeadIds.map(() => '?').join(',');
+        existingLeads = db.prepare(
+          `SELECT * FROM leads WHERE campaign_id = ? AND id IN (${placeholders}) ORDER BY fit_score DESC`
+        ).all(campaignId, ...targetLeadIds) as any[];
+      } else {
+        existingLeads = db.prepare(
+          `SELECT * FROM leads WHERE campaign_id = ? ORDER BY fit_score DESC`
+        ).all(campaignId) as any[];
+      }
 
       candidates = existingLeads.map((l: any) => {
         // Restore lead ID mapping so upserts work
@@ -466,10 +479,49 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
           .filter(sc => sc.candidate);
       }
 
-      logger.milestone(`Loaded ${candidates.length} existing leads for partial run`, {
-        steps: requestedSteps,
-        existing_leads: candidates.length,
-      });
+      // If starting from audit, pre-populate brief results
+      if (!requestedSteps.includes('brief') && requestedSteps.includes('audit')) {
+        for (const l of existingLeads) {
+          if (!l.brief_markdown) continue;
+          const candidate = candidates.find(c => c.company_name === l.company_name);
+          if (!candidate) continue;
+          scoredCandidates.push({
+            candidate,
+            score: {
+              fit_score: l.fit_score || 0,
+              fit_score_label: l.fit_score_label || '',
+              confidence: l.confidence || 'medium',
+              score_breakdown: l.score_breakdown ? JSON.parse(l.score_breakdown) : {} as any,
+            } as ScoringResult,
+          });
+          briefResults.push({
+            candidate,
+            score: scoredCandidates[scoredCandidates.length - 1].score,
+            brief: {
+              brief_markdown: l.brief_markdown,
+              company_snapshot: '',
+              personas: [],
+              pain_hypotheses: l.pain_hypotheses ? JSON.parse(l.pain_hypotheses) : [],
+              tech_stack: l.tech_stack ? JSON.parse(l.tech_stack) : null,
+              competitive_displacement: l.competitive_displacement ? JSON.parse(l.competitive_displacement) : null,
+              outreach_strategy: l.outreach_strategy || '',
+              source_citations: l.source_citations ? JSON.parse(l.source_citations) : [],
+              why_now: l.why_now ? JSON.parse(l.why_now) : [],
+            } as any,
+          });
+        }
+      }
+
+      logger.milestone(
+        targetLeadIds?.length
+          ? `Loaded ${candidates.length} targeted leads for stage rerun`
+          : `Loaded ${candidates.length} existing leads for partial run`,
+        {
+          steps: requestedSteps,
+          existing_leads: candidates.length,
+          targeted: targetLeadIds?.length || 0,
+        }
+      );
     }
 
     // ── Iterate funnel steps ──
@@ -763,6 +815,10 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
           scoredCandidates = [];
           for (const candidate of candidates) {
             if (signal.aborted) throw new Error('Run cancelled by user');
+            const leadId = getLeadId(candidate.company_name);
+            if (targetLeadIds?.length) {
+              eventBus.emit('lead.stage_rerun', { lead_id: leadId, company_name: candidate.company_name, stage: 'score', status: 'processing', message: `Scoring ${candidate.company_name}...`, run_id: runId });
+            }
             emitProgress('score', candidate.company_name);
             logger.thinking('score', `Scoring ${candidate.company_name} against ICP criteria...`);
             const score = await scoreCandidate(candidate, icpConfig, stepModel, scoreTracker, step.prompt_instructions, step, { runId, campaignId, phase: 'score' });
@@ -775,6 +831,9 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
               label: score.fit_score_label,
               confidence: score.confidence,
             });
+            if (targetLeadIds?.length) {
+              eventBus.emit('lead.stage_rerun', { lead_id: leadId, company_name: candidate.company_name, stage: 'score', status: 'completed', message: `Score: ${score.fit_score}/100 — ${score.fit_score_label}`, run_id: runId });
+            }
           }
           logger.phaseComplete('score', `Scoring complete — ${scoredCandidates.length} candidates scored`, {
             total_scored: scoredCandidates.length,
@@ -819,6 +878,11 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
           const briefTracker = tracker.getTrackerForModel(stepModel);
           for (const { candidate, score } of selected) {
             if (signal.aborted) throw new Error('Run cancelled by user');
+            const leadId = getLeadId(candidate.company_name);
+            if (targetLeadIds?.length) {
+              eventBus.emit('lead.stage_rerun', { lead_id: leadId, company_name: candidate.company_name, stage: 'brief', status: 'processing', message: `Generating brief for ${candidate.company_name}...`, run_id: runId });
+              eventBus.emit('lead.brief_rerun', { lead_id: leadId, company_name: candidate.company_name, status: 'generating', message: `Generating brief with ${stepModel}...` });
+            }
             emitProgress('brief', candidate.company_name);
             logger.thinking('brief', `Writing outreach brief for ${candidate.company_name}...`);
             try {
@@ -832,8 +896,16 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
                 pain_hypotheses: painSummary,
                 outreach_strategy: brief.outreach_strategy?.substring(0, 200),
               });
+              if (targetLeadIds?.length) {
+                eventBus.emit('lead.stage_rerun', { lead_id: leadId, company_name: candidate.company_name, stage: 'brief', status: 'completed', message: `Brief ready — ${brief.personas?.length || 0} personas`, run_id: runId });
+                eventBus.emit('lead.brief_rerun', { lead_id: leadId, company_name: candidate.company_name, status: 'completed', message: `Brief generated for ${candidate.company_name}` });
+              }
             } catch (briefErr) {
               logger.error('brief', `Brief failed for ${candidate.company_name} — skipping`, briefErr instanceof Error ? briefErr.message : String(briefErr));
+              if (targetLeadIds?.length) {
+                eventBus.emit('lead.stage_rerun', { lead_id: leadId, company_name: candidate.company_name, stage: 'brief', status: 'failed', message: briefErr instanceof Error ? briefErr.message : 'Brief generation failed', run_id: runId });
+                eventBus.emit('lead.brief_rerun', { lead_id: leadId, company_name: candidate.company_name, status: 'failed', message: briefErr instanceof Error ? briefErr.message : 'Brief generation failed' });
+              }
             }
           }
           logger.phaseComplete('brief', `Brief generation complete — ${briefResults.length} briefs ready`, { model: stepModel });
@@ -860,6 +932,13 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
           const auditResults: { company: string; score: number; passed: boolean; issues: number; errorCount: number; warnCount: number }[] = [];
 
           for (const { candidate, score, brief } of briefResults) {
+            if (targetLeadIds?.length) {
+              const leadId = getLeadId(candidate.company_name);
+              eventBus.emit('lead.stage_rerun', { lead_id: leadId, company_name: candidate.company_name, stage: 'audit', status: 'processing', message: `Auditing ${candidate.company_name}...`, run_id: runId });
+              if (requestedSteps?.includes('brief')) {
+                eventBus.emit('lead.brief_rerun', { lead_id: leadId, company_name: candidate.company_name, status: 'auditing', message: 'Running quality audit...' });
+              }
+            }
             const rulesAudit = auditBrief({ brief, candidate, score }, threshold);
             let finalScore = rulesAudit.score;
             let allIssues = [...rulesAudit.issues];
@@ -895,9 +974,16 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
 
             const leadId = getLeadId(candidate.company_name);
             try {
-              db.prepare('UPDATE leads SET audit_score = ?, audit_issues = ?, ai_audit_result = ?, pipeline_stage = ? WHERE id = ? AND run_id = ?')
-                .run(finalScore, JSON.stringify(allIssues), aiResultJson, 'audited', leadId, runId);
+              db.prepare('UPDATE leads SET audit_score = ?, audit_issues = ?, ai_audit_result = ?, pipeline_stage = ? WHERE id = ?')
+                .run(finalScore, JSON.stringify(allIssues), aiResultJson, 'audited', leadId);
             } catch { /* column may not exist yet */ }
+
+            if (targetLeadIds?.length) {
+              eventBus.emit('lead.stage_rerun', { lead_id: leadId, company_name: candidate.company_name, stage: 'audit', status: 'completed', message: `Audit ${passed ? 'passed' : 'below threshold'} (${finalScore}/100)`, run_id: runId });
+              if (requestedSteps?.includes('brief')) {
+                eventBus.emit('lead.brief_rerun', { lead_id: leadId, company_name: candidate.company_name, status: 'completed', message: `Brief generated — audit ${finalScore}/100`, audit_score: finalScore });
+              }
+            }
 
             if (passed) {
               logger.finding('audit', candidate.company_name, `Audit passed (${finalScore}/100${useAiAudit ? ' combined' : ''})`, {
@@ -1372,6 +1458,13 @@ export async function rerunBriefForLead(leadId: string): Promise<{ success: bool
   const tracker = new TokenTracker(model);
   const briefTone = briefStep?.outreach_tone || promptConfig?.outreach_tone;
 
+  eventBus.emit('lead.brief_rerun', {
+    lead_id: leadId,
+    company_name: lead.company_name,
+    status: 'generating',
+    message: `Generating brief with ${model}...`,
+  });
+
   const brief = await generateBrief(
     candidate, score, icpConfig, model, tracker,
     briefStep?.prompt_instructions, briefTone, briefStep,
@@ -1417,17 +1510,25 @@ export async function rerunBriefForLead(leadId: string): Promise<{ success: bool
   // Run audit if enabled
   let auditScore: number | undefined;
   if (auditStep?.enabled !== false) {
+    const auditUseAi = auditStep?.audit_use_ai === true;
+    eventBus.emit('lead.brief_rerun', {
+      lead_id: leadId,
+      company_name: lead.company_name,
+      status: 'auditing',
+      message: auditUseAi ? 'Running rules + AI audit...' : 'Running quality audit...',
+    });
+
     const threshold = auditStep?.audit_quality_threshold ?? 60;
     const rulesAudit = auditBrief({ brief, candidate, score }, threshold);
     let finalScore = rulesAudit.score;
     let allIssues = [...rulesAudit.issues];
     let aiResultJson: string | null = null;
 
-    if (auditStep?.audit_use_ai === true) {
+    if (auditUseAi) {
       try {
         const aiResult = await aiAuditBrief(
           { brief, candidate, score, icpConfig },
-          auditStep.model || 'claude-haiku-4-5@20251001',
+          auditStep!.model || 'claude-haiku-4-5@20251001',
           tracker
         );
         finalScore = Math.round(rulesAudit.score * 0.3 + aiResult.overall_score * 0.7);
@@ -1445,12 +1546,12 @@ export async function rerunBriefForLead(leadId: string): Promise<{ success: bool
     } catch { /* column may not exist */ }
   }
 
-  eventBus.emit('lead.scored', {
+  eventBus.emit('lead.brief_rerun', {
     lead_id: leadId,
     company_name: lead.company_name,
-    fit_score: score.fit_score,
-    fit_score_label: score.fit_score_label || '',
-    confidence: score.confidence || 'medium',
+    status: 'completed',
+    message: `Brief regenerated${auditScore != null ? ` — audit: ${auditScore}/100` : ''}`,
+    audit_score: auditScore,
   });
 
   return { success: true, audit_score: auditScore };

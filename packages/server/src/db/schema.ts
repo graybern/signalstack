@@ -263,6 +263,9 @@ function initSchema(db: Database.Database) {
   if (!runCols.find(c => c.name === 'steps_run')) {
     db.exec("ALTER TABLE pipeline_runs ADD COLUMN steps_run TEXT");
   }
+  if (!runCols.find(c => c.name === 'target_lead_ids')) {
+    db.exec("ALTER TABLE pipeline_runs ADD COLUMN target_lead_ids TEXT");
+  }
 
   // Migrate users table to support expanded roles (superadmin, admin, operator, member, viewer)
   // SQLite CHECK constraints can't be altered, so we recreate the table if needed

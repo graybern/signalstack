@@ -44,6 +44,8 @@ interface Run {
   completed_at: string | null;
   created_at: string;
   run_number: number;
+  target_lead_ids: string | null;
+  steps_run: string | null;
 }
 
 interface UpcomingRun {
@@ -74,6 +76,7 @@ interface ProgressData {
 export function RunHistory() {
   const { user } = useAuth();
   const isSuperAdmin = user?.role === 'superadmin';
+  const canRerun = user?.role && ['member', 'operator', 'admin', 'superadmin'].includes(user.role);
 
   const [runs, setRuns] = useState<Run[]>([]);
   const [stats, setStats] = useState<RunStats | null>(null);
@@ -84,6 +87,7 @@ export function RunHistory() {
   const [loadingLeads, setLoadingLeads] = useState(false);
   const [liveProgress, setLiveProgress] = useState<Record<string, ProgressData>>({});
   const [activityRunId, setActivityRunId] = useState<string | null>(null);
+  const [rerunningRunId, setRerunningRunId] = useState<string | null>(null);
 
   // Selection for bulk delete
   const [selectedRuns, setSelectedRuns] = useState<Set<string>>(new Set());
@@ -130,6 +134,30 @@ export function RunHistory() {
   useEffect(() => {
     api('/campaigns').then(data => setCampaigns(Array.isArray(data) ? data.map((c: any) => ({ id: c.id, name: c.name })) : [])).catch(() => {});
   }, []);
+
+  const handleRerunFromRun = async (run: Run) => {
+    if (!run.campaign_id) return;
+    setRerunningRunId(run.id);
+    try {
+      let leadIds: string[];
+      if (run.run_type === 'stage_rerun' && run.target_lead_ids) {
+        leadIds = JSON.parse(run.target_lead_ids);
+      } else {
+        const data = await api(`/leads?campaign_id=${run.campaign_id}&limit=999`) as any;
+        leadIds = (data.leads || []).map((l: any) => l.id);
+      }
+      if (leadIds.length === 0) { alert('No leads to rerun'); return; }
+      await api(`/campaigns/${run.campaign_id}/run`, {
+        method: 'POST',
+        body: JSON.stringify({ steps: ['enrich', 'score', 'brief', 'audit'], lead_ids: leadIds }),
+      });
+      loadRuns();
+    } catch (err: any) {
+      alert(err.message);
+    } finally {
+      setRerunningRunId(null);
+    }
+  };
 
   useEffect(() => {
     loadRuns();
@@ -292,6 +320,8 @@ export function RunHistory() {
           <option value="pipeline">Pipeline</option>
           <option value="import">Import</option>
           <option value="enrichment">Enrichment</option>
+          <option value="stage_rerun">Rerun</option>
+          <option value="quick_research">Quick Research</option>
         </select>
         <select value={filterCampaign} onChange={e => setFilterCampaign(e.target.value)} className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg bg-white">
           <option value="">All Campaigns</option>
@@ -492,6 +522,9 @@ export function RunHistory() {
                     onSelect={() => toggleSelect(run.id)}
                     onDelete={() => setDeleteConfirm({ type: 'single', ids: [run.id], leadCount: run.lead_count || 0 })}
                     colSpan={isSuperAdmin ? 13 : 12}
+                    canRerun={!!canRerun}
+                    onRerun={() => handleRerunFromRun(run)}
+                    rerunning={rerunningRunId === run.id}
                   />
                 ))}
               </tbody>
@@ -638,7 +671,7 @@ function ActiveRunCard({ run, liveProgress, onViewActivity }: { run: Run; livePr
   );
 }
 
-function CompletedRunRow({ run, expanded, leads, loadingLeads, onToggle, onViewLog, showingLog, isSuperAdmin, selected, onSelect, onDelete, colSpan }: {
+function CompletedRunRow({ run, expanded, leads, loadingLeads, onToggle, onViewLog, showingLog, isSuperAdmin, selected, onSelect, onDelete, colSpan, canRerun, onRerun, rerunning }: {
   run: Run;
   expanded: boolean;
   leads: any[];
@@ -651,6 +684,9 @@ function CompletedRunRow({ run, expanded, leads, loadingLeads, onToggle, onViewL
   onSelect: () => void;
   onDelete: () => void;
   colSpan: number;
+  canRerun: boolean;
+  onRerun: () => void;
+  rerunning: boolean;
 }) {
   const totalTokens = (run.input_tokens || 0) + (run.output_tokens || 0);
   const isFailed = run.status === 'failed';
@@ -716,6 +752,11 @@ function CompletedRunRow({ run, expanded, leads, loadingLeads, onToggle, onViewL
             {onViewLog && (
               <button onClick={e => { e.stopPropagation(); onViewLog(); }} className={`p-1 rounded hover:bg-gray-100 ${showingLog ? 'text-brand-600' : 'text-gray-400'}`} title="View Activity Log">
                 <Eye className="w-3.5 h-3.5" />
+              </button>
+            )}
+            {canRerun && run.campaign_id && run.status !== 'running' && run.status !== 'pending' && (
+              <button onClick={e => { e.stopPropagation(); onRerun(); }} disabled={rerunning} className="p-1 rounded hover:bg-amber-50 text-gray-400 hover:text-amber-600" title="Rerun leads">
+                <RefreshCw className={`w-3.5 h-3.5 ${rerunning ? 'animate-spin' : ''}`} />
               </button>
             )}
             {isSuperAdmin && (
@@ -798,6 +839,8 @@ function RunTypeBadge({ type }: { type: string | null }) {
     pipeline: 'bg-blue-50 text-blue-700',
     import: 'bg-indigo-50 text-indigo-700',
     enrichment: 'bg-purple-50 text-purple-700',
+    stage_rerun: 'bg-amber-50 text-amber-700',
+    quick_research: 'bg-emerald-50 text-emerald-700',
   };
   const label = type || 'pipeline';
   return (

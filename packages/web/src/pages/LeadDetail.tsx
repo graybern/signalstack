@@ -59,10 +59,7 @@ export function LeadDetail() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [showBriefMenu, setShowBriefMenu] = useState(false);
-  const [rerunStage, setRerunStage] = useState<string>('brief');
-  const [showRerunMenu, setShowRerunMenu] = useState(false);
   const briefMenuRef = useRef<HTMLDivElement>(null);
-  const rerunMenuRef = useRef<HTMLDivElement>(null);
 
   const handleDeleteLead = async () => {
     setDeleting(true);
@@ -99,13 +96,10 @@ export function LeadDetail() {
       if (briefMenuRef.current && !briefMenuRef.current.contains(e.target as Node)) {
         setShowBriefMenu(false);
       }
-      if (rerunMenuRef.current && !rerunMenuRef.current.contains(e.target as Node)) {
-        setShowRerunMenu(false);
-      }
     }
-    if (showBriefMenu || showRerunMenu) document.addEventListener('mousedown', handleClickOutside);
+    if (showBriefMenu) document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [showBriefMenu, showRerunMenu]);
+  }, [showBriefMenu]);
 
   const fetchLead = useCallback(() => api(`/leads/${id}`).then(setLead), [id]);
   useEffect(() => {
@@ -137,21 +131,16 @@ export function LeadDetail() {
     return () => unsubs.forEach(fn => fn());
   }, [rerunning, id, subscribe, fetchLead]);
 
-  const handleRerunStage = async (stage: string = 'brief') => {
+  const handleRerun = async () => {
     setRerunning(true);
-    setRerunStage(stage);
-    setRerunStatus(`Starting ${stage} rerun...`);
+    setRerunStatus('Starting rerun...');
     setRerunError(null);
-    setShowRerunMenu(false);
     try {
-      await api(`/leads/${id}/rerun-brief`, {
-        method: 'POST',
-        body: JSON.stringify({ stage }),
-      });
+      await api(`/leads/${id}/rerun-brief`, { method: 'POST' });
     } catch (err: any) {
       console.error('Rerun failed:', err);
       setRerunning(false);
-      setRerunError(err?.message || `Failed to start ${stage} rerun`);
+      setRerunError(err?.message || 'Failed to start rerun');
       setTimeout(() => setRerunError(null), 6000);
     }
   };
@@ -240,51 +229,20 @@ export function LeadDetail() {
         <div className="flex items-center gap-2">
           {permissions.canAccessSettings(user?.role) && lead?.campaign_id && (
             <div className="flex items-center gap-2">
-              <div className="relative" ref={rerunMenuRef}>
-                <div className="flex">
-                  <button
-                    onClick={() => handleRerunStage(rerunStage)}
-                    disabled={rerunning}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 text-sm border rounded-l-lg disabled:opacity-50 transition-colors ${
-                      rerunError ? 'border-red-300 text-red-700 bg-red-50' :
-                      rerunStatus && !rerunning ? 'border-green-300 text-green-700 bg-green-50' :
-                      'border-amber-300 text-amber-700 hover:bg-amber-50'
-                    }`}
-                  >
-                    <RefreshCw className={`w-3.5 h-3.5 ${rerunning ? 'animate-spin' : ''}`} />
-                    {rerunError ? 'Failed' :
-                     rerunning ? `Rerunning ${rerunStage}...` :
-                     rerunStatus ? 'Done' :
-                     `Rerun ${rerunStage.charAt(0).toUpperCase() + rerunStage.slice(1)}`}
-                  </button>
-                  <button
-                    onClick={() => setShowRerunMenu(!showRerunMenu)}
-                    disabled={rerunning}
-                    className={`px-1.5 py-1.5 text-sm border border-l-0 rounded-r-lg disabled:opacity-50 transition-colors ${
-                      rerunError ? 'border-red-300 text-red-700 bg-red-50' :
-                      rerunStatus && !rerunning ? 'border-green-300 text-green-700 bg-green-50' :
-                      'border-amber-300 text-amber-700 hover:bg-amber-50'
-                    }`}
-                  >
-                    <ChevronDown className="w-3 h-3" />
-                  </button>
-                </div>
-                {showRerunMenu && (
-                  <div className="absolute right-0 top-full mt-1 w-36 bg-white border border-gray-200 rounded-lg shadow-lg z-20 py-1">
-                    {(['qualify', 'enrich', 'score', 'brief', 'audit'] as const).map(stage => (
-                      <button
-                        key={stage}
-                        onClick={() => handleRerunStage(stage)}
-                        className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-50 capitalize ${
-                          stage === rerunStage ? 'text-amber-700 font-medium bg-amber-50' : 'text-gray-700'
-                        }`}
-                      >
-                        {stage}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
+              <button
+                onClick={handleRerun}
+                disabled={rerunning}
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-sm border rounded-lg disabled:opacity-50 transition-colors ${
+                  rerunError ? 'border-red-300 text-red-700 bg-red-50' :
+                  rerunStatus && !rerunning ? 'border-green-300 text-green-700 bg-green-50' :
+                  'border-amber-300 text-amber-700 hover:bg-amber-50'
+                }`}
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${rerunning ? 'animate-spin' : ''}`} />
+                {rerunError ? 'Failed' :
+                 rerunning ? 'Rerunning...' :
+                 rerunStatus ? 'Done' : 'Rerun'}
+              </button>
               {(rerunStatus || rerunError) && (
                 <span className={`text-xs ${rerunError ? 'text-red-600' : rerunning ? 'text-amber-600' : 'text-green-600'}`}>
                   {rerunError || rerunStatus}
@@ -360,12 +318,13 @@ export function LeadDetail() {
               <span>{lead.fit_score}/100</span>
             </div>
             <div className="flex flex-wrap gap-4 mt-3 text-sm text-gray-600">
-              {lead.hq_location && <span className="flex items-center gap-1"><MapPin className="w-4 h-4" />{lead.hq_location}</span>}
-              {lead.employee_count && <span className="flex items-center gap-1"><Users className="w-4 h-4" />~{lead.employee_count.toLocaleString()} employees</span>}
-              {lead.founded_year && <span className="flex items-center gap-1"><Calendar className="w-4 h-4" />Founded {lead.founded_year}</span>}
-              {lead.funding_stage && <span className="flex items-center gap-1"><Building2 className="w-4 h-4" />{lead.funding_stage} {lead.total_funding && `(${lead.total_funding})`}</span>}
-              {lead.website && <a href={lead.website.startsWith('http') ? lead.website : `https://${lead.website}`} target="_blank" rel="noopener" className="flex items-center gap-1 text-brand-600 hover:underline"><Globe className="w-4 h-4" />{lead.website.replace(/^https?:\/\//, '')}</a>}
-              {lead.linkedin_company_url && <a href={lead.linkedin_company_url} target="_blank" rel="noopener" className="flex items-center gap-1 text-blue-600 hover:underline"><Linkedin className="w-4 h-4" />LinkedIn</a>}
+              <span className={`flex items-center gap-1 ${lead.hq_location ? '' : 'text-gray-300'}`}><MapPin className="w-4 h-4" />{lead.hq_location || 'Unknown'}</span>
+              <span className={`flex items-center gap-1 ${lead.employee_count ? '' : 'text-gray-300'}`}><Users className="w-4 h-4" />{lead.employee_count ? `~${lead.employee_count.toLocaleString()} employees` : 'Unknown'}</span>
+              <span className={`flex items-center gap-1 ${lead.founded_year ? '' : 'text-gray-300'}`}><Calendar className="w-4 h-4" />{lead.founded_year ? `Founded ${lead.founded_year}` : 'Unknown'}</span>
+              <span className={`flex items-center gap-1 ${lead.funding_stage ? '' : 'text-gray-300'}`}><Building2 className="w-4 h-4" />{lead.funding_stage ? `${lead.funding_stage}${lead.total_funding ? ` (${lead.total_funding})` : ''}` : 'N/A'}</span>
+              {lead.updated_at && <span className="flex items-center gap-1"><RefreshCw className="w-4 h-4" />Updated {formatDate(lead.updated_at)}</span>}
+              <a href={`https://${(lead.website || lead.domain || '').replace(/^https?:\/\//, '')}`} target="_blank" rel="noopener" className="flex items-center gap-1 text-brand-600 hover:underline"><Globe className="w-4 h-4" />{(lead.website || lead.domain || '').replace(/^https?:\/\//, '')}</a>
+              {lead.linkedin_company_url ? <a href={lead.linkedin_company_url} target="_blank" rel="noopener" className="flex items-center gap-1 text-blue-600 hover:underline"><Linkedin className="w-4 h-4" />LinkedIn</a> : <span className="flex items-center gap-1 text-gray-300"><Linkedin className="w-4 h-4" />LinkedIn</span>}
             </div>
           </div>
         </div>

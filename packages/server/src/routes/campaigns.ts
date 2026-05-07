@@ -679,12 +679,13 @@ router.post('/:id/run', authenticate, requireMember, async (req: AuthRequest, re
       return res.status(400).json({ error: 'Cannot run discover step with specific lead IDs' });
     }
     if (!requestedSteps?.length) {
-      requestedSteps = ['brief'];
+      requestedSteps = ['enrich', 'score', 'brief', 'audit'];
     }
   }
 
   // runCampaign inserts the pipeline_runs record synchronously, then does async AI work
-  const runPromise = runCampaign(req.params.id, req.user!.id, requestedSteps, targetLeadIds);
+  const runType = targetLeadIds?.length ? 'stage_rerun' : undefined;
+  const runPromise = runCampaign(req.params.id, req.user!.id, requestedSteps, targetLeadIds, runType);
   runPromise.catch(err => {
     console.error('Campaign run failed:', err);
   });

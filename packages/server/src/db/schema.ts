@@ -503,7 +503,15 @@ function initSchema(db: Database.Database) {
   if (!leadColsStage.find(c => c.name === 'ai_audit_result')) {
     db.exec("ALTER TABLE leads ADD COLUMN ai_audit_result TEXT");
   }
+  if (!leadColsStage.find(c => c.name === 'updated_at')) {
+    db.exec("ALTER TABLE leads ADD COLUMN updated_at TEXT");
+    db.exec("UPDATE leads SET updated_at = created_at WHERE updated_at IS NULL");
+  }
+  if (!leadColsStage.find(c => c.name === 'source_type')) {
+    db.exec("ALTER TABLE leads ADD COLUMN source_type TEXT DEFAULT 'campaign'");
+  }
   db.exec(`CREATE INDEX IF NOT EXISTS idx_leads_pipeline_stage ON leads(pipeline_stage)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_leads_updated_at ON leads(updated_at DESC)`);
 
   // Run activity log — persistent log of AI thinking/reasoning during runs
   db.exec(`

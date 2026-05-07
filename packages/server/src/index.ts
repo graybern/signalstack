@@ -20,6 +20,7 @@ import settingsRoutes from './routes/settings.js';
 import activityRoutes from './routes/activity.js';
 import configTransferRoutes from './routes/configTransfer.js';
 import apiKeyRoutes from './routes/apikeys.js';
+import researchRoutes from './routes/research.js';
 import { initScheduler } from './scheduler/cron.js';
 import { initCampaignScheduler } from './scheduler/campaignScheduler.js';
 import { initWebhookDispatcher } from './events/webhookDispatcher.js';
@@ -56,6 +57,7 @@ const mountRoutes = (prefix: string) => {
   app.use(`${prefix}/activity`, activityRoutes);
   app.use(`${prefix}/config-transfer`, configTransferRoutes);
   app.use(`${prefix}/api-keys`, apiKeyRoutes);
+  app.use(`${prefix}/research`, researchRoutes);
 };
 
 mountRoutes('/api');

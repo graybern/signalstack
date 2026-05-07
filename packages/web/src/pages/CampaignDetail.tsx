@@ -103,6 +103,7 @@ export function CampaignDetail() {
   const [leadSegmentFilter, setLeadSegmentFilter] = useState<string>('');
   const [selectedLeadIds, setSelectedLeadIds] = useState<Set<string>>(new Set());
   const [bulkRunning, setBulkRunning] = useState(false);
+  const [rerunningRunId, setRerunningRunId] = useState<string | null>(null);
 
   // Configure state
   const [configTab, setConfigTab] = useState<'definition' | 'funnel' | 'schedule' | 'exclusions' | 'feed'>('definition');
@@ -227,13 +228,13 @@ export function CampaignDetail() {
     }
   };
 
-  const triggerBulkRerun = async (stage: string, leadIds: string[]) => {
+  const triggerBulkRerun = async (leadIds: string[]) => {
     if (!id || leadIds.length === 0) return;
     setBulkRunning(true);
     try {
       const result = await api<{ run_id: string }>(`/campaigns/${id}/run`, {
         method: 'POST',
-        body: JSON.stringify({ steps: [stage], lead_ids: leadIds }),
+        body: JSON.stringify({ steps: ['enrich', 'score', 'brief', 'audit'], lead_ids: leadIds }),
       });
       if (result.run_id) {
         setActiveRunId(result.run_id);
@@ -243,6 +244,29 @@ export function CampaignDetail() {
     } finally {
       setBulkRunning(false);
       setSelectedLeadIds(new Set());
+    }
+  };
+
+  const triggerRerunFromRun = async (run: any) => {
+    if (!id || !campaign) return;
+    setRerunningRunId(run.id);
+    try {
+      let leadIds: string[];
+      if (run.run_type === 'stage_rerun' && run.target_lead_ids) {
+        leadIds = JSON.parse(run.target_lead_ids);
+      } else {
+        leadIds = campaign.leads.map((l: any) => l.id);
+      }
+      if (leadIds.length === 0) { alert('No leads to rerun'); return; }
+      const result = await api<{ run_id: string }>(`/campaigns/${id}/run`, {
+        method: 'POST',
+        body: JSON.stringify({ steps: ['enrich', 'score', 'brief', 'audit'], lead_ids: leadIds }),
+      });
+      if (result.run_id) setActiveRunId(result.run_id);
+    } catch (err: any) {
+      alert(err.message);
+    } finally {
+      setRerunningRunId(null);
     }
   };
 
@@ -547,6 +571,9 @@ export function CampaignDetail() {
           setActiveRunId={setActiveRunId}
           viewLogRunId={viewLogRunId}
           setViewLogRunId={setViewLogRunId}
+          canRerun={permissions.canRunCampaign(user?.role)}
+          onRerunFromRun={triggerRerunFromRun}
+          rerunningRunId={rerunningRunId}
         />
       )}
 
@@ -830,6 +857,8 @@ function OverviewTab({ campaign, orgICP, icpOverrides }: {
   );
 }
 
+const MAX_RERUN_SELECTION = 15;
+
 // ── Leads Tab ─────────────────────────────────────────────────────
 
 function LeadsTab({
@@ -854,10 +883,9 @@ function LeadsTab({
   selectedLeadIds: Set<string>;
   setSelectedLeadIds: (ids: Set<string>) => void;
   bulkRunning: boolean;
-  onBulkRerun: (stage: string, leadIds: string[]) => void;
+  onBulkRerun: (leadIds: string[]) => void;
   canRerun: boolean;
 }) {
-  const [bulkStage, setBulkStage] = useState('brief');
   if (campaign.leads.length === 0) {
     return (
       <div className="text-center py-16 bg-white rounded-xl border border-gray-200">
@@ -937,9 +965,13 @@ function LeadsTab({
                 <th className="pl-4 pr-2 py-3 w-8">
                   <input
                     type="checkbox"
-                    checked={selectedLeadIds.size === filteredLeads.length && filteredLeads.length > 0}
-                    onChange={(e) => {
-                      setSelectedLeadIds(e.target.checked ? new Set(filteredLeads.map((l: any) => l.id)) : new Set());
+                    checked={selectedLeadIds.size > 0 && (selectedLeadIds.size === filteredLeads.length || selectedLeadIds.size >= MAX_RERUN_SELECTION)}
+                    onChange={() => {
+                      if (selectedLeadIds.size > 0) {
+                        setSelectedLeadIds(new Set());
+                      } else {
+                        setSelectedLeadIds(new Set(filteredLeads.slice(0, MAX_RERUN_SELECTION).map((l: any) => l.id)));
+                      }
                     }}
                     className="rounded border-gray-300 text-brand-600 focus:ring-brand-500"
                   />
@@ -981,9 +1013,10 @@ function LeadsTab({
                       <input
                         type="checkbox"
                         checked={selectedLeadIds.has(lead.id)}
-                        onChange={(e) => {
+                        onChange={() => {
                           const next = new Set(selectedLeadIds);
-                          if (e.target.checked) next.add(lead.id); else next.delete(lead.id);
+                          if (next.has(lead.id)) { next.delete(lead.id); }
+                          else if (next.size < MAX_RERUN_SELECTION) { next.add(lead.id); }
                           setSelectedLeadIds(next);
                         }}
                         className="rounded border-gray-300 text-brand-600 focus:ring-brand-500"
@@ -1005,7 +1038,7 @@ function LeadsTab({
                       </span>
                     )}
                   </td>
-                  <td className="px-4 py-3 text-xs text-gray-500">{formatDate(lead.created_at)}</td>
+                  <td className="px-4 py-3 text-xs text-gray-500">{formatDate(lead.updated_at || lead.created_at)}</td>
                 </tr>
               );
             })}
@@ -1016,26 +1049,18 @@ function LeadsTab({
       {/* Bulk action bar */}
       {canRerun && selectedLeadIds.size > 0 && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-3 px-5 py-3 bg-gray-900 text-white rounded-xl shadow-2xl z-50">
-          <span className="text-sm font-medium">{selectedLeadIds.size} lead{selectedLeadIds.size > 1 ? 's' : ''} selected</span>
+          <span className="text-sm font-medium">
+            {selectedLeadIds.size} lead{selectedLeadIds.size > 1 ? 's' : ''} selected
+            {selectedLeadIds.size >= MAX_RERUN_SELECTION && <span className="text-amber-400 ml-1">(max {MAX_RERUN_SELECTION})</span>}
+          </span>
           <div className="w-px h-5 bg-gray-700" />
-          <select
-            value={bulkStage}
-            onChange={e => setBulkStage(e.target.value)}
-            className="bg-gray-800 text-white text-sm rounded-lg px-2 py-1.5 border border-gray-700 focus:ring-brand-500 focus:border-brand-500"
-          >
-            <option value="qualify">Qualify</option>
-            <option value="enrich">Enrich</option>
-            <option value="score">Score</option>
-            <option value="brief">Brief</option>
-            <option value="audit">Audit</option>
-          </select>
           <button
-            onClick={() => onBulkRerun(bulkStage, Array.from(selectedLeadIds))}
+            onClick={() => onBulkRerun(Array.from(selectedLeadIds))}
             disabled={bulkRunning}
             className="flex items-center gap-1.5 px-4 py-1.5 bg-brand-600 text-white rounded-lg text-sm font-medium hover:bg-brand-700 disabled:opacity-50 transition-colors"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${bulkRunning ? 'animate-spin' : ''}`} />
-            {bulkRunning ? 'Running...' : `Run ${bulkStage}`}
+            {bulkRunning ? 'Rerunning...' : 'Rerun'}
           </button>
           <button
             onClick={() => setSelectedLeadIds(new Set())}
@@ -1053,6 +1078,7 @@ function LeadsTab({
 
 function RunsTab({
   campaign, campaignId, activeRunId, setActiveRunId, viewLogRunId, setViewLogRunId,
+  canRerun, onRerunFromRun, rerunningRunId,
 }: {
   campaign: CampaignFull;
   campaignId: string;
@@ -1060,6 +1086,9 @@ function RunsTab({
   setActiveRunId: (id: string | null) => void;
   viewLogRunId: string | null;
   setViewLogRunId: (id: string | null) => void;
+  canRerun: boolean;
+  onRerunFromRun: (run: any) => void;
+  rerunningRunId: string | null;
 }) {
   if (campaign.runs.length === 0) {
     return (
@@ -1076,6 +1105,18 @@ function RunsTab({
         const runNumber = campaign.runs.length - i;
         const isViewing = viewLogRunId === run.id;
         const isActive = activeRunId === run.id;
+        const isRerun = run.run_type === 'stage_rerun';
+        let rerunLeadCount = 0;
+        if (isRerun && run.target_lead_ids) {
+          try { rerunLeadCount = JSON.parse(run.target_lead_ids).length; } catch {}
+        }
+        let stepsLabel = '';
+        if (isRerun && run.steps_run) {
+          try {
+            const steps = JSON.parse(run.steps_run) as string[];
+            stepsLabel = steps.map((s: string) => s.charAt(0).toUpperCase() + s.slice(1)).join(' → ');
+          } catch {}
+        }
 
         return (
           <div key={run.id} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
@@ -1087,7 +1128,14 @@ function RunsTab({
                   run.status === 'running' ? 'bg-blue-500 animate-pulse' : 'bg-yellow-500'
                 }`} />
                 <div>
-                  <span className="text-sm font-medium text-gray-900">Run {runNumber}</span>
+                  <span className="text-sm font-medium text-gray-900">
+                    {isRerun
+                      ? `Rerun${rerunLeadCount ? ` (${rerunLeadCount} lead${rerunLeadCount > 1 ? 's' : ''})` : ''}`
+                      : `Run ${runNumber}`}
+                  </span>
+                  {isRerun && stepsLabel && (
+                    <span className="ml-2 text-xs text-gray-400">{stepsLabel}</span>
+                  )}
                   <span className={`ml-2 text-xs px-2 py-0.5 rounded-full ${
                     run.status === 'completed' ? 'bg-green-50 text-green-700' :
                     run.status === 'failed' ? 'bg-red-50 text-red-700' :
@@ -1126,6 +1174,16 @@ function RunsTab({
                   <Link to={`/runs/${run.id}`} className="flex items-center gap-1 px-2 py-1 text-brand-600 hover:bg-brand-50 rounded">
                     <ExternalLink className="w-3.5 h-3.5" /> Detail
                   </Link>
+                  {canRerun && run.status !== 'running' && run.status !== 'pending' && (
+                    <button
+                      onClick={() => onRerunFromRun(run)}
+                      disabled={rerunningRunId === run.id}
+                      className="flex items-center gap-1 px-2 py-1 text-amber-600 hover:bg-amber-50 rounded"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${rerunningRunId === run.id ? 'animate-spin' : ''}`} />
+                      Rerun
+                    </button>
+                  )}
                 </div>
               </div>
             </div>

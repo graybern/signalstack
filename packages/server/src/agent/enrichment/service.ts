@@ -27,6 +27,7 @@ import { WikipediaAdapter } from './adapters/wikipedia.js';
 import { GoogleNewsAdapter } from './adapters/googleNews.js';
 import { HackerNewsAdapter } from './adapters/hackerNews.js';
 import { TechFingerprintAdapter } from './adapters/techFingerprint.js';
+import { SerperSearchAdapter } from './adapters/serperSearch.js';
 import { getSetting } from '../../routes/icp.js';
 import { getDefaultDataSources } from './types.js';
 
@@ -42,6 +43,7 @@ const ADAPTERS: Record<string, DataSourceAdapter> = {
   hacker_news: new HackerNewsAdapter(),
   tech_fingerprint: new TechFingerprintAdapter(),
   // API-connected sources
+  serper_search: new SerperSearchAdapter(),
   web_search: new WebSearchAdapter(),
   crunchbase: new CrunchbaseAdapter(),
   apollo: new ApolloAdapter(),
@@ -226,7 +228,7 @@ function mergeEnrichments(enrichments: Partial<CompanyEnrichment>[]): CompanyEnr
   const merged: CompanyEnrichment = {};
 
   const EMPLOYEE_SOURCE_PRIORITY: Record<string, number> = {
-    salesforce: 5, linkedin: 4, apollo: 3, crunchbase: 2, wikipedia: 1,
+    salesforce: 5, linkedin: 4, apollo: 3, crunchbase: 2, serper_search: 1.5, wikipedia: 1,
   };
 
   for (const e of enrichments) {
@@ -375,7 +377,7 @@ function applyCandidateEnrichment(
     if (!candidate.employee_count_estimate || candidate.employee_count_estimate === 0) {
       updated.employee_count_estimate = enrichment.employee_count;
       enrichmentNotes.push(`Employee count (${enrichment.employee_count_source}): ${enrichment.employee_count}`);
-    } else if (enrichment.employee_count_source && ['salesforce', 'linkedin', 'apollo'].includes(enrichment.employee_count_source)) {
+    } else if (enrichment.employee_count_source && ['salesforce', 'linkedin', 'apollo', 'serper_search'].includes(enrichment.employee_count_source)) {
       updated.employee_count_estimate = enrichment.employee_count;
       enrichmentNotes.push(`Employee count updated from ${enrichment.employee_count_source}: ${enrichment.employee_count}`);
     }

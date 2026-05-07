@@ -70,12 +70,13 @@ export async function scoreCandidate(
 - **Company:** ${candidate.company_name}
 - **Domain:** ${candidate.domain}
 - **Segment:** ${candidate.segment}
-- **Employee Count (est.):** ${candidate.employee_count_estimate ?? 'Unknown'}
+- **Employee Count (est.):** ${candidate.employee_count_estimate ?? 'Unknown'}${!candidate.employee_count_estimate ? ' ⚠️ No employee count data — reduce confidence on Segment & Scale Fit score' : ''}
 - **HQ:** ${candidate.hq_location ?? 'Unknown'}
 - **Founded:** ${candidate.founded_year ?? 'Unknown'}
 - **Funding Stage:** ${candidate.funding_stage ?? 'Unknown'}
 - **Total Funding:** ${candidate.total_funding ?? 'Unknown'}
 - **Investors:** ${candidate.investors ?? 'Unknown'}
+- **LinkedIn:** ${candidate.linkedin_company_url ?? 'Not found'}
 
 ## Evidence Summary
 - **${signalCount} buying signal(s)** identified from **${sourceCount} source(s)**, enriched by **${enrichmentSourceCount} external data source(s)**

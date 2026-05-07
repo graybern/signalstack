@@ -232,7 +232,7 @@ function executeQualifyStep(
   return qualified;
 }
 
-export async function runCampaign(campaignId: string, triggeredBy: string | null, requestedSteps?: string[], targetLeadIds?: string[]): Promise<string> {
+export async function runCampaign(campaignId: string, triggeredBy: string | null, requestedSteps?: string[], targetLeadIds?: string[], runType?: string): Promise<string> {
   const db = getDb();
   const runId = uuidv4();
 
@@ -249,7 +249,7 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
     runId, triggeredBy, campaignId,
     requestedSteps ? JSON.stringify(requestedSteps) : null,
     targetLeadIds?.length ? JSON.stringify(targetLeadIds) : null,
-    targetLeadIds?.length ? 'stage_rerun' : 'campaign',
+    runType || (targetLeadIds?.length ? 'stage_rerun' : 'campaign'),
   );
 
   const logger = new ActivityLogger(runId, campaignId);
@@ -343,8 +343,8 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
         fit_score, fit_score_label, confidence, why_now, score_breakdown,
         pain_hypotheses, tech_stack, competitive_displacement,
         outreach_strategy, source_citations, brief_markdown, signal_count,
-        pipeline_stage, candidate_data, lead_status, scorer_thinking, brief_thinking, linkedin_company_url, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        pipeline_stage, candidate_data, lead_status, scorer_thinking, brief_thinking, linkedin_company_url, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
       ON CONFLICT(id) DO UPDATE SET
         segment = excluded.segment,
         hq_location = excluded.hq_location,
@@ -373,7 +373,8 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
         scorer_thinking = COALESCE(excluded.scorer_thinking, leads.scorer_thinking),
         brief_thinking = COALESCE(excluded.brief_thinking, leads.brief_thinking),
         linkedin_company_url = COALESCE(excluded.linkedin_company_url, leads.linkedin_company_url),
-        run_id = excluded.run_id`
+        run_id = excluded.run_id,
+        updated_at = datetime('now')`
     );
 
     // Track lead IDs so we can upsert across phases
@@ -735,6 +736,7 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
               crunchbase: false,
               apollo: false,
               salesforce: false,
+              serper_search: false,
             };
             const { candidates: lightEnriched, summary: lightSummary } = await enrichCandidates(
               candidates,
@@ -974,7 +976,7 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
 
             const leadId = getLeadId(candidate.company_name);
             try {
-              db.prepare('UPDATE leads SET audit_score = ?, audit_issues = ?, ai_audit_result = ?, pipeline_stage = ? WHERE id = ?')
+              db.prepare('UPDATE leads SET audit_score = ?, audit_issues = ?, ai_audit_result = ?, pipeline_stage = ?, updated_at = datetime(\'now\') WHERE id = ?')
                 .run(finalScore, JSON.stringify(allIssues), aiResultJson, 'audited', leadId);
             } catch { /* column may not exist yet */ }
 
@@ -1476,7 +1478,7 @@ export async function rerunBriefForLead(leadId: string): Promise<{ success: bool
     brief_markdown = ?, pain_hypotheses = ?, tech_stack = ?,
     competitive_displacement = ?, outreach_strategy = ?,
     source_citations = ?, why_now = ?, brief_thinking = ?,
-    signal_count = ?, pipeline_stage = 'briefed'
+    signal_count = ?, pipeline_stage = 'briefed', updated_at = datetime('now')
     WHERE id = ?`
   ).run(
     brief.brief_markdown || null,

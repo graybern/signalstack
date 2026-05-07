@@ -27,8 +27,8 @@ export class GoogleNewsAdapter implements DataSourceAdapter {
 
     // Run company news and tech/security-specific queries in parallel
     const queries = [
-      `"${companyName}" company`,
-      `"${companyName}" security infrastructure technology`,
+      `"${companyName}" company when:1y`,
+      `"${companyName}" security infrastructure technology when:1y`,
     ];
 
     const allArticles: CompanyEnrichment['recent_news'] = [];

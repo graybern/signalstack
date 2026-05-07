@@ -40,6 +40,7 @@ interface Lead {
   current_feedback: string | null;
   next_outreach_date: string | null;
   created_at: string;
+  updated_at?: string;
   signal_count?: number;
   feedback?: { id: string; verdict: string; reason: string | null; retry_date?: string; created_at?: string }[];
 }
@@ -116,9 +117,13 @@ const EXPORT_FIELD_OPTIONS = [
   { key: 'created_at', label: 'Created At' },
 ];
 
+const MAX_RERUN_SELECTION = 15;
+
 export function Leads() {
   const { user } = useAuth();
   const canDelete = user?.role === 'superadmin' || user?.role === 'admin' || user?.role === 'operator';
+  const canRerun = user?.role && ['member', 'operator', 'admin', 'superadmin'].includes(user.role);
+  const showCheckboxes = canDelete || canRerun;
   const briefPickerRef = useRef<HTMLDivElement>(null);
   const [leads, setLeads] = useState<Lead[]>([]);
   const [total, setTotal] = useState(0);
@@ -147,6 +152,7 @@ export function Leads() {
   const [selectedLeads, setSelectedLeads] = useState<Set<string>>(new Set());
   const [deleteTarget, setDeleteTarget] = useState<{ type: 'single' | 'bulk' | 'all'; ids?: string[]; name?: string; count?: number } | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [bulkRerunning, setBulkRerunning] = useState(false);
   const [briefStatus, setBriefStatus] = useState<{ phase: string; count?: number } | null>(null);
   const [showBriefPicker, setShowBriefPicker] = useState(false);
 
@@ -206,16 +212,17 @@ export function Leads() {
   const toggleSelect = (id: string) => {
     setSelectedLeads(prev => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) { next.delete(id); }
+      else if (next.size < MAX_RERUN_SELECTION) { next.add(id); }
       return next;
     });
   };
 
   const toggleSelectAll = () => {
-    if (selectedLeads.size === filteredLeads.length) {
+    if (selectedLeads.size > 0) {
       setSelectedLeads(new Set());
     } else {
-      setSelectedLeads(new Set(filteredLeads.map(l => l.id)));
+      setSelectedLeads(new Set(filteredLeads.slice(0, MAX_RERUN_SELECTION).map(l => l.id)));
     }
   };
 
@@ -238,6 +245,41 @@ export function Leads() {
       console.error('Delete failed:', err);
     } finally {
       setDeleting(false);
+    }
+  };
+
+  const handleBulkRerun = async () => {
+    const selected = filteredLeads.filter(l => selectedLeads.has(l.id));
+    const byCampaign = new Map<string, string[]>();
+    const orphans: string[] = [];
+    for (const lead of selected) {
+      if (lead.campaign_id) {
+        const list = byCampaign.get(lead.campaign_id) || [];
+        list.push(lead.id);
+        byCampaign.set(lead.campaign_id, list);
+      } else {
+        orphans.push(lead.company_name);
+      }
+    }
+    if (orphans.length > 0) {
+      alert(`${orphans.length} lead(s) have no campaign and cannot be rerun: ${orphans.join(', ')}`);
+    }
+    if (byCampaign.size === 0) return;
+    setBulkRerunning(true);
+    try {
+      await Promise.all(
+        Array.from(byCampaign.entries()).map(([campaignId, leadIds]) =>
+          api(`/campaigns/${campaignId}/run`, {
+            method: 'POST',
+            body: JSON.stringify({ steps: ['enrich', 'score', 'brief', 'audit'], lead_ids: leadIds }),
+          })
+        )
+      );
+      setSelectedLeads(new Set());
+    } catch (err: any) {
+      alert(err.message);
+    } finally {
+      setBulkRerunning(false);
     }
   };
 
@@ -367,15 +409,6 @@ export function Leads() {
           <p className="text-sm text-gray-500 mt-1">{total} total leads across all campaigns</p>
         </div>
         <div className="flex items-center gap-2">
-          {canDelete && selectedLeads.size > 0 && (
-            <button
-              onClick={() => setDeleteTarget({ type: 'bulk', ids: Array.from(selectedLeads), count: selectedLeads.size })}
-              className="flex items-center gap-1.5 px-3 py-2 text-sm text-red-600 border border-red-200 rounded-lg hover:bg-red-50"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-              Delete {selectedLeads.size} lead{selectedLeads.size !== 1 ? 's' : ''}
-            </button>
-          )}
           <div className="relative" ref={briefPickerRef}>
             <button
               onClick={() => !briefStatus && setShowBriefPicker(!showBriefPicker)}
@@ -628,11 +661,11 @@ export function Leads() {
         <table className="w-full text-sm">
           <thead>
             <tr className="bg-gray-50 border-b border-gray-200">
-              {canDelete && (
+              {showCheckboxes && (
                 <th className="px-3 py-3 w-8">
                   <input
                     type="checkbox"
-                    checked={filteredLeads.length > 0 && selectedLeads.size === filteredLeads.length}
+                    checked={selectedLeads.size > 0 && (selectedLeads.size === filteredLeads.length || selectedLeads.size >= MAX_RERUN_SELECTION)}
                     onChange={toggleSelectAll}
                     className="rounded border-gray-300 text-brand-600"
                   />
@@ -661,16 +694,16 @@ export function Leads() {
           </thead>
           <tbody className="divide-y divide-gray-100">
             {loading ? (
-              <tr><td colSpan={canDelete ? 9 : 8} className="px-4 py-12 text-center text-gray-500">Loading leads...</td></tr>
+              <tr><td colSpan={showCheckboxes ? 9 : 8} className="px-4 py-12 text-center text-gray-500">Loading leads...</td></tr>
             ) : filteredLeads.length === 0 ? (
-              <tr><td colSpan={canDelete ? 9 : 8} className="px-4 py-12 text-center text-gray-500">{search ? 'No leads match your search' : 'No leads found'}</td></tr>
+              <tr><td colSpan={showCheckboxes ? 9 : 8} className="px-4 py-12 text-center text-gray-500">{search ? 'No leads match your search' : 'No leads found'}</td></tr>
             ) : (
               filteredLeads.map(lead => {
                 const feedback = getFeedback(lead);
                 const signalCount = lead.signal_count || 0;
                 return (
                   <tr key={lead.id} className={`hover:bg-gray-50 transition-colors ${selectedLeads.has(lead.id) ? 'bg-brand-50/30' : ''}`}>
-                    {canDelete && (
+                    {showCheckboxes && (
                       <td className="px-3 py-3">
                         <input
                           type="checkbox"
@@ -719,7 +752,7 @@ export function Leads() {
                       )}
                     </td>
                     <td className="px-4 py-3 text-xs text-gray-500">
-                      {formatDate(lead.created_at)}
+                      {formatDate(lead.updated_at || lead.created_at)}
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1">
@@ -770,6 +803,38 @@ export function Leads() {
           </div>
         )}
       </div>
+
+      {/* Floating bulk action bar */}
+      {showCheckboxes && selectedLeads.size > 0 && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-3 px-5 py-3 bg-gray-900 text-white rounded-xl shadow-2xl z-50">
+          <span className="text-sm font-medium">
+            {selectedLeads.size} lead{selectedLeads.size > 1 ? 's' : ''} selected
+            {selectedLeads.size >= MAX_RERUN_SELECTION && <span className="text-amber-400 ml-1">(max {MAX_RERUN_SELECTION})</span>}
+          </span>
+          <div className="w-px h-5 bg-gray-700" />
+          {canRerun && (
+            <button
+              onClick={handleBulkRerun}
+              disabled={bulkRerunning}
+              className="flex items-center gap-1.5 px-4 py-1.5 bg-brand-600 text-white rounded-lg text-sm font-medium hover:bg-brand-700 disabled:opacity-50 transition-colors"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${bulkRerunning ? 'animate-spin' : ''}`} />
+              {bulkRerunning ? 'Rerunning...' : 'Rerun'}
+            </button>
+          )}
+          {canDelete && (
+            <button
+              onClick={() => setDeleteTarget({ type: 'bulk', ids: Array.from(selectedLeads), count: selectedLeads.size })}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-red-400 hover:text-red-300 text-sm"
+            >
+              <Trash2 className="w-3.5 h-3.5" /> Delete
+            </button>
+          )}
+          <button onClick={() => setSelectedLeads(new Set())} className="text-gray-400 hover:text-white transition-colors">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
       {/* Delete Confirmation Modal */}
       {deleteTarget && (

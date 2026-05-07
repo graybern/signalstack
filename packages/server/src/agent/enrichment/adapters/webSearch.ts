@@ -41,7 +41,7 @@ export class WebSearchAdapter implements DataSourceAdapter {
     try {
       // Company news search
       if (searchTypes.includes('company_news')) {
-        const news = await this.search(`"${companyName}" company news 2025 2026`, config.api_key, maxResults);
+        const news = await this.search(`"${companyName}" company news`, config.api_key, maxResults, 'py');
         result.recent_news = news.map(r => ({
           title: r.title,
           url: r.url,
@@ -94,8 +94,9 @@ export class WebSearchAdapter implements DataSourceAdapter {
     return result;
   }
 
-  private async search(query: string, apiKey: string, count: number): Promise<SearchResult[]> {
+  private async search(query: string, apiKey: string, count: number, freshness?: string): Promise<SearchResult[]> {
     const params = new URLSearchParams({ q: query, count: String(count) });
+    if (freshness) params.set('freshness', freshness);
     const response = await fetch(`https://api.search.brave.com/res/v1/web/search?${params}`, {
       headers: {
         'Accept': 'application/json',

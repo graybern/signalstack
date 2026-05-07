@@ -1,7 +1,7 @@
 import { Router, Response } from 'express';
 import { v4 as uuid } from 'uuid';
 import { getDb } from '../db/schema.js';
-import { authenticate, AuthRequest, requireOperator, requireAdmin } from '../auth/middleware.js';
+import { authenticate, AuthRequest, requireOperator, requireAdmin, requireMember } from '../auth/middleware.js';
 import { logActivity } from '../services/activityLog.js';
 import type { Lead, Persona, LeadFeedback } from '../types/index.js';
 
@@ -239,7 +239,7 @@ router.get('/:id', authenticate, (req: AuthRequest, res: Response) => {
   res.json(parseLead(lead));
 });
 
-router.post('/:id/rerun-brief', authenticate, requireAdmin, async (req: AuthRequest, res: Response) => {
+router.post('/:id/rerun-brief', authenticate, requireMember, async (req: AuthRequest, res: Response) => {
   try {
     const { runCampaign } = await import('../agent/campaignOrchestrator.js');
     const { eventBus } = await import('../events/eventBus.js');
@@ -249,9 +249,7 @@ router.post('/:id/rerun-brief', authenticate, requireAdmin, async (req: AuthRequ
     if (!lead) return res.status(404).json({ error: 'Lead not found' });
     if (!lead.campaign_id) return res.status(400).json({ error: 'Lead has no campaign' });
 
-    const validRerunStages = ['qualify', 'enrich', 'score', 'brief', 'audit'];
-    const stage = req.body?.stage;
-    const steps = stage && validRerunStages.includes(stage) ? [stage] : ['brief'];
+    const steps = ['enrich', 'score', 'brief', 'audit'];
 
     const activeRun = db.prepare(
       "SELECT id FROM pipeline_runs WHERE campaign_id = ? AND status IN ('pending','running') LIMIT 1"
@@ -262,7 +260,7 @@ router.post('/:id/rerun-brief', authenticate, requireAdmin, async (req: AuthRequ
 
     res.json({ status: 'started', lead_id: lead.id, steps });
 
-    runCampaign(lead.campaign_id, req.user!.id, steps, [lead.id]).catch(err => {
+    runCampaign(lead.campaign_id, req.user!.id, steps, [lead.id], 'stage_rerun').catch(err => {
       console.error(`[rerun-stage] Failed for lead ${lead.id}:`, err);
       eventBus.emit('lead.stage_rerun', {
         lead_id: lead.id,

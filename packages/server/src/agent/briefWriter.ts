@@ -5,6 +5,7 @@ import type {
   ExtendedICPConfig,
   PainHypothesis,
   TechStackIntel,
+  TechStackItem,
   CompetitiveDisplacement,
   SourceCitation,
   FunnelStepConfig,
@@ -26,6 +27,58 @@ export interface PersonaBrief {
   outreach_message: string | null;
   social_signals: string | null;
   buying_signals: string | null;
+}
+
+function normalizeTechItems(items: any[]): (string | TechStackItem)[] {
+  if (!Array.isArray(items)) return [];
+  return items.map(item => {
+    if (typeof item === 'string') return item;
+    if (item && typeof item === 'object' && item.product) {
+      return {
+        product: String(item.product),
+        confidence: (['high', 'medium', 'low'].includes(item.confidence) ? item.confidence : 'low') as 'high' | 'medium' | 'low',
+        evidence: String(item.evidence || ''),
+        source: String(item.source || ''),
+      };
+    }
+    return String(item);
+  });
+}
+
+function normalizeCategories(cats: any): Record<string, TechStackItem[]> | undefined {
+  if (!cats || typeof cats !== 'object') return undefined;
+  const normalized: Record<string, TechStackItem[]> = {};
+  for (const [key, items] of Object.entries(cats)) {
+    if (!Array.isArray(items)) continue;
+    normalized[key] = (items as any[]).map(item => ({
+      product: String(item?.product || item),
+      confidence: (['high', 'medium', 'low'].includes(item?.confidence) ? item.confidence : 'low') as 'high' | 'medium' | 'low',
+      evidence: String(item?.evidence || ''),
+      source: String(item?.source || ''),
+    }));
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function normalizeCompetitive(cd: any): CompetitiveDisplacement {
+  if (!cd) return { likely_current: [], evidence_sources: [], twingate_wedge: [], proof_points_to_use: [] };
+  return {
+    likely_current: (cd.likely_current || []).map((item: any) => {
+      if (typeof item === 'string') return item;
+      if (item && typeof item === 'object' && item.product) {
+        return {
+          product: String(item.product),
+          confidence: item.confidence === 'confirmed' ? 'confirmed' as const : 'inferred' as const,
+          evidence: String(item.evidence || ''),
+          source: item.source || undefined,
+        };
+      }
+      return String(item);
+    }),
+    evidence_sources: cd.evidence_sources || [],
+    twingate_wedge: cd.twingate_wedge || [],
+    proof_points_to_use: cd.proof_points_to_use || [],
+  };
 }
 
 export interface BriefResult {
@@ -69,7 +122,7 @@ export async function generateBrief(
 
   const enrichmentSourceCount = candidate.enrichment_source_count ?? 0;
   const signalCount = candidate.signals.length;
-  const systemPrompt = getBriefPrompt(icpConfig, enrichmentSourceCount, signalCount);
+  const systemPrompt = getBriefPrompt(icpConfig, enrichmentSourceCount, signalCount, stepConfig?.tech_stack_categories);
   const valueProps = icpConfig.company_context?.value_props || [];
   const differentiators = icpConfig.company_context?.differentiators || [];
 
@@ -114,7 +167,7 @@ ${candidate.notes}
 ## ICP Context
 ${icpConfig.verticals?.length ? `- **Target Verticals:** ${icpConfig.verticals.join(', ')}\n` : ''}${icpConfig.competitors?.length ? `- **Competitors:** ${icpConfig.competitors.join(', ')}\n` : ''}${icpConfig.tech_signals?.length ? `- **Tech Signals:** ${icpConfig.tech_signals.join(', ')}\n` : ''}${valueProps.length > 0 ? `- **Value Propositions:** ${valueProps.join(', ')}\n` : ''}${differentiators.length > 0 ? `- **Key Differentiators:** ${differentiators.join(', ')}\n` : ''}${icpConfig.campaign_target_signals?.length ? `- **Campaign Target Signals:** ${icpConfig.campaign_target_signals.join(', ')}\n` : ''}${icpConfig.campaign_value_prop_angle ? `- **Value Prop Angle:** ${icpConfig.campaign_value_prop_angle}\n` : ''}${Object.keys(icpConfig.success_stories || {}).length > 0 ? `- **Success Stories:** ${Object.entries(icpConfig.success_stories).map(([v, c]) => `${v}: ${(c as string[]).join(', ')}`).join('; ')}\n` : ''}
 
-Generate the full lead brief as a JSON object.${outreachTone ? `\n\n## Outreach Tone\nWrite all outreach messaging in a ${outreachTone} tone.` : ''}${stepConfig?.persona_types?.length ? `\n\n## Persona Types\nOnly generate personas for these roles: ${stepConfig.persona_types.join(', ')}. Do not include other role types.` : ''}${stepConfig?.brief_depth === 'quick' ? `\n\n## Brief Depth: Quick\nGenerate a snapshot: company overview, 2 pain hypotheses, 1 persona. Skip extended analysis.` : stepConfig?.brief_depth === 'comprehensive' ? `\n\n## Brief Depth: Comprehensive\nGenerate an exhaustive brief with extended analysis, multiple outreach variants per persona, detailed competitive positioning, and thorough why-now analysis.` : ''}${promptInstructions ? `\n\n## Additional Instructions\n${promptInstructions}` : ''}`;
+${candidate.key_people?.length ? `## Key People Found\nReal people identified at this company (use these for personas — do NOT fabricate additional names):\n${candidate.key_people.map(p => `- **${p.name}** — ${p.title}${p.linkedin_url ? ` (${p.linkedin_url})` : ''}`).join('\n')}\n\n` : ''}Generate the full lead brief as a JSON object.${outreachTone ? `\n\n## Outreach Tone\nWrite all outreach messaging in a ${outreachTone} tone.` : ''}${stepConfig?.persona_types?.length ? `\n\n## Persona Types\nOnly generate personas for these roles: ${stepConfig.persona_types.join(', ')}. Do not include other role types.` : ''}${stepConfig?.brief_depth === 'quick' ? `\n\n## Brief Depth: Quick\nGenerate a snapshot: company overview, 2 pain hypotheses, 1 persona. Skip extended analysis.` : stepConfig?.brief_depth === 'comprehensive' ? `\n\n## Brief Depth: Comprehensive\nGenerate an exhaustive brief with extended analysis, multiple outreach variants per persona, detailed competitive positioning, and thorough why-now analysis.` : ''}${promptInstructions ? `\n\n## Additional Instructions\n${promptInstructions}` : ''}`;
 
   let rawText: string;
   let thinkingText = '';
@@ -182,20 +235,16 @@ Generate the full lead brief as a JSON object.${outreachTone ? `\n\n## Outreach 
       company_snapshot: result.company_snapshot || '',
       pain_hypotheses: result.pain_hypotheses || [],
       personas,
-      tech_stack: result.tech_stack || {
-        vpn_product: null,
-        pam_product: null,
-        recent_purchases: [],
-        cloud_infra: [],
-        dev_tools: [],
-        notes: '',
+      tech_stack: {
+        vpn_product: result.tech_stack?.vpn_product || null,
+        pam_product: result.tech_stack?.pam_product || null,
+        recent_purchases: result.tech_stack?.recent_purchases || [],
+        cloud_infra: normalizeTechItems(result.tech_stack?.cloud_infra || []),
+        dev_tools: normalizeTechItems(result.tech_stack?.dev_tools || []),
+        categories: normalizeCategories(result.tech_stack?.categories),
+        notes: result.tech_stack?.notes || '',
       },
-      competitive_displacement: result.competitive_displacement || {
-        likely_current: [],
-        evidence_sources: [],
-        twingate_wedge: [],
-        proof_points_to_use: [],
-      },
+      competitive_displacement: normalizeCompetitive(result.competitive_displacement),
       outreach_strategy: result.outreach_strategy || '',
       source_citations: (result.source_citations || []).map((s: any, i: number) => ({
         ...s,

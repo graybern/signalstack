@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
 import { ScoreBadge, ConfidenceBadge, SegmentBadge } from './ScoreBadge';
 import { Building2, Users, MapPin, ExternalLink, ThumbsUp, ThumbsDown, Zap } from 'lucide-react';
+import { stripMarkdown } from '../utils/inlineMarkdown';
 
 interface LeadCardProps {
   lead: any;
@@ -95,7 +96,7 @@ export function LeadCard({ lead }: LeadCardProps) {
           {whyNow.length > 0 && (
             <p className="text-sm text-gray-700 mb-2 line-clamp-2">
               <span className="font-medium text-brand-700">Why now: </span>
-              {whyNow[0]}
+              {stripMarkdown(whyNow[0])}
             </p>
           )}
 

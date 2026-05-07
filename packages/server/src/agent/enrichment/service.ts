@@ -372,14 +372,30 @@ function applyCandidateEnrichment(
   const updated = { ...candidate };
   const enrichmentNotes: string[] = [];
 
-  // Override with better data
+  // Override with better data — cross-validate employee count
   if (enrichment.employee_count) {
-    if (!candidate.employee_count_estimate || candidate.employee_count_estimate === 0) {
-      updated.employee_count_estimate = enrichment.employee_count;
-      enrichmentNotes.push(`Employee count (${enrichment.employee_count_source}): ${enrichment.employee_count}`);
-    } else if (enrichment.employee_count_source && ['salesforce', 'linkedin', 'apollo', 'serper_search'].includes(enrichment.employee_count_source)) {
-      updated.employee_count_estimate = enrichment.employee_count;
-      enrichmentNotes.push(`Employee count updated from ${enrichment.employee_count_source}: ${enrichment.employee_count}`);
+    const discoverEst = candidate.employee_count_estimate;
+    const enrichEst = enrichment.employee_count;
+    const isPublic = /public|ipo/i.test(candidate.funding_stage || enrichment.funding_stage || '');
+
+    if (!discoverEst || discoverEst === 0) {
+      updated.employee_count_estimate = enrichEst;
+      enrichmentNotes.push(`Employee count (${enrichment.employee_count_source}): ${enrichEst}`);
+    } else if (enrichment.employee_count_source && ['salesforce', 'linkedin', 'apollo'].includes(enrichment.employee_count_source)) {
+      updated.employee_count_estimate = enrichEst;
+      enrichmentNotes.push(`Employee count updated from ${enrichment.employee_count_source}: ${enrichEst}`);
+    } else {
+      const ratio = Math.max(discoverEst, enrichEst) / Math.max(Math.min(discoverEst, enrichEst), 1);
+      if (ratio > 5) {
+        // Large divergence — prefer the larger value for public companies,
+        // prefer discover estimate otherwise (Claude training data is more reliable for well-known companies)
+        const chosen = isPublic ? Math.max(discoverEst, enrichEst) : discoverEst;
+        updated.employee_count_estimate = chosen;
+        enrichmentNotes.push(`Employee count: discover=${discoverEst}, enrichment=${enrichEst} (${enrichment.employee_count_source}) — ${ratio.toFixed(0)}x divergence, using ${chosen === discoverEst ? 'discover' : 'enrichment'} estimate`);
+      } else {
+        updated.employee_count_estimate = enrichEst;
+        enrichmentNotes.push(`Employee count updated from ${enrichment.employee_count_source}: ${enrichEst}`);
+      }
     }
   }
 
@@ -470,7 +486,12 @@ function applyCandidateEnrichment(
   }
 
   if (enrichment.key_people?.length) {
-    const topPeople = enrichment.key_people.slice(0, 3);
+    const topPeople = enrichment.key_people.slice(0, 5);
+    updated.key_people = topPeople.map(p => ({
+      name: p.name,
+      title: p.title || 'Unknown title',
+      linkedin_url: p.linkedin_url,
+    }));
     enrichmentNotes.push(
       `Key contacts: ${topPeople.map(p => `${p.name} (${p.title || 'unknown title'})`).join(', ')}`
     );

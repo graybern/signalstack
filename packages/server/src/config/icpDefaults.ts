@@ -2,9 +2,9 @@ export function getDefaultICP() {
   return {
     version: 0,
     segments: {
-      SMB: { vpn_users_min: 50, vpn_users_max: 200 },
-      MM: { vpn_users_min: 200, vpn_users_max: 1000 },
-      ENT: { vpn_users_min: 1000, vpn_users_max: 50000 },
+      SMB: { vpn_users_min: 100, vpn_users_max: 350 },
+      MM: { vpn_users_min: 350, vpn_users_max: 650 },
+      ENT: { vpn_users_min: 650, vpn_users_max: 15000 },
     },
     verticals: [] as string[],
     tech_signals: [] as string[],
@@ -79,6 +79,19 @@ export function getDefaultExcludedDomainPatterns() {
 
 export function getDefaultSignalWeights() {
   return [] as { signal: string; weight: number; category: string }[];
+}
+
+export function getDefaultTechStackCategories() {
+  return [
+    { id: 'vpn', label: 'VPN / Network Access', examples: ['Cisco AnyConnect', 'Palo Alto GlobalProtect', 'Fortinet FortiClient', 'Zscaler', 'Tailscale'] },
+    { id: 'pam', label: 'PAM / Privileged Access', examples: ['CyberArk', 'BeyondTrust', 'Delinea', 'HashiCorp Vault'] },
+    { id: 'mdm', label: 'MDM / Endpoint Mgmt', examples: ['Jamf', 'Intune', 'Kandji', 'Mosyle'] },
+    { id: 'edr', label: 'EDR / XDR', examples: ['CrowdStrike', 'SentinelOne', 'Microsoft Defender', 'Carbon Black'] },
+    { id: 'idp', label: 'Identity Provider', examples: ['Okta', 'Azure AD / Entra', 'Ping Identity', 'OneLogin'] },
+    { id: 'cloud', label: 'Cloud Infrastructure', examples: ['AWS', 'Azure', 'GCP', 'Cloudflare'] },
+    { id: 'siem', label: 'SIEM / Observability', examples: ['Splunk', 'Datadog', 'Elastic', 'Sumo Logic'] },
+    { id: 'devops', label: 'DevOps / GitOps', examples: ['GitHub', 'GitLab', 'ArgoCD', 'Terraform', 'Jenkins'] },
+  ];
 }
 
 export function getDefaultBuyerPersonas() {

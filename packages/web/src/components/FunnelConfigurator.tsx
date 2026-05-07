@@ -1,4 +1,4 @@
-import { Search, Filter, Database, BarChart3, FileText, ChevronDown, ChevronUp, Info, Play, CheckCircle, Sparkles } from 'lucide-react';
+import { Search, Filter, Database, BarChart3, FileText, ChevronDown, ChevronUp, Info, Play, CheckCircle, Sparkles, X, Plus } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { api } from '../api/client';
 
@@ -65,6 +65,7 @@ interface FunnelStepConfig {
   // Brief levers
   persona_types?: ('champion' | 'economic_buyer' | 'executive_sponsor')[];
   brief_depth?: 'quick' | 'standard' | 'comprehensive';
+  tech_stack_categories?: { id: string; label: string; examples: string[] }[];
   // Enrich levers
   min_enrichment_sources?: number;
   // Audit levers
@@ -107,6 +108,17 @@ const MODELS = [
   { id: 'claude-haiku-4-5@20251001', label: 'Haiku 4.5', desc: 'Fastest, lowest cost', cost: '$0.25 / $1.25', tier: 'economy' as const },
   { id: 'claude-sonnet-4-6@default', label: 'Sonnet 4.6', desc: 'Balanced speed and quality', cost: '$3 / $15', tier: 'standard' as const },
   { id: 'claude-opus-4-6@default', label: 'Opus 4.6', desc: 'Most capable, highest quality', cost: '$15 / $75', tier: 'premium' as const },
+];
+
+const DEFAULT_TECH_CATEGORIES: { id: string; label: string; examples: string[] }[] = [
+  { id: 'vpn', label: 'VPN / Network Access', examples: ['Cisco AnyConnect', 'Palo Alto GlobalProtect', 'Fortinet FortiClient', 'Zscaler', 'Tailscale'] },
+  { id: 'pam', label: 'PAM / Privileged Access', examples: ['CyberArk', 'BeyondTrust', 'Delinea', 'HashiCorp Vault'] },
+  { id: 'mdm', label: 'MDM / Endpoint Mgmt', examples: ['Jamf', 'Intune', 'Kandji', 'Mosyle'] },
+  { id: 'edr', label: 'EDR / XDR', examples: ['CrowdStrike', 'SentinelOne', 'Microsoft Defender', 'Carbon Black'] },
+  { id: 'idp', label: 'Identity Provider', examples: ['Okta', 'Azure AD / Entra', 'Ping Identity', 'OneLogin'] },
+  { id: 'cloud', label: 'Cloud Infrastructure', examples: ['AWS', 'Azure', 'GCP', 'Cloudflare'] },
+  { id: 'siem', label: 'SIEM / Observability', examples: ['Splunk', 'Datadog', 'Elastic', 'Sumo Logic'] },
+  { id: 'devops', label: 'DevOps / GitOps', examples: ['GitHub', 'GitLab', 'ArgoCD', 'Terraform', 'Jenkins'] },
 ];
 
 const TONES = [
@@ -1296,6 +1308,12 @@ function BriefConfig({ step, updateStep, globalPrompts }: {
         </div>
       </div>
 
+      {/* Tech stack categories */}
+      <TechCategoryEditor
+        categories={step.tech_stack_categories || DEFAULT_TECH_CATEGORIES}
+        onChange={cats => updateStep(step.id, { tech_stack_categories: cats })}
+      />
+
       <PromptField
         step={step}
         updateStep={updateStep}
@@ -1304,6 +1322,123 @@ function BriefConfig({ step, updateStep, globalPrompts }: {
         helpText="Tell the AI how to frame the outreach brief for this campaign."
       />
     </>
+  );
+}
+
+function TechCategoryEditor({ categories, onChange }: {
+  categories: { id: string; label: string; examples: string[] }[];
+  onChange: (cats: { id: string; label: string; examples: string[] }[]) => void;
+}) {
+  const [adding, setAdding] = useState(false);
+  const [newId, setNewId] = useState('');
+  const [newLabel, setNewLabel] = useState('');
+  const [newExamples, setNewExamples] = useState('');
+
+  const removeCategory = (id: string) => {
+    onChange(categories.filter(c => c.id !== id));
+  };
+
+  const addCategory = () => {
+    const id = newId.trim().toLowerCase().replace(/\s+/g, '_');
+    const label = newLabel.trim();
+    if (!id || !label || categories.some(c => c.id === id)) return;
+    onChange([...categories, {
+      id,
+      label,
+      examples: newExamples.split(',').map(e => e.trim()).filter(Boolean),
+    }]);
+    setNewId('');
+    setNewLabel('');
+    setNewExamples('');
+    setAdding(false);
+  };
+
+  const isDefault = JSON.stringify(categories) === JSON.stringify(DEFAULT_TECH_CATEGORIES);
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-1.5">
+        <label className="text-xs font-medium text-gray-700">Tech stack categories</label>
+        {!isDefault && (
+          <button
+            onClick={() => onChange(DEFAULT_TECH_CATEGORIES)}
+            className="text-[10px] text-gray-400 hover:text-gray-600"
+          >
+            Reset to defaults
+          </button>
+        )}
+      </div>
+      <p className="text-[11px] text-gray-400 mb-2">The AI will detect and report on these tool categories in each brief.</p>
+      <div className="flex flex-wrap gap-1.5 mb-2">
+        {categories.map(cat => (
+          <span
+            key={cat.id}
+            className="group inline-flex items-center gap-1 px-2 py-1 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-700"
+            title={cat.examples.length > 0 ? `e.g. ${cat.examples.join(', ')}` : undefined}
+          >
+            <span className="font-medium">{cat.label}</span>
+            <button
+              onClick={() => removeCategory(cat.id)}
+              className="opacity-0 group-hover:opacity-100 transition-opacity ml-0.5 text-rose-400 hover:text-rose-600"
+            >
+              <X className="w-3 h-3" />
+            </button>
+          </span>
+        ))}
+        {!adding && (
+          <button
+            onClick={() => setAdding(true)}
+            className="inline-flex items-center gap-1 px-2 py-1 border border-dashed border-gray-300 rounded-lg text-xs text-gray-500 hover:border-gray-400 hover:text-gray-600"
+          >
+            <Plus className="w-3 h-3" /> Add
+          </button>
+        )}
+      </div>
+      {adding && (
+        <div className="flex items-end gap-2 p-2.5 bg-gray-50 rounded-lg border border-gray-200">
+          <div className="flex-1">
+            <label className="text-[10px] text-gray-500 block mb-0.5">ID</label>
+            <input
+              value={newId}
+              onChange={e => setNewId(e.target.value)}
+              className="w-full text-xs border border-gray-200 rounded px-2 py-1"
+              placeholder="e.g. cicd"
+            />
+          </div>
+          <div className="flex-[2]">
+            <label className="text-[10px] text-gray-500 block mb-0.5">Label</label>
+            <input
+              value={newLabel}
+              onChange={e => setNewLabel(e.target.value)}
+              className="w-full text-xs border border-gray-200 rounded px-2 py-1"
+              placeholder="e.g. CI/CD Pipelines"
+            />
+          </div>
+          <div className="flex-[3]">
+            <label className="text-[10px] text-gray-500 block mb-0.5">Examples (comma-separated)</label>
+            <input
+              value={newExamples}
+              onChange={e => setNewExamples(e.target.value)}
+              className="w-full text-xs border border-gray-200 rounded px-2 py-1"
+              placeholder="e.g. CircleCI, GitHub Actions, Jenkins"
+            />
+          </div>
+          <button
+            onClick={addCategory}
+            disabled={!newId.trim() || !newLabel.trim()}
+            className="px-3 py-1 bg-rose-600 text-white text-xs rounded hover:bg-rose-700 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Add
+          </button>
+          <button
+            onClick={() => { setAdding(false); setNewId(''); setNewLabel(''); setNewExamples(''); }}
+            className="px-2 py-1 text-xs text-gray-500 hover:text-gray-700"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 

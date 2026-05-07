@@ -4,13 +4,14 @@ import { api } from '../api/client';
 import { useAuthContext } from '../App';
 import { permissions } from '../utils/permissions';
 import { useEventStream } from '../hooks/useEventStream';
-import { formatDate } from '../utils/dates';
+import { formatDate, formatDateTimeFull } from '../utils/dates';
 import { ScoreBadge, ScoreLabel, ConfidenceBadge, SegmentBadge } from '../components/ScoreBadge';
+import { renderInlineMarkdown } from '../utils/inlineMarkdown';
 import {
   ArrowLeft, ExternalLink, Building2, Users, MapPin, Globe, Calendar,
   Briefcase, Linkedin, MessageSquare, Shield, Server, ChevronDown, ChevronUp,
   Signal, Clock, History, Trash2, AlertTriangle, Brain, FileText, Download,
-  ClipboardCheck, RefreshCw, Sparkles,
+  ClipboardCheck, RefreshCw, Sparkles, Check, Circle, XCircle, ArrowRight,
 } from 'lucide-react';
 
 const VERDICT_OPTIONS = [
@@ -50,11 +51,16 @@ export function LeadDetail() {
   const [rerunning, setRerunning] = useState(false);
   const [rerunStatus, setRerunStatus] = useState<string | null>(null);
   const [rerunError, setRerunError] = useState<string | null>(null);
+  const [rerunStage, setRerunStage] = useState<string | null>(null);
+  const [completedStages, setCompletedStages] = useState<Set<string>>(new Set());
+  const [failedStage, setFailedStage] = useState<string | null>(null);
+  const [rerunRunId, setRerunRunId] = useState<string | null>(null);
+  const [rerunVisible, setRerunVisible] = useState(false);
   const [feedbackLoading, setFeedbackLoading] = useState(false);
   const [feedbackReason, setFeedbackReason] = useState('');
   const [retryDate, setRetryDate] = useState('');
   const [selectedVerdict, setSelectedVerdict] = useState('');
-  const [expandedPersona, setExpandedPersona] = useState<number>(0);
+  const [expandedPersona, setExpandedPersona] = useState<number>(-1);
   const [showFeedbackHistory, setShowFeedbackHistory] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -111,37 +117,57 @@ export function LeadDetail() {
   useEffect(() => {
     if (!rerunning) return;
     const unsubs: (() => void)[] = [];
-    const handleEvent = (event: any) => {
+    const handleStageEvent = (event: any) => {
+      if (event.data?.lead_id !== id) return;
+      const { status, message, stage, run_id } = event.data;
+      if (run_id && !rerunRunId) setRerunRunId(run_id);
+      if (stage) {
+        if (status === 'processing') setRerunStage(stage);
+        if (status === 'completed') {
+          setCompletedStages(prev => new Set([...prev, stage]));
+          setRerunStage(null);
+        }
+        if (status === 'failed') {
+          setFailedStage(stage);
+        }
+      }
+      setRerunStatus(message || status);
+    };
+    const handleBriefEvent = (event: any) => {
       if (event.data?.lead_id !== id) return;
       const { status, message } = event.data;
       setRerunStatus(message || status);
       if (status === 'completed') {
         fetchLead().finally(() => {
           setRerunning(false);
-          setTimeout(() => setRerunStatus(null), 4000);
+          setCompletedStages(new Set(['enrich', 'score', 'brief', 'audit']));
+          setTimeout(() => setRerunVisible(false), 5000);
         });
       } else if (status === 'failed') {
         setRerunning(false);
-        setRerunError(message || 'Stage rerun failed');
-        setTimeout(() => { setRerunStatus(null); setRerunError(null); }, 6000);
+        setRerunError(message || 'Rerun failed');
       }
     };
-    unsubs.push(subscribe('lead.stage_rerun', handleEvent));
-    unsubs.push(subscribe('lead.brief_rerun', handleEvent));
+    unsubs.push(subscribe('lead.stage_rerun', handleStageEvent));
+    unsubs.push(subscribe('lead.brief_rerun', handleBriefEvent));
     return () => unsubs.forEach(fn => fn());
-  }, [rerunning, id, subscribe, fetchLead]);
+  }, [rerunning, id, subscribe, fetchLead, rerunRunId]);
 
   const handleRerun = async () => {
     setRerunning(true);
+    setRerunVisible(true);
     setRerunStatus('Starting rerun...');
     setRerunError(null);
+    setRerunStage(null);
+    setCompletedStages(new Set());
+    setFailedStage(null);
+    setRerunRunId(null);
     try {
       await api(`/leads/${id}/rerun-brief`, { method: 'POST' });
     } catch (err: any) {
       console.error('Rerun failed:', err);
       setRerunning(false);
       setRerunError(err?.message || 'Failed to start rerun');
-      setTimeout(() => setRerunError(null), 6000);
     }
   };
 
@@ -184,12 +210,12 @@ export function LeadDetail() {
   function renderWithCitations(text: string) {
     if (!text) return null;
     const parts = text.split(/(\[\d+\])/g);
-    if (parts.length === 1) return <>{text}</>;
+    if (parts.length === 1) return <>{renderInlineMarkdown(text)}</>;
     return (
       <>
         {parts.map((part, i) => {
           const match = part.match(/^\[(\d+)\]$/);
-          if (!match) return <span key={i}>{part}</span>;
+          if (!match) return <span key={i}>{renderInlineMarkdown(part)}</span>;
           const citationId = parseInt(match[1]);
           const source = sources.find((s: any) => (s.id ?? 0) === citationId) || sources[citationId - 1];
           return (
@@ -228,27 +254,18 @@ export function LeadDetail() {
         </Link>
         <div className="flex items-center gap-2">
           {permissions.canAccessSettings(user?.role) && lead?.campaign_id && (
-            <div className="flex items-center gap-2">
-              <button
-                onClick={handleRerun}
-                disabled={rerunning}
-                className={`flex items-center gap-1.5 px-3 py-1.5 text-sm border rounded-lg disabled:opacity-50 transition-colors ${
-                  rerunError ? 'border-red-300 text-red-700 bg-red-50' :
-                  rerunStatus && !rerunning ? 'border-green-300 text-green-700 bg-green-50' :
-                  'border-amber-300 text-amber-700 hover:bg-amber-50'
-                }`}
-              >
-                <RefreshCw className={`w-3.5 h-3.5 ${rerunning ? 'animate-spin' : ''}`} />
-                {rerunError ? 'Failed' :
-                 rerunning ? 'Rerunning...' :
-                 rerunStatus ? 'Done' : 'Rerun'}
-              </button>
-              {(rerunStatus || rerunError) && (
-                <span className={`text-xs ${rerunError ? 'text-red-600' : rerunning ? 'text-amber-600' : 'text-green-600'}`}>
-                  {rerunError || rerunStatus}
-                </span>
-              )}
-            </div>
+            <button
+              onClick={handleRerun}
+              disabled={rerunning}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-sm border rounded-lg disabled:opacity-50 transition-colors ${
+                rerunError ? 'border-red-300 text-red-700 bg-red-50' :
+                rerunning ? 'border-amber-300 text-amber-700 bg-amber-50' :
+                'border-amber-300 text-amber-700 hover:bg-amber-50'
+              }`}
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${rerunning ? 'animate-spin' : ''}`} />
+              {rerunError ? 'Failed' : rerunning ? 'Rerunning...' : 'Rerun'}
+            </button>
           )}
           {lead?.brief_markdown && (
             <div className="relative" ref={briefMenuRef}>
@@ -296,6 +313,65 @@ export function LeadDetail() {
         </div>
       </div>
 
+      {/* Rerun Progress Bar */}
+      {rerunVisible && (
+        <div className={`bg-white rounded-xl border p-4 mb-4 transition-opacity duration-500 ${
+          !rerunning && !rerunError && completedStages.size === 4 ? 'border-emerald-200' :
+          rerunError || failedStage ? 'border-red-200' : 'border-amber-200'
+        }`}>
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-6">
+              {['enrich', 'score', 'brief', 'audit'].map((stage, i, arr) => {
+                const isCompleted = completedStages.has(stage);
+                const isActive = rerunStage === stage;
+                const isFailed = failedStage === stage;
+                return (
+                  <div key={stage} className="flex items-center gap-2">
+                    {i > 0 && (
+                      <div className={`w-6 h-0.5 -ml-4 mr-0 ${
+                        completedStages.has(arr[i - 1]) ? 'bg-emerald-400' : 'bg-gray-200'
+                      }`} />
+                    )}
+                    <div className="flex items-center gap-1.5">
+                      {isFailed ? (
+                        <XCircle className="w-4 h-4 text-red-500" />
+                      ) : isCompleted ? (
+                        <Check className="w-4 h-4 text-emerald-500" />
+                      ) : isActive ? (
+                        <span className="relative flex h-3 w-3">
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
+                          <span className="relative inline-flex rounded-full h-3 w-3 bg-amber-500" />
+                        </span>
+                      ) : (
+                        <Circle className="w-3.5 h-3.5 text-gray-300" />
+                      )}
+                      <span className={`text-xs font-medium capitalize ${
+                        isFailed ? 'text-red-600' :
+                        isCompleted ? 'text-emerald-600' :
+                        isActive ? 'text-amber-700' : 'text-gray-400'
+                      }`}>
+                        {stage}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            {lead?.campaign_id && (
+              <Link
+                to={`/campaigns/${lead.campaign_id}`}
+                className="flex items-center gap-1 text-xs text-gray-500 hover:text-brand-600 transition-colors"
+              >
+                View activity logs <ArrowRight className="w-3 h-3" />
+              </Link>
+            )}
+          </div>
+          <p className={`text-xs ${rerunError || failedStage ? 'text-red-600' : rerunning ? 'text-gray-500' : 'text-emerald-600'}`}>
+            {rerunError || rerunStatus || 'Starting rerun...'}
+          </p>
+        </div>
+      )}
+
       {/* Header */}
       <div className="bg-white rounded-xl border border-gray-200 p-6 mb-4">
         <div className="flex items-start gap-4">
@@ -319,10 +395,28 @@ export function LeadDetail() {
             </div>
             <div className="flex flex-wrap gap-4 mt-3 text-sm text-gray-600">
               <span className={`flex items-center gap-1 ${lead.hq_location ? '' : 'text-gray-300'}`}><MapPin className="w-4 h-4" />{lead.hq_location || 'Unknown'}</span>
-              <span className={`flex items-center gap-1 ${lead.employee_count ? '' : 'text-gray-300'}`}><Users className="w-4 h-4" />{lead.employee_count ? `~${lead.employee_count.toLocaleString()} employees` : 'Unknown'}</span>
+              <span className={`flex items-center gap-1 ${lead.employee_count ? '' : 'text-gray-300'}`}>
+                <Users className="w-4 h-4" />
+                {lead.employee_count ? `~${lead.employee_count.toLocaleString()} employees` : 'Unknown'}
+                {(() => {
+                  const notes: string = lead.candidate_data_parsed?.notes || '';
+                  const srcMatch = notes.match(/Employee count(?: updated from| \()(\w+)/);
+                  const divergeMatch = notes.match(/(\d+)x divergence/);
+                  return (
+                    <>
+                      {srcMatch && <span className="text-gray-400 text-xs">({srcMatch[1]})</span>}
+                      {divergeMatch && parseInt(divergeMatch[1]) >= 5 && (
+                        <span title={`Sources diverged ${divergeMatch[1]}x — cross-validated`}>
+                          <AlertTriangle className="w-3 h-3 text-amber-500" />
+                        </span>
+                      )}
+                    </>
+                  );
+                })()}
+              </span>
               <span className={`flex items-center gap-1 ${lead.founded_year ? '' : 'text-gray-300'}`}><Calendar className="w-4 h-4" />{lead.founded_year ? `Founded ${lead.founded_year}` : 'Unknown'}</span>
               <span className={`flex items-center gap-1 ${lead.funding_stage ? '' : 'text-gray-300'}`}><Building2 className="w-4 h-4" />{lead.funding_stage ? `${lead.funding_stage}${lead.total_funding ? ` (${lead.total_funding})` : ''}` : 'N/A'}</span>
-              {lead.updated_at && <span className="flex items-center gap-1"><RefreshCw className="w-4 h-4" />Updated {formatDate(lead.updated_at)}</span>}
+              {lead.updated_at && <span className="flex items-center gap-1"><RefreshCw className="w-4 h-4" />Updated {formatDateTimeFull(lead.updated_at)}</span>}
               <a href={`https://${(lead.website || lead.domain || '').replace(/^https?:\/\//, '')}`} target="_blank" rel="noopener" className="flex items-center gap-1 text-brand-600 hover:underline"><Globe className="w-4 h-4" />{(lead.website || lead.domain || '').replace(/^https?:\/\//, '')}</a>
               {lead.linkedin_company_url ? <a href={lead.linkedin_company_url} target="_blank" rel="noopener" className="flex items-center gap-1 text-blue-600 hover:underline"><Linkedin className="w-4 h-4" />LinkedIn</a> : <span className="flex items-center gap-1 text-gray-300"><Linkedin className="w-4 h-4" />LinkedIn</span>}
             </div>
@@ -434,23 +528,69 @@ export function LeadDetail() {
           {competitive && (
             <Section title="Competitive Displacement" icon={<Shield className="w-4 h-4" />}>
               {competitive.likely_current?.length > 0 && (
-                <div className="mb-2">
+                <div className="mb-3">
                   <p className="text-xs font-medium text-gray-500 uppercase mb-1">Likely Current Solution</p>
-                  <div className="flex flex-wrap gap-1">
-                    {competitive.likely_current.map((c: string, i: number) => (
-                      <span key={i} className="px-2 py-1 bg-red-50 text-red-700 rounded text-xs">{renderWithCitations(c)}</span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {competitive.likely_current.map((c: any, i: number) => {
+                      const isStructured = typeof c === 'object' && c.product;
+                      const label = isStructured ? c.product : c;
+                      const conf = isStructured ? c.confidence : null;
+                      return (
+                        <span key={i} className="relative group inline-flex items-center gap-1 px-2 py-1 bg-red-50 text-red-700 rounded text-xs">
+                          {renderWithCitations(label)}
+                          {conf && (
+                            <span className={`px-1 py-0.5 text-[10px] font-medium rounded border ${
+                              conf === 'confirmed' ? 'bg-green-50 text-green-700 border-green-200' : 'bg-amber-50 text-amber-700 border-amber-200'
+                            }`}>{conf}</span>
+                          )}
+                          {isStructured && c.evidence && (
+                            <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 px-3 py-2 bg-gray-900 text-white text-xs rounded-lg shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 whitespace-nowrap max-w-xs">
+                              <span className="block">{c.evidence}</span>
+                              {c.source && <span className="block text-gray-400 mt-0.5">Source: {c.source}</span>}
+                            </span>
+                          )}
+                        </span>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+              {competitive.evidence_sources?.length > 0 && (
+                <div className="mb-3">
+                  <p className="text-xs font-medium text-gray-500 uppercase mb-1">Evidence</p>
+                  <div className="space-y-1">
+                    {competitive.evidence_sources.map((e: any, i: number) => (
+                      <div key={i} className="flex items-start gap-2 text-xs">
+                        <span className={`px-1 py-0.5 rounded text-[10px] font-medium shrink-0 mt-0.5 ${
+                          e.confidence === 'confirmed' ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-700'
+                        }`}>{e.confidence || 'inferred'}</span>
+                        <span className="text-gray-700">{e.signal}</span>
+                        {e.url && <a href={e.url} target="_blank" rel="noopener" className="text-blue-600 hover:underline shrink-0">source</a>}
+                      </div>
                     ))}
                   </div>
                 </div>
               )}
               {competitive.twingate_wedge?.length > 0 && (
-                <div>
+                <div className="mb-3">
                   <p className="text-xs font-medium text-gray-500 uppercase mb-1">Competitive Advantage</p>
-                  <div className="flex flex-wrap gap-1">
+                  <div className="flex flex-wrap gap-1.5">
                     {competitive.twingate_wedge.map((w: string, i: number) => (
                       <span key={i} className="px-2 py-1 bg-emerald-50 text-emerald-700 rounded text-xs">{renderWithCitations(w)}</span>
                     ))}
                   </div>
+                </div>
+              )}
+              {competitive.proof_points_to_use?.length > 0 && (
+                <div>
+                  <p className="text-xs font-medium text-gray-500 uppercase mb-1">Proof Points</p>
+                  <ul className="space-y-1">
+                    {competitive.proof_points_to_use.map((pp: string, i: number) => (
+                      <li key={i} className="text-xs text-gray-700 flex items-start gap-2">
+                        <Check className="w-3 h-3 mt-0.5 text-emerald-500 flex-shrink-0" />{pp}
+                      </li>
+                    ))}
+                  </ul>
                 </div>
               )}
             </Section>
@@ -478,6 +618,57 @@ export function LeadDetail() {
               </div>
             </Section>
           )}
+
+          {/* Signal Stack */}
+          {scoreBreakdown && (() => {
+            const CATEGORY_META: Record<string, { label: string; max: number }> = {
+              segment_scale_fit: { label: 'Segment & Scale Fit', max: 20 },
+              why_now_triggers: { label: 'Why Now Triggers', max: 15 },
+              remote_access_pain: { label: 'Remote Access Pain', max: 20 },
+              displacement_wedge: { label: 'Displacement Wedge', max: 20 },
+              vertical_playbook: { label: 'Vertical / Playbook', max: 15 },
+              buyer_access_readiness: { label: 'Buyer Access & Readiness', max: 10 },
+            };
+            const ranked = Object.entries(CATEGORY_META)
+              .map(([key, meta]) => {
+                const cat = (scoreBreakdown as any)[key];
+                if (!cat) return null;
+                const evidence: string[] = cat.evidence || [];
+                return { key, label: meta.label, points: cat.points || 0, max: meta.max, evidence };
+              })
+              .filter((c): c is NonNullable<typeof c> => c !== null && c.evidence.length > 0)
+              .sort((a, b) => b.points - a.points);
+
+            if (ranked.length === 0) return null;
+
+            return (
+              <Section title="Signal Stack" icon={<Signal className="w-4 h-4" />}>
+                <div className="space-y-3">
+                  {ranked.map((cat) => {
+                    const pct = cat.points / cat.max;
+                    const dotColor = pct >= 0.7 ? 'bg-emerald-500' : pct >= 0.4 ? 'bg-amber-500' : 'bg-red-400';
+                    return (
+                      <div key={cat.key}>
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className={`w-2 h-2 rounded-full ${dotColor} shrink-0`} />
+                          <span className="text-sm font-medium text-gray-900">{cat.label}</span>
+                          <span className="text-xs text-gray-400 ml-auto">{cat.points}/{cat.max}</span>
+                        </div>
+                        <ul className="ml-4 space-y-0.5">
+                          {cat.evidence.map((ev, j) => (
+                            <li key={j} className="text-xs text-gray-600 flex items-start gap-1.5">
+                              <span className="w-1 h-1 rounded-full bg-gray-300 mt-1.5 shrink-0" />
+                              <span>{renderWithCitations(ev)}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    );
+                  })}
+                </div>
+              </Section>
+            );
+          })()}
 
           {/* AI Reasoning */}
           {(lead.scorer_thinking || lead.brief_thinking || lead.candidate_data_parsed?.reasoning) && (
@@ -599,30 +790,32 @@ export function LeadDetail() {
             <div className="bg-white rounded-xl border border-gray-200 p-4">
               <h3 className="font-medium text-gray-900 mb-3 flex items-center gap-2"><Server className="w-4 h-4" /> Tech Stack Intel</h3>
               <div className="space-y-3 text-sm">
-                {techStack.vpn_product && (
-                  <div>
-                    <p className="text-xs text-gray-500 uppercase">VPN</p>
-                    <p className="text-gray-900">{techStack.vpn_product.product} <ConfidenceBadge confidence={techStack.vpn_product.confidence} /></p>
-                  </div>
-                )}
-                {techStack.pam_product && (
-                  <div>
-                    <p className="text-xs text-gray-500 uppercase">PAM</p>
-                    <p className="text-gray-900">{techStack.pam_product.product} <ConfidenceBadge confidence={techStack.pam_product.confidence} /></p>
-                  </div>
-                )}
-                {techStack.cloud_infra?.length > 0 && (
-                  <div>
-                    <p className="text-xs text-gray-500 uppercase">Cloud</p>
-                    <div className="flex flex-wrap gap-1">{techStack.cloud_infra.map((c: string) => <span key={c} className="px-2 py-0.5 bg-blue-50 text-blue-700 rounded text-xs">{c}</span>)}</div>
-                  </div>
-                )}
-                {techStack.dev_tools?.length > 0 && (
-                  <div>
-                    <p className="text-xs text-gray-500 uppercase">Dev Tools</p>
-                    <div className="flex flex-wrap gap-1">{techStack.dev_tools.map((t: string) => <span key={t} className="px-2 py-0.5 bg-gray-100 text-gray-700 rounded text-xs">{t}</span>)}</div>
-                  </div>
-                )}
+                {(() => {
+                  // Build unified category map: prefer new `categories` field, fall back to legacy fields
+                  const cats: Record<string, any[]> = {};
+                  if (techStack.categories && Object.keys(techStack.categories).length > 0) {
+                    for (const [k, items] of Object.entries(techStack.categories)) {
+                      if (Array.isArray(items) && items.length > 0) cats[k] = items;
+                    }
+                  } else {
+                    if (techStack.vpn_product) cats['vpn'] = [techStack.vpn_product];
+                    if (techStack.pam_product) cats['pam'] = [techStack.pam_product];
+                    if (techStack.cloud_infra?.length > 0) cats['cloud'] = techStack.cloud_infra;
+                    if (techStack.dev_tools?.length > 0) cats['devops'] = techStack.dev_tools;
+                  }
+                  const LABELS: Record<string, string> = {
+                    vpn: 'VPN', pam: 'PAM', mdm: 'MDM', edr: 'EDR', idp: 'IdP',
+                    cloud: 'Cloud', siem: 'SIEM', devops: 'DevOps',
+                  };
+                  return Object.entries(cats).map(([catId, items]) => (
+                    <div key={catId}>
+                      <p className="text-xs text-gray-500 uppercase">{LABELS[catId] || catId}</p>
+                      <div className="flex flex-wrap gap-1.5 mt-1">
+                        {items.map((item: any, i: number) => <TechTag key={i} item={item} />)}
+                      </div>
+                    </div>
+                  ));
+                })()}
               </div>
             </div>
           )}
@@ -808,6 +1001,36 @@ export function LeadDetail() {
         </div>
       )}
     </div>
+  );
+}
+
+function TechTag({ item }: { item: string | { product: string; confidence: string; evidence: string; source: string } }) {
+  if (typeof item === 'string') {
+    return <span className="px-2 py-0.5 rounded text-xs bg-gray-100 text-gray-700">{item}</span>;
+  }
+  const confStyle = item.confidence === 'high'
+    ? 'text-emerald-600 bg-emerald-50 border-emerald-200'
+    : item.confidence === 'medium'
+    ? 'text-amber-600 bg-amber-50 border-amber-200'
+    : 'text-gray-500 bg-gray-50 border-gray-200';
+  const confLabel = item.confidence === 'high' ? 'H' : item.confidence === 'medium' ? 'M' : 'L';
+  const sourceUrl = item.source?.startsWith('http') ? item.source : null;
+  const badge = (
+    <span className={`inline-flex items-center justify-center w-4 h-4 text-[9px] font-bold rounded border ${confStyle} align-super ml-0.5`}>
+      {confLabel}
+    </span>
+  );
+  return (
+    <span className="relative group inline-flex items-center">
+      <span className="px-2 py-0.5 rounded-l text-xs bg-gray-100 text-gray-700">{item.product}</span>
+      {sourceUrl ? <a href={sourceUrl} target="_blank" rel="noopener" className="cursor-pointer">{badge}</a> : badge}
+      {(item.evidence || item.source) && (
+        <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 px-3 py-2 bg-gray-900 text-white text-xs rounded-lg shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 whitespace-nowrap max-w-xs">
+          {item.evidence && <span className="block">{item.evidence}</span>}
+          {item.source && <span className="block text-gray-400 mt-0.5">Source: {item.source}</span>}
+        </span>
+      )}
+    </span>
   );
 }
 

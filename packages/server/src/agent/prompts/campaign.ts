@@ -176,7 +176,7 @@ ${customSources.map(s => `- **${s.source}**: ${s.guidance}`).join('\n')}`;
   const segFilter = discoverConfig?.target_segments;
   const segmentSection = segFilter && !(segFilter.smb && segFilter.mm && segFilter.ent)
     ? `## Target Segments
-Focus on these company sizes: ${[segFilter.smb && 'SMB (30-199 employees)', segFilter.mm && 'Mid-Market (200-999 employees)', segFilter.ent && 'Enterprise (1000+ employees)'].filter(Boolean).join(', ')}`
+Focus on these company sizes: ${[segFilter.smb && `SMB (${icpConfig.segment_details?.SMB?.employee_min || 30}-${icpConfig.segment_details?.SMB?.employee_max || 350} employees)`, segFilter.mm && `Mid-Market (${icpConfig.segment_details?.MM?.employee_min || 200}-${icpConfig.segment_details?.MM?.employee_max || 2000} employees)`, segFilter.ent && `Enterprise (${icpConfig.segment_details?.ENT?.employee_min || 1000}+ employees)`].filter(Boolean).join(', ')}`
     : '';
 
   // Lead count range
@@ -287,7 +287,7 @@ For each company, provide the most accurate domain you know. If you are uncertai
    - HQ location, founding year, funding stage
    - Buying-intent signals (see Signal Quality below)
    - Sources where you found the information
-   - Segment assignment: ENT (${icpConfig.segments?.ENT?.vpn_users_min || 1000}+ employees), MM (${icpConfig.segments?.MM?.vpn_users_min || 200}-${icpConfig.segments?.MM?.vpn_users_max || 999}), SMB (${icpConfig.segments?.SMB?.vpn_users_min || 30}-${icpConfig.segments?.SMB?.vpn_users_max || 199})
+   - Segment assignment: ENT (${icpConfig.segment_details?.ENT?.employee_min || 1000}+ employees), MM (${icpConfig.segment_details?.MM?.employee_min || 200}-${icpConfig.segment_details?.MM?.employee_max || 2000} employees), SMB (${icpConfig.segment_details?.SMB?.employee_min || 30}-${icpConfig.segment_details?.SMB?.employee_max || 350} employees)
 3. Prioritize companies with strong, clear pattern matches
 4. Exclude companies on the exclusion list and already-known examples
 5. **Spread results across multiple verticals/patterns** — don't cluster in one area

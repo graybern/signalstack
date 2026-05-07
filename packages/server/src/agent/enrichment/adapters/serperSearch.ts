@@ -31,6 +31,7 @@ export class SerperSearchAdapter implements DataSourceAdapter {
 
     const result: Partial<CompanyEnrichment> = {};
     const allSearchResults: any[] = [];
+    const empEstimates: { count: number; source: string }[] = [];
 
     try {
       // Primary search: try domain-based query
@@ -39,7 +40,7 @@ export class SerperSearchAdapter implements DataSourceAdapter {
       allSearchResults.push(...(data.organic || []));
       if (data.knowledgeGraph) allSearchResults.push(data.knowledgeGraph);
 
-      this.extractKnowledgeGraph(data, result);
+      this.extractKnowledgeGraph(data, result, empEstimates);
 
       // If domain query didn't yield a knowledge graph, try company name
       const domainSlug = domain?.split('.')[0]?.toLowerCase();
@@ -48,7 +49,7 @@ export class SerperSearchAdapter implements DataSourceAdapter {
         const nameData = await this.search(`"${companyName}" company`, config.api_key);
         allSearchResults.push(...(nameData.organic || []));
         if (nameData.knowledgeGraph) allSearchResults.push(nameData.knowledgeGraph);
-        this.extractKnowledgeGraph(nameData, result);
+        this.extractKnowledgeGraph(nameData, result, empEstimates);
       }
 
       // Extract funding from organic snippets if knowledge graph didn't have it
@@ -64,84 +65,113 @@ export class SerperSearchAdapter implements DataSourceAdapter {
         this.extractFoundedFromSnippets(allSearchResults, result);
       }
 
-      // Employee count fallback: LinkedIn search (most reliable for headcount)
-      if (!result.employee_count || !result.linkedin_url) {
-        const searchTerm = domain || companyName;
+      // ── Employee count: collect from ALL sources, then pick median ──
+      const searchTerm = domain || companyName;
+
+      // Source 1: LinkedIn company page
+      if (!result.linkedin_url) {
         const linkedinData = await this.search(`${searchTerm} linkedin company`, config.api_key);
         allSearchResults.push(...(linkedinData.organic || []));
-
         for (const item of (linkedinData.organic || []).slice(0, 5)) {
           const url = item.link || '';
           if (!url.includes('linkedin.com/company/')) continue;
-
           if (!result.linkedin_url) {
             const match = url.match(/linkedin\.com\/company\/[a-zA-Z0-9_-]+/);
             if (match) result.linkedin_url = `https://www.${match[0]}`;
           }
-
-          if (!result.employee_count) {
-            const snippet = item.snippet || '';
-            const count = this.parseEmployeeFromText(snippet);
-            if (count) {
-              result.employee_count = count;
-              result.employee_count_source = 'serper_search';
-            }
-          }
-
-          if (result.employee_count && result.linkedin_url) break;
-        }
-      }
-
-      // Employee count fallback: fte/size query with answerBox parsing
-      if (!result.employee_count) {
-        const searchTerm = domain || companyName;
-        const sizeData = await this.search(`${searchTerm} fte size`, config.api_key);
-        allSearchResults.push(...(sizeData.organic || []));
-
-        if (sizeData.knowledgeGraph?.attributes) {
-          const empCount = this.parseEmployeeCount(sizeData.knowledgeGraph.attributes);
-          if (empCount) {
-            result.employee_count = empCount;
-            result.employee_count_source = 'serper_search';
-          }
-        }
-
-        if (!result.employee_count && sizeData.answerBox) {
-          const boxText = sizeData.answerBox.answer || sizeData.answerBox.snippet || '';
-          const count = this.parseEmployeeFromText(boxText);
-          if (count) {
-            result.employee_count = count;
-            result.employee_count_source = 'serper_search';
-          }
-        }
-
-        if (!result.employee_count) {
-          for (const item of (sizeData.organic || []).slice(0, 5)) {
-            const snippet = item.snippet || '';
-            const count = this.parseEmployeeFromText(snippet);
-            if (count) {
-              result.employee_count = count;
-              result.employee_count_source = 'serper_search';
-              break;
-            }
-          }
-        }
-      }
-
-      // Final employee count fallback: "{companyName}" employees how many
-      if (!result.employee_count) {
-        const empData = await this.search(`"${companyName}" employees how many`, config.api_key);
-        allSearchResults.push(...(empData.organic || []));
-
-        for (const item of (empData.organic || []).slice(0, 5)) {
           const snippet = item.snippet || '';
           const count = this.parseEmployeeFromText(snippet);
-          if (count) {
-            result.employee_count = count;
-            result.employee_count_source = 'serper_search';
-            break;
-          }
+          if (count) empEstimates.push({ count, source: 'linkedin' });
+          if (result.linkedin_url) break;
         }
+      }
+
+      // Source 2: FTE/size query
+      try {
+        const sizeData = await this.search(`${searchTerm} fte size`, config.api_key);
+        allSearchResults.push(...(sizeData.organic || []));
+        if (sizeData.knowledgeGraph?.attributes) {
+          const empCount = this.parseEmployeeCount(sizeData.knowledgeGraph.attributes);
+          if (empCount) empEstimates.push({ count: empCount, source: 'knowledge_graph' });
+        }
+        if (sizeData.answerBox) {
+          const boxText = sizeData.answerBox.answer || sizeData.answerBox.snippet || '';
+          const count = this.parseEmployeeFromText(boxText);
+          if (count) empEstimates.push({ count, source: 'answer_box' });
+        }
+        for (const item of (sizeData.organic || []).slice(0, 3)) {
+          const count = this.parseEmployeeFromText(item.snippet || '');
+          if (count) { empEstimates.push({ count, source: 'fte_snippet' }); break; }
+        }
+      } catch { /* non-critical */ }
+
+      // Source 3: Direct "employees how many" query
+      try {
+        const empData = await this.search(`"${companyName}" employees how many`, config.api_key);
+        allSearchResults.push(...(empData.organic || []));
+        for (const item of (empData.organic || []).slice(0, 3)) {
+          const count = this.parseEmployeeFromText(item.snippet || '');
+          if (count) { empEstimates.push({ count, source: 'direct_query' }); break; }
+        }
+      } catch { /* non-critical */ }
+
+      // Pick best employee count: median of all estimates (robust to outliers)
+      if (empEstimates.length > 0) {
+        const sorted = [...empEstimates].sort((a, b) => a.count - b.count);
+        const mid = Math.floor(sorted.length / 2);
+        const median = sorted.length % 2 === 0
+          ? Math.round((sorted[mid - 1].count + sorted[mid].count) / 2)
+          : sorted[mid].count;
+        result.employee_count = median;
+        result.employee_count_source = 'serper_search';
+
+        // Flag low confidence if estimates diverge significantly
+        const minEst = sorted[0].count;
+        const maxEst = sorted[sorted.length - 1].count;
+        if (maxEst > minEst * 3 && empEstimates.length >= 2) {
+          const note = `Employee count estimates diverge: ${empEstimates.map(e => `${e.count} (${e.source})`).join(', ')}. Using median: ${median}`;
+          result.description = result.description ? `${result.description}\n${note}` : note;
+        }
+      }
+
+      // Tech stack detection: targeted searches for technology stack intelligence
+      const techSearchTerm = domain || companyName;
+      try {
+        const techData = await this.search(`"${techSearchTerm}" technology stack site:stackshare.com`, config.api_key);
+        allSearchResults.push(...(techData.organic || []));
+        this.extractTechSignals(techData.organic || [], result);
+      } catch { /* rate limited or timeout — non-critical */ }
+
+      try {
+        const infraData = await this.search(`"${techSearchTerm}" infrastructure VPN kubernetes docker terraform cloud`, config.api_key);
+        allSearchResults.push(...(infraData.organic || []));
+        this.extractTechSignals(infraData.organic || [], result);
+      } catch { /* non-critical */ }
+
+      // People search: find key contacts via LinkedIn profiles
+      if (config.settings?.find_people !== false) {
+        try {
+          const titleKeywords = (config.settings?.target_titles as string[] | undefined) || ['VP Engineering', 'CISO', 'Director IT', 'CTO'];
+          const titleQuery = titleKeywords.slice(0, 3).join(' OR ');
+          const peopleData = await this.search(`"${companyName}" ${titleQuery} site:linkedin.com/in`, config.api_key);
+          const people = this.parsePeopleFromResults(peopleData.organic || []);
+          if (people.length > 0) {
+            result.key_people = people.slice(0, 5);
+          }
+        } catch { /* non-critical */ }
+      }
+
+      // Competitive intelligence search
+      if (config.settings?.competitive_search !== false) {
+        try {
+          const competitors = (config.settings?.competitor_names as string[] | undefined) || [];
+          const compQuery = competitors.length > 0
+            ? `"${companyName}" ${competitors.slice(0, 3).map((c: string) => `"${c}"`).join(' OR ')}`
+            : `"${companyName}" VPN OR "network access" OR "zero trust" OR "remote access"`;
+          const compData = await this.search(compQuery, config.api_key);
+          allSearchResults.push(...(compData.organic || []));
+          this.extractTechSignals(compData.organic || [], result);
+        } catch { /* non-critical */ }
       }
 
       // Extract LinkedIn URL from ALL search results across all queries
@@ -174,25 +204,46 @@ export class SerperSearchAdapter implements DataSourceAdapter {
     return result;
   }
 
-  private extractKnowledgeGraph(data: any, result: Partial<CompanyEnrichment>): void {
+  private parsePeopleFromResults(results: any[]): NonNullable<CompanyEnrichment['key_people']> {
+    const people: NonNullable<CompanyEnrichment['key_people']> = [];
+    const seenNames = new Set<string>();
+    for (const item of results.slice(0, 10)) {
+      const url = item.link || '';
+      if (!url.includes('linkedin.com/in/')) continue;
+      const title = item.title || '';
+      // LinkedIn titles: "FirstName LastName - Title - Company | LinkedIn"
+      const nameMatch = title.match(/^([^-–|]+)\s*[-–]/);
+      const titleMatch = title.match(/[-–]\s*([^-–|]+)\s*[-–|]/);
+      if (nameMatch) {
+        const name = nameMatch[1].trim();
+        const personTitle = titleMatch ? titleMatch[1].trim() : '';
+        if (name && name.length > 2 && name.length < 60 && !seenNames.has(name.toLowerCase())) {
+          seenNames.add(name.toLowerCase());
+          people.push({
+            name,
+            title: personTitle || 'Unknown title',
+            linkedin_url: url.split('?')[0],
+            source: 'serper_search' as any,
+          });
+        }
+      }
+    }
+    return people;
+  }
+
+  private extractKnowledgeGraph(data: any, result: Partial<CompanyEnrichment>, empEstimates?: { count: number; source: string }[]): void {
     if (!data.knowledgeGraph) return;
     const kg = data.knowledgeGraph;
     const attrs = kg.attributes || {};
 
-    if (!result.employee_count) {
-      const empCount = this.parseEmployeeCount(attrs);
-      if (empCount) {
-        result.employee_count = empCount;
-        result.employee_count_source = 'serper_search';
-      }
+    const empCount = this.parseEmployeeCount(attrs);
+    if (empCount && empEstimates) {
+      empEstimates.push({ count: empCount, source: 'knowledge_graph' });
     }
 
-    if (!result.employee_count) {
-      const descCount = this.parseEmployeeFromText(kg.description || '');
-      if (descCount) {
-        result.employee_count = descCount;
-        result.employee_count_source = 'serper_search';
-      }
+    const descCount = this.parseEmployeeFromText(kg.description || '');
+    if (descCount && empEstimates) {
+      empEstimates.push({ count: descCount, source: 'kg_description' });
     }
 
     if (!result.hq_location) {
@@ -348,6 +399,60 @@ export class SerperSearchAdapter implements DataSourceAdapter {
     }
 
     return null;
+  }
+
+  private extractTechSignals(results: any[], result: Partial<CompanyEnrichment>): void {
+    if (!result.tech_signals) result.tech_signals = [];
+
+    const TECH_KEYWORDS: { pattern: RegExp; tech: string; category: string }[] = [
+      { pattern: /\bkubernetes\b/i, tech: 'Kubernetes', category: 'infra' },
+      { pattern: /\bdocker\b/i, tech: 'Docker', category: 'infra' },
+      { pattern: /\bterraform\b/i, tech: 'Terraform', category: 'infra' },
+      { pattern: /\baws\b/i, tech: 'AWS', category: 'cloud' },
+      { pattern: /\bazure\b/i, tech: 'Azure', category: 'cloud' },
+      { pattern: /\bgoogle cloud\b|gcp\b/i, tech: 'Google Cloud', category: 'cloud' },
+      { pattern: /\bcisco anyconnect\b/i, tech: 'Cisco AnyConnect', category: 'vpn' },
+      { pattern: /\bglobalprotect\b/i, tech: 'Palo Alto GlobalProtect', category: 'vpn' },
+      { pattern: /\bforticlient\b/i, tech: 'Fortinet FortiClient', category: 'vpn' },
+      { pattern: /\bpulse secure\b|\bivanti\b/i, tech: 'Ivanti/Pulse Secure', category: 'vpn' },
+      { pattern: /\bopenvpn\b/i, tech: 'OpenVPN', category: 'vpn' },
+      { pattern: /\btailscale\b/i, tech: 'Tailscale', category: 'vpn' },
+      { pattern: /\bzscaler\b/i, tech: 'Zscaler', category: 'security' },
+      { pattern: /\bcloudflare access\b/i, tech: 'Cloudflare Access', category: 'security' },
+      { pattern: /\bokta\b/i, tech: 'Okta', category: 'auth' },
+      { pattern: /\bcrowdstrike\b/i, tech: 'CrowdStrike', category: 'security' },
+      { pattern: /\bsentinelone\b/i, tech: 'SentinelOne', category: 'security' },
+      { pattern: /\bjamf\b/i, tech: 'Jamf', category: 'mdm' },
+      { pattern: /\bintune\b/i, tech: 'Microsoft Intune', category: 'mdm' },
+      { pattern: /\bdatadog\b/i, tech: 'Datadog', category: 'observability' },
+      { pattern: /\bsplunk\b/i, tech: 'Splunk', category: 'observability' },
+      { pattern: /\bjenkins\b/i, tech: 'Jenkins', category: 'devtools' },
+      { pattern: /\bgithub\b/i, tech: 'GitHub', category: 'devtools' },
+      { pattern: /\bgitlab\b/i, tech: 'GitLab', category: 'devtools' },
+      { pattern: /\bjira\b/i, tech: 'Jira', category: 'devtools' },
+      { pattern: /\bperforce\b|\bp4\b/i, tech: 'Perforce', category: 'devtools' },
+    ];
+
+    const snippets = results.slice(0, 8).map(r => `${r.title || ''} ${r.snippet || ''}`).join(' ');
+    const isStackShare = results.some(r => (r.link || '').includes('stackshare.com'));
+
+    for (const kw of TECH_KEYWORDS) {
+      if (kw.pattern.test(snippets)) {
+        const existing = result.tech_signals!.find(s => s.signal === kw.tech);
+        if (existing) {
+          if (!existing.sources.includes('serper_search')) {
+            existing.sources.push('serper_search');
+          }
+        } else {
+          result.tech_signals!.push({
+            signal: kw.tech,
+            sources: ['serper_search'],
+            confidence: isStackShare ? 'medium' : 'low',
+            evidence: `Detected in web search results${isStackShare ? ' (StackShare profile)' : ''}`,
+          });
+        }
+      }
+    }
   }
 
   private parseFunding(attrs: Record<string, string>): {

@@ -159,17 +159,38 @@ export interface PainHypothesis {
   evidence_strength?: 'confirmed' | 'inferred';
 }
 
+export interface TechStackItem {
+  product: string;
+  confidence: 'high' | 'medium' | 'low';
+  evidence: string;
+  source: string;
+}
+
+export interface TechStackCategory {
+  id: string;
+  label: string;
+  examples: string[];
+}
+
 export interface TechStackIntel {
-  vpn_product: { product: string; confidence: string; evidence: string; source: string } | null;
-  pam_product: { product: string; confidence: string; evidence: string; source: string } | null;
-  recent_purchases: { category: string; product: string; confidence: string; evidence: string; source: string }[];
-  cloud_infra: string[];
-  dev_tools: string[];
+  vpn_product: TechStackItem | null;
+  pam_product: TechStackItem | null;
+  recent_purchases: (TechStackItem & { category: string })[];
+  cloud_infra: (string | TechStackItem)[];
+  dev_tools: (string | TechStackItem)[];
+  categories?: Record<string, TechStackItem[]>;
   notes: string;
 }
 
+export interface CompetitiveProduct {
+  product: string;
+  confidence: 'confirmed' | 'inferred';
+  evidence: string;
+  source?: string;
+}
+
 export interface CompetitiveDisplacement {
-  likely_current: string[];
+  likely_current: (string | CompetitiveProduct)[];
   evidence_sources: { signal: string; url: string; confidence: string }[];
   twingate_wedge: string[];
   proof_points_to_use: string[];
@@ -315,6 +336,7 @@ export interface FunnelStepConfig {
   // ── Brief levers ──
   persona_types?: ('champion' | 'economic_buyer' | 'executive_sponsor')[];
   brief_depth?: 'quick' | 'standard' | 'comprehensive';
+  tech_stack_categories?: TechStackCategory[];
 
   // ── Audit levers ──
   audit_quality_threshold?: number;

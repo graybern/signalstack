@@ -158,11 +158,11 @@ function executeQualifyStep(
         disqualified++;
         continue;
       }
-    } else if (c.employee_count_estimate && icpConfig.segments) {
-      const seg = icpConfig.segments[c.segment];
-      if (seg) {
-        const min = (seg as any).vpn_users_min || (seg as any).employees_min;
-        const max = (seg as any).vpn_users_max || (seg as any).employees_max;
+    } else if (c.employee_count_estimate && icpConfig.segment_details) {
+      const segDetail = icpConfig.segment_details[c.segment];
+      if (segDetail) {
+        const min = segDetail.employee_min;
+        const max = segDetail.employee_max;
         if (min && c.employee_count_estimate < min * 0.5) {
           logger.thinking('qualify', `Disqualified ${c.company_name}: ${c.employee_count_estimate} employees below segment floor`);
           disqualified++;
@@ -629,7 +629,12 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
             }
 
             // 2. Employee count validation — hard floor + segment thresholds
-            const segmentThresholds = { SMB: { min: 50, max: 500 }, MM: { min: 200, max: 2000 }, ENT: { min: 1000, max: Infinity } };
+            const sd = icpConfig.segment_details;
+            const segmentThresholds = {
+              SMB: { min: sd?.SMB?.employee_min ?? 30, max: sd?.SMB?.employee_max ?? 350 },
+              MM: { min: sd?.MM?.employee_min ?? 200, max: sd?.MM?.employee_max ?? 2000 },
+              ENT: { min: sd?.ENT?.employee_min ?? 1000, max: Infinity },
+            };
             const beforeSeg = batchCandidates.length;
             batchCandidates = batchCandidates.filter(c => {
               if (!c.employee_count_estimate) return true;
@@ -767,6 +772,12 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
             candidates = candidates.slice(0, step.candidate_limit);
           }
           emitProgress('enrich');
+          if (targetLeadIds?.length) {
+            for (const candidate of candidates) {
+              const leadId = getLeadId(candidate.company_name);
+              eventBus.emit('lead.stage_rerun', { lead_id: leadId, company_name: candidate.company_name, stage: 'enrich', status: 'processing', message: `Enriching ${candidate.company_name}...`, run_id: runId });
+            }
+          }
           logger.phaseStart('enrich', `Enriching ${candidates.length} candidates with external data (no LLM)...`);
           if (signal.aborted) throw new Error('Run cancelled by user');
           const enrichSourceOverrides = step.source_overrides || campaign.source_overrides;
@@ -804,6 +815,12 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
           } else {
             candidates = enrichedCandidates;
             logger.phaseComplete('enrich', 'Enrichment complete');
+          }
+          if (targetLeadIds?.length) {
+            for (const candidate of candidates) {
+              const leadId = getLeadId(candidate.company_name);
+              eventBus.emit('lead.stage_rerun', { lead_id: leadId, company_name: candidate.company_name, stage: 'enrich', status: 'completed', message: `Enrichment complete — ${candidate.enrichment_source_count || 0} sources`, run_id: runId });
+            }
           }
           persistCandidates('enriched', candidates);
           break;
@@ -1325,7 +1342,18 @@ async function researchCampaignPattern(
     .map(c => ({
       company_name: c.company_name || (c as any).name || (c as any).company || '',
       domain: c.domain || (c as any).website || (c as any).url || '',
-      segment: (['ENT', 'MM', 'SMB'].includes(c.segment) ? c.segment : 'MM') as 'ENT' | 'MM' | 'SMB',
+      segment: (() => {
+        const emp = c.employee_count_estimate ?? (c as any).employees ?? (c as any).employee_count ?? null;
+        if (emp != null) {
+          const sd = icpConfig.segment_details;
+          const entMin = sd?.ENT?.employee_min ?? 1000;
+          const mmMin = sd?.MM?.employee_min ?? 200;
+          if (emp >= entMin) return 'ENT';
+          if (emp >= mmMin) return 'MM';
+          return 'SMB';
+        }
+        return (['ENT', 'MM', 'SMB'].includes(c.segment) ? c.segment : 'MM');
+      })() as 'ENT' | 'MM' | 'SMB',
       employee_count_estimate: c.employee_count_estimate ?? (c as any).employees ?? (c as any).employee_count ?? null,
       hq_location: c.hq_location ?? (c as any).location ?? (c as any).headquarters ?? null,
       founded_year: c.founded_year ?? (c as any).year_founded ?? null,

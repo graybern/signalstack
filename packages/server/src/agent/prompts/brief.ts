@@ -1,6 +1,7 @@
-import type { ExtendedICPConfig } from '../../types/index.js';
+import type { ExtendedICPConfig, TechStackCategory } from '../../types/index.js';
+import { getDefaultTechStackCategories } from '../../config/icpDefaults.js';
 
-export function getBriefPrompt(icpConfig: ExtendedICPConfig, enrichmentSourceCount?: number, signalCount?: number): string {
+export function getBriefPrompt(icpConfig: ExtendedICPConfig, enrichmentSourceCount?: number, signalCount?: number, techCategories?: TechStackCategory[]): string {
   const srcCount = enrichmentSourceCount ?? 0;
   const sigCount = signalCount ?? 0;
 
@@ -73,12 +74,12 @@ Identify specific pain points this company likely experiences that ${companyName
 - Why it matters to this specific company (tied to their business context)
 - **Evidence strength**: "confirmed" (directly supported by a source/signal) or "inferred" (logical deduction from company profile)
 
-### 3. Target Personas (2-3 personas)
+### 3. Target Personas (up to 5, prefer 3)
 For each persona, provide:
 - **role_type**: One of "champion" (day-to-day user/evaluator), "economic_buyer" (budget holder), or "executive_sponsor" (strategic decision maker)
-- **name**: Specific name if found in sources (otherwise null — never fabricate names)
+- **name**: Specific name if found in sources or key_people data (otherwise null — never fabricate names)
 - **title**: Likely job title at this company
-- **linkedin_url**: URL if found in sources (otherwise null — never fabricate URLs)
+- **linkedin_url**: URL if found in sources or key_people data (otherwise null — never fabricate URLs)
 - **department**: Their department
 - **tenure**: Estimated tenure if inferable from sources
 - **outreach_angle**: The specific angle to use when reaching out to this persona — tie it to a specific signal or pain point when possible
@@ -87,17 +88,22 @@ For each persona, provide:
 - **social_signals**: Any public activity (blog posts, conference talks, tweets, open source contributions) that could be referenced in outreach
 - **buying_signals**: Specific signals that indicate this persona might be receptive — tie to evidence
 
+When key_people data is provided below, use those real names, titles, and LinkedIn URLs for personas. Do not fabricate additional names beyond what's provided — for remaining persona slots, use role-based placeholders with null name.
+
 ### 4. Tech Stack Intel
-Analyze the company's likely technology stack:
-- **vpn_product**: Current VPN product if identifiable (with confidence level and evidence source)
-- **pam_product**: Current PAM product if identifiable (with confidence level and evidence source)
-- **recent_purchases**: Recent security/IT tool purchases (with evidence)
-- **cloud_infra**: Cloud infrastructure providers (AWS, GCP, Azure, etc.)
-- **dev_tools**: Developer tools and platforms in use
-- **notes**: Any additional tech stack observations. Flag what's confirmed vs. inferred.
+Analyze the company's technology stack for these categories:
+${(techCategories || getDefaultTechStackCategories()).map(cat =>
+  `- **${cat.id}** (${cat.label}): e.g. ${cat.examples.join(', ')}`
+).join('\n')}
+
+For each category where products are identified, provide an array of objects: { "product": "name", "confidence": "high|medium|low", "evidence": "how detected", "source": "detection method" }. Use "high" when directly observed (CDN, script tags, DNS), "medium" for strong indirect evidence (job postings, docs), "low" for inferred.
+
+Also include:
+- **recent_purchases**: Recent security/IT tool purchases with evidence
+- **notes**: Additional tech stack observations. Flag what's confirmed vs. inferred.
 
 ### 5. Competitive Displacement
-- **likely_current**: List of solutions they likely use currently (with confidence per item)
+- **likely_current**: For each product, provide an object: { "product": "name", "confidence": "confirmed|inferred", "evidence": "how you know", "source": "url or detection method" }. Use "confirmed" when directly evidenced, "inferred" when deduced from signals.
 - **evidence_sources**: Evidence for each with confidence level and specific source
 - **twingate_wedge**: Specific advantages ${companyName} has over their current solution — be precise about *why* ${companyName} wins here
 - **proof_points_to_use**: Customer stories or proof points relevant to this prospect's vertical/scale
@@ -151,15 +157,15 @@ Return a JSON object with this exact structure:
     }
   ],
   "tech_stack": {
-    "vpn_product": { "product": "string", "confidence": "string", "evidence": "string", "source": "string" } | null,
-    "pam_product": { "product": "string", "confidence": "string", "evidence": "string", "source": "string" } | null,
+    "categories": {
+      "vpn": [{ "product": "string", "confidence": "high|medium|low", "evidence": "string", "source": "string" }],
+      "cloud": [{ "product": "string", "confidence": "high|medium|low", "evidence": "string", "source": "string" }]
+    },
     "recent_purchases": [{ "category": "string", "product": "string", "confidence": "string", "evidence": "string", "source": "string" }],
-    "cloud_infra": ["string"],
-    "dev_tools": ["string"],
     "notes": "string"
   },
   "competitive_displacement": {
-    "likely_current": ["string"],
+    "likely_current": [{ "product": "string", "confidence": "confirmed|inferred", "evidence": "string", "source": "string" }],
     "evidence_sources": [{ "signal": "string", "url": "string", "confidence": "string" }],
     "twingate_wedge": ["string"],
     "proof_points_to_use": ["string"]

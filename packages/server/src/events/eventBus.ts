@@ -72,6 +72,7 @@ export interface EventPayloads {
     campaign_name: string;
     run_id: string;
     triggered_by: string;
+    run_type?: string;
   };
   'campaign.progress': {
     campaign_id: string;
@@ -81,6 +82,7 @@ export interface EventPayloads {
     current_company?: string;
     step_number: number;
     total_steps: number;
+    run_type?: string;
     tokens: {
       input_tokens: number;
       output_tokens: number;
@@ -94,18 +96,21 @@ export interface EventPayloads {
     run_id: string;
     lead_count: number;
     estimated_cost: number;
+    run_type?: string;
   };
   'campaign.failed': {
     campaign_id: string;
     campaign_name: string;
     run_id: string;
     error: string;
+    run_type?: string;
   };
   'campaign.cancelled': {
     campaign_id: string;
     campaign_name: string;
     run_id: string;
     partial_leads: number;
+    run_type?: string;
   };
   'pipeline.started': {
     run_id: string;

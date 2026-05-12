@@ -54,6 +54,11 @@ router.put('/', authenticate, requireOperator, (req: AuthRequest, res: Response)
     }
   }
 
+  let leadsReassigned = 0;
+  if (body.segment_details) {
+    leadsReassigned = reassignLeadSegments(body.segment_details);
+  }
+
   logActivity({
     userId: req.user!.id,
     entityType: 'icp_config',
@@ -63,7 +68,7 @@ router.put('/', authenticate, requireOperator, (req: AuthRequest, res: Response)
     snapshot: body,
   });
 
-  res.json({ success: true, version });
+  res.json({ success: true, version, leads_reassigned: leadsReassigned });
 });
 
 router.get('/full', authenticate, (_req: AuthRequest, res: Response) => {
@@ -146,6 +151,31 @@ function getSetting(key: string, defaultValue: any): any {
   const row = getDb().prepare('SELECT value FROM app_settings WHERE key = ?').get(key) as any;
   if (!row) return defaultValue;
   try { return JSON.parse(row.value); } catch { return defaultValue; }
+}
+
+function reassignLeadSegments(segmentDetails: any): number {
+  const db = getDb();
+  const defaults = getDefaultSegmentDetails();
+  const entMin = segmentDetails?.ENT?.employee_min ?? defaults.ENT.employee_min;
+  const mmMin = segmentDetails?.MM?.employee_min ?? defaults.MM.employee_min;
+
+  const leads = db.prepare(
+    'SELECT id, employee_count, segment FROM leads WHERE employee_count IS NOT NULL'
+  ).all() as { id: string; employee_count: number; segment: string }[];
+
+  let updated = 0;
+  const update = db.prepare('UPDATE leads SET segment = ? WHERE id = ?');
+
+  for (const lead of leads) {
+    const newSegment = lead.employee_count >= entMin ? 'ENT'
+      : lead.employee_count >= mmMin ? 'MM'
+      : 'SMB';
+    if (newSegment !== lead.segment) {
+      update.run(newSegment, lead.id);
+      updated++;
+    }
+  }
+  return updated;
 }
 
 function parseICPRow(row: any) {

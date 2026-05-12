@@ -296,6 +296,7 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
         campaign_id: campaignId,
         campaign_name: campaign.name,
         run_id: runId,
+        run_type: runType || 'campaign',
         ...progressData,
       });
     };
@@ -307,6 +308,7 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
         campaign_id: campaignId,
         campaign_name: campaign.name,
         run_id: runId,
+        run_type: runType || 'campaign',
         phase: 'processing',
         step_number: stepNumber,
         total_steps: totalSteps,
@@ -320,6 +322,7 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
       campaign_name: campaign.name,
       run_id: runId,
       triggered_by: triggeredBy || 'system',
+      run_type: runType || 'campaign',
     });
 
     const stepModels = activeSteps.filter(s => s.model).map(s => `${s.id}:${s.model}`).join(', ') || defaultModel;
@@ -632,8 +635,8 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
             const sd = icpConfig.segment_details;
             const segmentThresholds = {
               SMB: { min: sd?.SMB?.employee_min ?? 30, max: sd?.SMB?.employee_max ?? 350 },
-              MM: { min: sd?.MM?.employee_min ?? 200, max: sd?.MM?.employee_max ?? 2000 },
-              ENT: { min: sd?.ENT?.employee_min ?? 1000, max: Infinity },
+              MM: { min: sd?.MM?.employee_min ?? 351, max: sd?.MM?.employee_max ?? 650 },
+              ENT: { min: sd?.ENT?.employee_min ?? 651, max: Infinity },
             };
             const beforeSeg = batchCandidates.length;
             batchCandidates = batchCandidates.filter(c => {
@@ -1109,6 +1112,7 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
       run_id: runId,
       lead_count: totalLeads,
       estimated_cost: usage.estimated_cost,
+      run_type: runType || 'campaign',
     });
 
     logger.milestone(`Campaign complete — ${totalLeads} leads generated`, {
@@ -1133,6 +1137,7 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
         campaign_name: campaign.name,
         run_id: runId,
         partial_leads: 0,
+        run_type: runType || 'campaign',
       });
     } else {
       logger.error('campaign', 'Campaign run failed', errorMessage);
@@ -1144,6 +1149,7 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
         campaign_name: campaign.name,
         run_id: runId,
         error: errorMessage,
+        run_type: runType || 'campaign',
       });
       throw err;
     }
@@ -1346,8 +1352,8 @@ async function researchCampaignPattern(
         const emp = c.employee_count_estimate ?? (c as any).employees ?? (c as any).employee_count ?? null;
         if (emp != null) {
           const sd = icpConfig.segment_details;
-          const entMin = sd?.ENT?.employee_min ?? 1000;
-          const mmMin = sd?.MM?.employee_min ?? 200;
+          const entMin = sd?.ENT?.employee_min ?? 651;
+          const mmMin = sd?.MM?.employee_min ?? 351;
           if (emp >= entMin) return 'ENT';
           if (emp >= mmMin) return 'MM';
           return 'SMB';

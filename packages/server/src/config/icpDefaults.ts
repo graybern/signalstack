@@ -37,16 +37,16 @@ export function getDefaultGeographies() {
 export function getDefaultSegmentDetails() {
   return {
     ENT: {
-      employee_min: 1000,
-      employee_max: 50000,
+      employee_min: 651,
+      employee_max: 15000,
       revenue_min: '',
       revenue_max: '',
       funding_stages: [] as string[],
       notes: '',
     },
     MM: {
-      employee_min: 200,
-      employee_max: 2000,
+      employee_min: 351,
+      employee_max: 650,
       revenue_min: '',
       revenue_max: '',
       funding_stages: [] as string[],

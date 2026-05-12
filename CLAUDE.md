@@ -90,9 +90,9 @@ Default credentials (auto-created on first run): `admin@example.com` / `admin123
 This app generates leads for **Twingate**, a modern Zero Trust Network Access (ZTNA) solution that replaces legacy VPNs. All campaigns, scoring, and outreach are built around this ICP.
 
 ### Segment Definitions (by estimated VPN users)
-- **SMB**: 100–350 VPN users (~50–500 employees)
-- **MM (Mid-Market)**: 350–650 VPN users (~500–2000 employees)
-- **ENT (Enterprise)**: 650–15,000 VPN users (~2000+ employees)
+- **SMB**: 100–350 VPN users (~30–350 employees)
+- **MM (Mid-Market)**: 350–650 VPN users (~351–650 employees)
+- **ENT (Enterprise)**: 650–15,000 VPN users (~651–15,000 employees)
 
 ### Priority Verticals
 1. **Gaming** — Studios/publishers with Perforce, dev kits, render farms, large asset workflows, latency-sensitive builds (Epic Games, Riot Games, 2K Games)

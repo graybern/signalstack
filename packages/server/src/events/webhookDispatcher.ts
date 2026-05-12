@@ -198,6 +198,8 @@ export function initWebhookDispatcher(): void {
         });
 
         if (matches) {
+          const runType = (event.data as any)?.run_type;
+          if (runType && runType !== 'campaign') continue;
           deliverWebhook(sub, event).catch(err => {
             console.error(`[webhook] Delivery error for subscription ${sub.id}:`, err);
           });

@@ -53,6 +53,7 @@ export interface CompanyEnrichment {
   // Crunchbase / Apollo / Clearbit data
   employee_count?: number;
   employee_count_source?: DataSourceId;
+  employee_count_type?: 'fte' | 'total_headcount' | 'unknown';
   founded_year?: number;
   hq_location?: string;
   funding_stage?: string;

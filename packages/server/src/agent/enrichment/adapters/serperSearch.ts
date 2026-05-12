@@ -31,7 +31,7 @@ export class SerperSearchAdapter implements DataSourceAdapter {
 
     const result: Partial<CompanyEnrichment> = {};
     const allSearchResults: any[] = [];
-    const empEstimates: { count: number; source: string }[] = [];
+    const empEstimates: { count: number; source: string; type: 'fte' | 'total_headcount' | 'unknown' }[] = [];
 
     try {
       // Primary search: try domain-based query
@@ -81,7 +81,7 @@ export class SerperSearchAdapter implements DataSourceAdapter {
           }
           const snippet = item.snippet || '';
           const count = this.parseEmployeeFromText(snippet);
-          if (count) empEstimates.push({ count, source: 'linkedin' });
+          if (count) empEstimates.push({ count, source: 'linkedin', type: 'total_headcount' });
           if (result.linkedin_url) break;
         }
       }
@@ -92,16 +92,16 @@ export class SerperSearchAdapter implements DataSourceAdapter {
         allSearchResults.push(...(sizeData.organic || []));
         if (sizeData.knowledgeGraph?.attributes) {
           const empCount = this.parseEmployeeCount(sizeData.knowledgeGraph.attributes);
-          if (empCount) empEstimates.push({ count: empCount, source: 'knowledge_graph' });
+          if (empCount) empEstimates.push({ count: empCount, source: 'knowledge_graph', type: 'fte' });
         }
         if (sizeData.answerBox) {
           const boxText = sizeData.answerBox.answer || sizeData.answerBox.snippet || '';
           const count = this.parseEmployeeFromText(boxText);
-          if (count) empEstimates.push({ count, source: 'answer_box' });
+          if (count) empEstimates.push({ count, source: 'answer_box', type: 'fte' });
         }
         for (const item of (sizeData.organic || []).slice(0, 3)) {
           const count = this.parseEmployeeFromText(item.snippet || '');
-          if (count) { empEstimates.push({ count, source: 'fte_snippet' }); break; }
+          if (count) { empEstimates.push({ count, source: 'fte_snippet', type: 'fte' }); break; }
         }
       } catch { /* non-critical */ }
 
@@ -111,25 +111,29 @@ export class SerperSearchAdapter implements DataSourceAdapter {
         allSearchResults.push(...(empData.organic || []));
         for (const item of (empData.organic || []).slice(0, 3)) {
           const count = this.parseEmployeeFromText(item.snippet || '');
-          if (count) { empEstimates.push({ count, source: 'direct_query' }); break; }
+          if (count) { empEstimates.push({ count, source: 'direct_query', type: 'unknown' }); break; }
         }
       } catch { /* non-critical */ }
 
-      // Pick best employee count: median of all estimates (robust to outliers)
+      // Pick best employee count: prefer FTE estimates, fall back to all
       if (empEstimates.length > 0) {
-        const sorted = [...empEstimates].sort((a, b) => a.count - b.count);
+        const fteEstimates = empEstimates.filter(e => e.type === 'fte');
+        const estimatesToUse = fteEstimates.length > 0 ? fteEstimates : empEstimates;
+
+        const sorted = [...estimatesToUse].sort((a, b) => a.count - b.count);
         const mid = Math.floor(sorted.length / 2);
         const median = sorted.length % 2 === 0
           ? Math.round((sorted[mid - 1].count + sorted[mid].count) / 2)
           : sorted[mid].count;
         result.employee_count = median;
         result.employee_count_source = 'serper_search';
+        result.employee_count_type = fteEstimates.length > 0 ? 'fte' : 'unknown';
 
         // Flag low confidence if estimates diverge significantly
         const minEst = sorted[0].count;
         const maxEst = sorted[sorted.length - 1].count;
-        if (maxEst > minEst * 3 && empEstimates.length >= 2) {
-          const note = `Employee count estimates diverge: ${empEstimates.map(e => `${e.count} (${e.source})`).join(', ')}. Using median: ${median}`;
+        if (maxEst > minEst * 3 && estimatesToUse.length >= 2) {
+          const note = `Employee count estimates diverge: ${empEstimates.map(e => `${e.count} (${e.source}, ${e.type})`).join(', ')}. Using ${fteEstimates.length > 0 ? 'FTE' : 'all'} median: ${median}`;
           result.description = result.description ? `${result.description}\n${note}` : note;
         }
       }
@@ -231,19 +235,19 @@ export class SerperSearchAdapter implements DataSourceAdapter {
     return people;
   }
 
-  private extractKnowledgeGraph(data: any, result: Partial<CompanyEnrichment>, empEstimates?: { count: number; source: string }[]): void {
+  private extractKnowledgeGraph(data: any, result: Partial<CompanyEnrichment>, empEstimates?: { count: number; source: string; type: 'fte' | 'total_headcount' | 'unknown' }[]): void {
     if (!data.knowledgeGraph) return;
     const kg = data.knowledgeGraph;
     const attrs = kg.attributes || {};
 
     const empCount = this.parseEmployeeCount(attrs);
     if (empCount && empEstimates) {
-      empEstimates.push({ count: empCount, source: 'knowledge_graph' });
+      empEstimates.push({ count: empCount, source: 'knowledge_graph', type: 'unknown' });
     }
 
     const descCount = this.parseEmployeeFromText(kg.description || '');
     if (descCount && empEstimates) {
-      empEstimates.push({ count: descCount, source: 'kg_description' });
+      empEstimates.push({ count: descCount, source: 'kg_description', type: 'unknown' });
     }
 
     if (!result.hq_location) {

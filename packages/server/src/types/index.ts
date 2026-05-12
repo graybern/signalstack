@@ -190,6 +190,7 @@ export interface CompetitiveProduct {
 }
 
 export interface CompetitiveDisplacement {
+  displacement_narrative?: string;
   likely_current: (string | CompetitiveProduct)[];
   evidence_sources: { signal: string; url: string; confidence: string }[];
   twingate_wedge: string[];

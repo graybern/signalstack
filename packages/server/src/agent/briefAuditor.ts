@@ -93,6 +93,25 @@ function checkPersonas(brief: BriefResult, candidate: ResearchCandidate): { scor
     score -= 8;
   }
 
+  if (personas.length > 3) {
+    issues.push({ check: 'personas', severity: 'warning', message: `Too many personas (${personas.length}) — Persona Pyramid allows max 3` });
+    score -= 4;
+  }
+
+  const sponsorCount = personas.filter((p: PersonaBrief) => p.role_type === 'executive_sponsor').length;
+  if (sponsorCount > 1) {
+    issues.push({ check: 'personas', severity: 'warning', message: `Multiple executive sponsors (${sponsorCount}) — max 1 allowed` });
+    score -= 3;
+  }
+
+  const cSuiteCount = personas.filter((p: PersonaBrief) =>
+    /^(CTO|CIO|CISO|CEO|CFO|COO|CPO|CMO)\b/i.test(p.title || '')
+  ).length;
+  if (cSuiteCount >= 3) {
+    issues.push({ check: 'personas', severity: 'warning', message: `Anti-pattern: ${cSuiteCount} C-suite personas — champions should be Director/Manager level` });
+    score -= 4;
+  }
+
   for (const p of personas) {
     const msg = p.outreach_message || '';
     if (msg.length < 100) {

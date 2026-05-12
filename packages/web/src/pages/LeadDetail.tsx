@@ -65,6 +65,8 @@ export function LeadDetail() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [showBriefMenu, setShowBriefMenu] = useState(false);
+  const [expandedSignalCat, setExpandedSignalCat] = useState<string | null>(null);
+  const [showAllSignals, setShowAllSignals] = useState(false);
   const briefMenuRef = useRef<HTMLDivElement>(null);
 
   const handleDeleteLead = async () => {
@@ -527,6 +529,12 @@ export function LeadDetail() {
           {/* Competitive Displacement */}
           {competitive && (
             <Section title="Competitive Displacement" icon={<Shield className="w-4 h-4" />}>
+              {competitive.displacement_narrative && (
+                <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                  <p className="text-xs font-medium text-blue-700 uppercase mb-1">Displacement Story</p>
+                  <p className="text-sm text-gray-800 leading-relaxed">{renderWithCitations(competitive.displacement_narrative)}</p>
+                </div>
+              )}
               {competitive.likely_current?.length > 0 && (
                 <div className="mb-3">
                   <p className="text-xs font-medium text-gray-500 uppercase mb-1">Likely Current Solution</p>
@@ -618,57 +626,6 @@ export function LeadDetail() {
               </div>
             </Section>
           )}
-
-          {/* Signal Stack */}
-          {scoreBreakdown && (() => {
-            const CATEGORY_META: Record<string, { label: string; max: number }> = {
-              segment_scale_fit: { label: 'Segment & Scale Fit', max: 20 },
-              why_now_triggers: { label: 'Why Now Triggers', max: 15 },
-              remote_access_pain: { label: 'Remote Access Pain', max: 20 },
-              displacement_wedge: { label: 'Displacement Wedge', max: 20 },
-              vertical_playbook: { label: 'Vertical / Playbook', max: 15 },
-              buyer_access_readiness: { label: 'Buyer Access & Readiness', max: 10 },
-            };
-            const ranked = Object.entries(CATEGORY_META)
-              .map(([key, meta]) => {
-                const cat = (scoreBreakdown as any)[key];
-                if (!cat) return null;
-                const evidence: string[] = cat.evidence || [];
-                return { key, label: meta.label, points: cat.points || 0, max: meta.max, evidence };
-              })
-              .filter((c): c is NonNullable<typeof c> => c !== null && c.evidence.length > 0)
-              .sort((a, b) => b.points - a.points);
-
-            if (ranked.length === 0) return null;
-
-            return (
-              <Section title="Signal Stack" icon={<Signal className="w-4 h-4" />}>
-                <div className="space-y-3">
-                  {ranked.map((cat) => {
-                    const pct = cat.points / cat.max;
-                    const dotColor = pct >= 0.7 ? 'bg-emerald-500' : pct >= 0.4 ? 'bg-amber-500' : 'bg-red-400';
-                    return (
-                      <div key={cat.key}>
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className={`w-2 h-2 rounded-full ${dotColor} shrink-0`} />
-                          <span className="text-sm font-medium text-gray-900">{cat.label}</span>
-                          <span className="text-xs text-gray-400 ml-auto">{cat.points}/{cat.max}</span>
-                        </div>
-                        <ul className="ml-4 space-y-0.5">
-                          {cat.evidence.map((ev, j) => (
-                            <li key={j} className="text-xs text-gray-600 flex items-start gap-1.5">
-                              <span className="w-1 h-1 rounded-full bg-gray-300 mt-1.5 shrink-0" />
-                              <span>{renderWithCitations(ev)}</span>
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    );
-                  })}
-                </div>
-              </Section>
-            );
-          })()}
 
           {/* AI Reasoning */}
           {(lead.scorer_thinking || lead.brief_thinking || lead.candidate_data_parsed?.reasoning) && (
@@ -841,6 +798,77 @@ export function LeadDetail() {
               </div>
             </div>
           )}
+
+          {/* Signal Stack */}
+          {scoreBreakdown && (() => {
+            const CATEGORY_META: Record<string, { label: string; max: number }> = {
+              segment_scale_fit: { label: 'Segment & Scale Fit', max: 20 },
+              why_now_triggers: { label: 'Why Now Triggers', max: 15 },
+              remote_access_pain: { label: 'Remote Access Pain', max: 20 },
+              displacement_wedge: { label: 'Displacement Wedge', max: 20 },
+              vertical_playbook: { label: 'Vertical / Playbook', max: 15 },
+              buyer_access_readiness: { label: 'Buyer Access & Readiness', max: 10 },
+            };
+            const ranked = Object.entries(CATEGORY_META)
+              .map(([key, meta]) => {
+                const cat = (scoreBreakdown as any)[key];
+                if (!cat) return null;
+                const evidence: string[] = cat.evidence || [];
+                return { key, label: meta.label, points: cat.points || 0, max: meta.max, evidence };
+              })
+              .filter((c): c is NonNullable<typeof c> => c !== null && c.evidence.length > 0)
+              .sort((a, b) => b.points - a.points);
+
+            if (ranked.length === 0) return null;
+
+            const displayed = showAllSignals ? ranked : ranked.slice(0, 3);
+
+            return (
+              <div className="bg-white rounded-xl border border-gray-200 p-4">
+                <h3 className="font-medium text-gray-900 mb-3 flex items-center gap-2">
+                  <Signal className="w-4 h-4" /> Signal Stack
+                </h3>
+                <div className="space-y-1.5">
+                  {displayed.map((cat) => {
+                    const pct = cat.points / cat.max;
+                    const dotColor = pct >= 0.7 ? 'bg-emerald-500' : pct >= 0.4 ? 'bg-amber-500' : 'bg-red-400';
+                    const isExpanded = expandedSignalCat === cat.key;
+                    return (
+                      <div key={cat.key}>
+                        <button
+                          onClick={() => setExpandedSignalCat(isExpanded ? null : cat.key)}
+                          className="w-full flex items-center gap-2 py-1 hover:bg-gray-50 rounded -mx-1 px-1"
+                        >
+                          <span className={`w-2 h-2 rounded-full ${dotColor} shrink-0`} />
+                          <span className="text-xs font-medium text-gray-900 flex-1 text-left">{cat.label}</span>
+                          <span className="text-[11px] text-gray-400">{cat.points}/{cat.max}</span>
+                          <ChevronDown className={`w-3 h-3 text-gray-400 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                        </button>
+                        {isExpanded && (
+                          <ul className="ml-4 mt-0.5 mb-1 space-y-0.5">
+                            {cat.evidence.map((ev, j) => (
+                              <li key={j} className="text-[11px] text-gray-500 flex items-start gap-1.5">
+                                <span className="w-1 h-1 rounded-full bg-gray-300 mt-1.5 shrink-0" />
+                                <span>{renderWithCitations(ev)}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                    );
+                  })}
+                  {ranked.length > 3 && (
+                    <button
+                      onClick={() => setShowAllSignals(!showAllSignals)}
+                      className="text-xs text-brand-600 hover:underline mt-1"
+                    >
+                      {showAllSignals ? 'Show less' : `Show all ${ranked.length}`}
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Audit Quality */}
           {lead.audit_score != null && (

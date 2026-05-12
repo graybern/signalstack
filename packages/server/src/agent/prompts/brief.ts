@@ -74,21 +74,40 @@ Identify specific pain points this company likely experiences that ${companyName
 - Why it matters to this specific company (tied to their business context)
 - **Evidence strength**: "confirmed" (directly supported by a source/signal) or "inferred" (logical deduction from company profile)
 
-### 3. Target Personas (up to 5, prefer 3)
-For each persona, provide:
-- **role_type**: One of "champion" (day-to-day user/evaluator), "economic_buyer" (budget holder), or "executive_sponsor" (strategic decision maker)
-- **name**: Specific name if found in sources or key_people data (otherwise null — never fabricate names)
-- **title**: Likely job title at this company
-- **linkedin_url**: URL if found in sources or key_people data (otherwise null — never fabricate URLs)
-- **department**: Their department
-- **tenure**: Estimated tenure if inferable from sources
-- **outreach_angle**: The specific angle to use when reaching out to this persona — tie it to a specific signal or pain point when possible
-- **talking_points**: 3-5 bullet points tailored to their role and concerns. Reference specific company signals (e.g., "Your team's recent migration..." not generic "Modern infrastructure needs...")
-- **outreach_message**: A complete personalized outreach message (email or LinkedIn) for this persona. Must reference at least one specific company signal. Keep it concise (3-5 sentences) with a clear CTA.
-- **social_signals**: Any public activity (blog posts, conference talks, tweets, open source contributions) that could be referenced in outreach
-- **buying_signals**: Specific signals that indicate this persona might be receptive — tie to evidence
+### 3. Target Personas (STRICT: generate exactly 2-3)
+Follow the Persona Pyramid exactly:
 
-When key_people data is provided below, use those real names, titles, and LinkedIn URLs for personas. Do not fabricate additional names beyond what's provided — for remaining persona slots, use role-based placeholders with null name.
+**REQUIRED — always include both:**
+1. **Champion** (role_type: "champion") — EXACTLY 1. Day-to-day evaluator who feels the pain.
+   - Target titles: Director, Sr. Manager, Team Lead in IT/Infrastructure/Security/Platform Engineering
+   - This persona must have the most detailed, personalized outreach message
+2. **Economic Buyer** (role_type: "economic_buyer") — EXACTLY 1 for ENT/MM segments.
+   - Target titles: VP of IT, VP of Engineering, CISO
+   - For SMB: may be the same person as champion — if so, generate just 1 champion
+
+**OPTIONAL — only with strong evidence:**
+3. **Executive Sponsor** (role_type: "executive_sponsor") — AT MOST 1.
+   - Target titles: CTO, CIO
+   - ONLY include if there is a specific signal (conference talk, public statement, org restructure) justifying their inclusion
+
+**HARD RULES:**
+- Generate 2-3 personas total. Never 4+.
+- Do NOT fill slots with C-suite. Ideal card: 1 Director champion + 1 VP economic buyer.
+- Do NOT include an executive_sponsor without citing a specific signal.
+
+For each persona, provide:
+- **role_type**: "champion", "economic_buyer", or "executive_sponsor"
+- **name**: Real name from sources or key_people data (null if not found — never fabricate)
+- **title**: Job title at this company
+- **linkedin_url**: URL from sources or key_people data (null if not found — never fabricate)
+- **department**, **tenure**: If inferable from sources
+- **outreach_angle**: Specific angle tied to a signal or pain point
+- **talking_points**: 3-5 bullet points referencing specific company signals
+- **outreach_message**: Personalized message (3-5 sentences) referencing at least one company signal, with a clear CTA
+- **social_signals**: Public activity useful for outreach
+- **buying_signals**: Specific signals indicating receptiveness
+
+When key_people data is provided below, use those real names, titles, and LinkedIn URLs. Do not fabricate names beyond what's provided.
 
 ### 4. Tech Stack Intel
 Analyze the company's technology stack for these categories:
@@ -103,10 +122,11 @@ Also include:
 - **notes**: Additional tech stack observations. Flag what's confirmed vs. inferred.
 
 ### 5. Competitive Displacement
-- **likely_current**: For each product, provide an object: { "product": "name", "confidence": "confirmed|inferred", "evidence": "how you know", "source": "url or detection method" }. Use "confirmed" when directly evidenced, "inferred" when deduced from signals.
-- **evidence_sources**: Evidence for each with confidence level and specific source
-- **twingate_wedge**: Specific advantages ${companyName} has over their current solution — be precise about *why* ${companyName} wins here
-- **proof_points_to_use**: Customer stories or proof points relevant to this prospect's vertical/scale
+- **displacement_narrative**: 2-3 sentences connecting this specific company's current solution to why ${companyName} wins. Reference at least one concrete signal about THIS company. The AE will lead with this narrative — make it specific, not generic.
+- **likely_current**: MAX 2 products. Only include products where you have actual evidence. { "product": "name", "confidence": "confirmed|inferred", "evidence": "how you know", "source": "url or detection method" }
+- **evidence_sources**: MAX 3 entries. Only real evidence you found, not hypothetical.
+- **twingate_wedge**: MAX 3 specific advantages ${companyName} has over their SPECIFIC current solution. Each must reference THIS company's situation (e.g., "Their 3 offices across US/EU make ${companyName}'s mesh architecture faster than site-to-site VPN"). Generic advantages like "easier to deploy" will fail audit.
+- **proof_points_to_use**: MAX 2 customer stories relevant to this prospect's vertical/scale.
 
 ### 6. Outreach Strategy
 A strategic recommendation for how to approach this account:
@@ -165,6 +185,7 @@ Return a JSON object with this exact structure:
     "notes": "string"
   },
   "competitive_displacement": {
+    "displacement_narrative": "string (2-3 sentences, personalized to this company)",
     "likely_current": [{ "product": "string", "confidence": "confirmed|inferred", "evidence": "string", "source": "string" }],
     "evidence_sources": [{ "signal": "string", "url": "string", "confidence": "string" }],
     "twingate_wedge": ["string"],

@@ -63,7 +63,8 @@ function normalizeCategories(cats: any): Record<string, TechStackItem[]> | undef
 function normalizeCompetitive(cd: any): CompetitiveDisplacement {
   if (!cd) return { likely_current: [], evidence_sources: [], twingate_wedge: [], proof_points_to_use: [] };
   return {
-    likely_current: (cd.likely_current || []).map((item: any) => {
+    displacement_narrative: cd.displacement_narrative || undefined,
+    likely_current: (cd.likely_current || []).slice(0, 2).map((item: any) => {
       if (typeof item === 'string') return item;
       if (item && typeof item === 'object' && item.product) {
         return {
@@ -75,9 +76,9 @@ function normalizeCompetitive(cd: any): CompetitiveDisplacement {
       }
       return String(item);
     }),
-    evidence_sources: cd.evidence_sources || [],
-    twingate_wedge: cd.twingate_wedge || [],
-    proof_points_to_use: cd.proof_points_to_use || [],
+    evidence_sources: (cd.evidence_sources || []).slice(0, 3),
+    twingate_wedge: (cd.twingate_wedge || []).slice(0, 3),
+    proof_points_to_use: (cd.proof_points_to_use || []).slice(0, 2),
   };
 }
 
@@ -225,6 +226,23 @@ ${candidate.key_people?.length ? `## Key People Found\nReal people identified at
     // Filter to requested persona types
     if (stepConfig?.persona_types?.length) {
       personas = personas.filter(p => stepConfig.persona_types!.includes(p.role_type));
+    }
+
+    // Persona Pyramid enforcement: cap at 3, ensure proper role distribution
+    if (personas.length > 0) {
+      const hasChampion = personas.some(p => p.role_type === 'champion');
+      if (!hasChampion) {
+        personas[0].role_type = 'champion';
+      }
+      if (personas.length > 3) {
+        const kept: PersonaBrief[] = [];
+        const byRole = { champion: [] as PersonaBrief[], economic_buyer: [] as PersonaBrief[], executive_sponsor: [] as PersonaBrief[] };
+        for (const p of personas) byRole[p.role_type].push(p);
+        if (byRole.champion.length > 0) kept.push(byRole.champion[0]);
+        if (byRole.economic_buyer.length > 0) kept.push(byRole.economic_buyer[0]);
+        if (byRole.executive_sponsor.length > 0 && kept.length < 3) kept.push(byRole.executive_sponsor[0]);
+        personas = kept.length > 0 ? kept : personas.slice(0, 3);
+      }
     }
 
     if (personas.length === 0) {

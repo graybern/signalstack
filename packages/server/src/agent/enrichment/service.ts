@@ -238,6 +238,7 @@ function mergeEnrichments(enrichments: Partial<CompanyEnrichment>[]): CompanyEnr
       if (!merged.employee_count || newPriority > existingPriority) {
         merged.employee_count = e.employee_count;
         merged.employee_count_source = e.employee_count_source;
+        merged.employee_count_type = e.employee_count_type;
       }
     }
 
@@ -387,11 +388,16 @@ function applyCandidateEnrichment(
     } else {
       const ratio = Math.max(discoverEst, enrichEst) / Math.max(Math.min(discoverEst, enrichEst), 1);
       if (ratio > 5) {
-        // Large divergence — prefer the larger value for public companies,
-        // prefer discover estimate otherwise (Claude training data is more reliable for well-known companies)
-        const chosen = isPublic ? Math.max(discoverEst, enrichEst) : discoverEst;
+        const enrichType = enrichment.employee_count_type || 'unknown';
+        let chosen: number;
+        if (enrichType === 'fte') {
+          chosen = enrichEst;
+        } else {
+          // Prefer smaller value — larger is likely inflated by LinkedIn/contractors
+          chosen = Math.min(discoverEst, enrichEst);
+        }
         updated.employee_count_estimate = chosen;
-        enrichmentNotes.push(`Employee count: discover=${discoverEst}, enrichment=${enrichEst} (${enrichment.employee_count_source}) — ${ratio.toFixed(0)}x divergence, using ${chosen === discoverEst ? 'discover' : 'enrichment'} estimate`);
+        enrichmentNotes.push(`Employee count: discover=${discoverEst}, enrichment=${enrichEst} (${enrichment.employee_count_source}, ${enrichType}) — ${ratio.toFixed(0)}x divergence, using ${chosen}`);
       } else {
         updated.employee_count_estimate = enrichEst;
         enrichmentNotes.push(`Employee count updated from ${enrichment.employee_count_source}: ${enrichEst}`);

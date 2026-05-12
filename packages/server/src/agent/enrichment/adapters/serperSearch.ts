@@ -115,10 +115,10 @@ export class SerperSearchAdapter implements DataSourceAdapter {
         }
       } catch { /* non-critical */ }
 
-      // Pick best employee count: prefer FTE estimates, fall back to all
+      // Pick best employee count: prefer LinkedIn total headcount, fall back to all
       if (empEstimates.length > 0) {
-        const fteEstimates = empEstimates.filter(e => e.type === 'fte');
-        const estimatesToUse = fteEstimates.length > 0 ? fteEstimates : empEstimates;
+        const linkedinEstimates = empEstimates.filter(e => e.type === 'total_headcount');
+        const estimatesToUse = linkedinEstimates.length > 0 ? linkedinEstimates : empEstimates;
 
         const sorted = [...estimatesToUse].sort((a, b) => a.count - b.count);
         const mid = Math.floor(sorted.length / 2);
@@ -127,13 +127,13 @@ export class SerperSearchAdapter implements DataSourceAdapter {
           : sorted[mid].count;
         result.employee_count = median;
         result.employee_count_source = 'serper_search';
-        result.employee_count_type = fteEstimates.length > 0 ? 'fte' : 'unknown';
+        result.employee_count_type = linkedinEstimates.length > 0 ? 'total_headcount' : 'unknown';
 
         // Flag low confidence if estimates diverge significantly
         const minEst = sorted[0].count;
         const maxEst = sorted[sorted.length - 1].count;
         if (maxEst > minEst * 3 && estimatesToUse.length >= 2) {
-          const note = `Employee count estimates diverge: ${empEstimates.map(e => `${e.count} (${e.source}, ${e.type})`).join(', ')}. Using ${fteEstimates.length > 0 ? 'FTE' : 'all'} median: ${median}`;
+          const note = `Employee count estimates diverge: ${empEstimates.map(e => `${e.count} (${e.source}, ${e.type})`).join(', ')}. Using ${linkedinEstimates.length > 0 ? 'LinkedIn headcount' : 'all'} median: ${median}`;
           result.description = result.description ? `${result.description}\n${note}` : note;
         }
       }

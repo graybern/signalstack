@@ -390,10 +390,9 @@ function applyCandidateEnrichment(
       if (ratio > 5) {
         const enrichType = enrichment.employee_count_type || 'unknown';
         let chosen: number;
-        if (enrichType === 'fte') {
+        if (enrichType === 'total_headcount') {
           chosen = enrichEst;
         } else {
-          // Prefer smaller value — larger is likely inflated by LinkedIn/contractors
           chosen = Math.min(discoverEst, enrichEst);
         }
         updated.employee_count_estimate = chosen;

@@ -40,9 +40,9 @@ export function Layout() {
         { to: '/campaigns', icon: Target, label: 'Campaigns' },
         { to: '/leads', icon: Users, label: 'Leads' },
         { to: '/runs', icon: History, label: 'Run History' },
-        { to: '/research', icon: Search, label: 'Quick Research' },
-        ...(permissions.canAccessSettings(role) ? [{ to: '/activity', icon: ClipboardList, label: 'Activity Log' }] : []),
-        { to: '/customers', icon: Building2, label: 'Customers' },
+        ...(permissions.canRunResearch(role) ? [{ to: '/research', icon: Search, label: 'Quick Research' }] : []),
+        ...(permissions.canViewActivity(role) ? [{ to: '/activity', icon: ClipboardList, label: 'Activity Log' }] : []),
+        ...(permissions.canViewCustomers(role) ? [{ to: '/customers', icon: Building2, label: 'Win Book' }] : []),
       ],
     },
     ...(permissions.canViewConnect(role) ? [{

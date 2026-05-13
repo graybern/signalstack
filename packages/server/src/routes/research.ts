@@ -1,11 +1,11 @@
 import { Router, Response } from 'express';
 import { v4 as uuid } from 'uuid';
 import { getDb } from '../db/schema.js';
-import { authenticate, requireMember, AuthRequest } from '../auth/middleware.js';
+import { authenticate, requireMember, requirePermission, AuthRequest } from '../auth/middleware.js';
 
 const router = Router();
 
-router.post('/', authenticate, requireMember, async (req: AuthRequest, res: Response) => {
+router.post('/', authenticate, requirePermission('research:execute'), async (req: AuthRequest, res: Response) => {
   const { domain, campaign_id, context } = req.body;
   if (!domain || !campaign_id) {
     return res.status(400).json({ error: 'domain and campaign_id are required' });

@@ -28,4 +28,9 @@ export const permissions = {
 
   canAccessSettings: (role?: Role) => hasMinRole(role, 'admin'),
   canManageUsers: (role?: Role) => hasMinRole(role, 'admin'),
+
+  canViewCustomers: (role?: Role) => hasMinRole(role, 'viewer'),
+  canEditCustomers: (role?: Role) => hasMinRole(role, 'operator'),
+  canRunResearch: (role?: Role) => hasMinRole(role, 'member'),
+  canViewActivity: (role?: Role) => hasMinRole(role, 'operator'),
 };

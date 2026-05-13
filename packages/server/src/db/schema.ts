@@ -690,6 +690,19 @@ function initSchema(db: Database.Database) {
     );
   `);
 
+  // Per-user permission overrides (grant/revoke beyond role defaults)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS user_permission_overrides (
+      user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      permission TEXT NOT NULL,
+      type       TEXT NOT NULL CHECK(type IN ('grant','revoke')),
+      granted_by TEXT REFERENCES users(id),
+      created_at TEXT DEFAULT (datetime('now')),
+      PRIMARY KEY (user_id, permission)
+    );
+    CREATE INDEX IF NOT EXISTS idx_user_perm_overrides ON user_permission_overrides(user_id);
+  `);
+
   // API keys — user-level tokens with scoped permissions
   db.exec(`
     CREATE TABLE IF NOT EXISTS api_keys (

@@ -11,6 +11,12 @@ import {
   ChevronDown,
   ChevronUp,
   ExternalLink,
+  Brain,
+  Loader2,
+  TrendingUp,
+  BarChart3,
+  X,
+  Check,
 } from 'lucide-react';
 
 interface CustomerProfile {
@@ -35,6 +41,33 @@ interface AggregateData {
   buy_reasons: string[];
 }
 
+interface CustomerInsight {
+  id: string;
+  insight_type: string;
+  title: string;
+  summary: string;
+  details: Record<string, any>;
+  recommendations: { action: string; rationale?: string }[] | null;
+  confidence: string;
+  status: string;
+  created_at: string;
+}
+
+const INSIGHT_TYPE_LABELS: Record<string, { label: string; color: string }> = {
+  icp_validation: { label: 'ICP Validation', color: 'bg-blue-100 text-blue-700' },
+  win_patterns: { label: 'Win Patterns', color: 'bg-green-100 text-green-700' },
+  segment_concentration: { label: 'Segment Focus', color: 'bg-purple-100 text-purple-700' },
+  product_affinity: { label: 'Product Affinity', color: 'bg-amber-100 text-amber-700' },
+  revenue_insights: { label: 'Revenue', color: 'bg-emerald-100 text-emerald-700' },
+  composite: { label: 'Composite', color: 'bg-gray-100 text-gray-700' },
+};
+
+const CONFIDENCE_COLORS: Record<string, string> = {
+  high: 'bg-green-50 text-green-700 border-green-200',
+  medium: 'bg-amber-50 text-amber-700 border-amber-200',
+  low: 'bg-gray-50 text-gray-600 border-gray-200',
+};
+
 export function Customers() {
   const [customers, setCustomers] = useState<CustomerProfile[]>([]);
   const [aggregate, setAggregate] = useState<AggregateData | null>(null);
@@ -42,15 +75,47 @@ export function Customers() {
   const [search, setSearch] = useState('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
+  // AI Insights
+  const [insights, setInsights] = useState<CustomerInsight[]>([]);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [expandedInsightId, setExpandedInsightId] = useState<string | null>(null);
+
   useEffect(() => {
-    api('/analytics/customer-intel')
-      .then((data: any) => {
-        setCustomers(data.customers || []);
-        setAggregate(data.aggregate || null);
-      })
-      .catch(() => setCustomers([]))
-      .finally(() => setLoading(false));
+    Promise.all([
+      api('/analytics/customer-intel'),
+      api('/analytics/customer-intel/insights?status=active').catch(() => []),
+    ]).then(([data, insightsData]: any[]) => {
+      setCustomers(data.customers || []);
+      setAggregate(data.aggregate || null);
+      setInsights(Array.isArray(insightsData) ? insightsData : []);
+    }).catch(() => {
+      setCustomers([]);
+    }).finally(() => setLoading(false));
   }, []);
+
+  const handleAnalyze = async () => {
+    setAnalyzing(true);
+    try {
+      const result = await api('/analytics/customer-intel/analyze', { method: 'POST' }) as any;
+      setInsights(result.insights || []);
+    } catch (err: any) {
+      console.error('Analysis failed:', err);
+    } finally {
+      setAnalyzing(false);
+    }
+  };
+
+  const handleInsightAction = async (id: string, status: 'applied' | 'dismissed') => {
+    try {
+      await api(`/analytics/customer-intel/insights/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status }),
+      });
+      setInsights(prev => prev.filter(i => i.id !== id));
+    } catch (err) {
+      console.error('Failed to update insight:', err);
+    }
+  };
 
   const filtered = search
     ? customers.filter(c =>
@@ -58,6 +123,13 @@ export function Customers() {
         (c.domain || '').toLowerCase().includes(search.toLowerCase())
       )
     : customers;
+
+  // Computed stats
+  const avgDealValue = customers.reduce((acc, c) => {
+    if (!c.deal_value) return acc;
+    const num = parseFloat(c.deal_value.replace(/[^0-9.]/g, ''));
+    return isNaN(num) ? acc : { sum: acc.sum + num, count: acc.count + 1 };
+  }, { sum: 0, count: 0 });
 
   if (loading) {
     return (
@@ -69,15 +141,25 @@ export function Customers() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">Customer Knowledge Base</h1>
-        <p className="text-sm text-gray-500 mt-1">
-          Profiles built from closed-won deals and existing customer feedback. Use to refine your ICP.
-        </p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Win Book</h1>
+          <p className="text-sm text-gray-500 mt-1">
+            Intelligence built from closed-won deals and customer feedback. Use to refine your ICP and playbooks.
+          </p>
+        </div>
+        <button
+          onClick={handleAnalyze}
+          disabled={analyzing || customers.length < 3}
+          className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-brand-600 rounded-lg hover:bg-brand-700 disabled:opacity-50 transition-colors"
+        >
+          {analyzing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Brain className="w-4 h-4" />}
+          {analyzing ? 'Analyzing...' : 'Analyze Patterns'}
+        </button>
       </div>
 
       {/* Summary Cards */}
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-4 gap-4">
         <div className="bg-white rounded-xl border border-gray-200 p-5">
           <div className="flex items-center gap-2 text-sm text-gray-500 mb-1">
             <Building2 className="w-4 h-4" />
@@ -85,6 +167,16 @@ export function Customers() {
           </div>
           <p className="text-2xl font-bold text-gray-900">{customers.length}</p>
         </div>
+        {avgDealValue.count > 0 && (
+          <div className="bg-white rounded-xl border border-gray-200 p-5">
+            <div className="flex items-center gap-2 text-sm text-gray-500 mb-1">
+              <TrendingUp className="w-4 h-4" />
+              Avg Deal Value
+            </div>
+            <p className="text-2xl font-bold text-gray-900">${Math.round(avgDealValue.sum / avgDealValue.count).toLocaleString()}</p>
+            <p className="text-xs text-gray-400">{avgDealValue.count} deal{avgDealValue.count !== 1 ? 's' : ''} tracked</p>
+          </div>
+        )}
         {aggregate && aggregate.product_usage.length > 0 && (
           <div className="bg-white rounded-xl border border-gray-200 p-5">
             <div className="flex items-center gap-2 text-sm text-gray-500 mb-1">
@@ -99,12 +191,91 @@ export function Customers() {
           <div className="bg-white rounded-xl border border-gray-200 p-5">
             <div className="flex items-center gap-2 text-sm text-gray-500 mb-1">
               <MessageSquare className="w-4 h-4" />
-              Buy Reasons Collected
+              Buy Reasons
             </div>
             <p className="text-2xl font-bold text-gray-900">{aggregate.buy_reasons.length}</p>
           </div>
         )}
       </div>
+
+      {/* AI Insights */}
+      {insights.length > 0 && (
+        <div className="bg-white rounded-xl border border-gray-200">
+          <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <BarChart3 className="w-4 h-4 text-brand-600" />
+              <h3 className="font-semibold text-sm text-gray-900">AI Insights</h3>
+              <span className="px-2 py-0.5 text-[10px] font-medium rounded-full bg-brand-50 text-brand-700">{insights.length}</span>
+            </div>
+          </div>
+          <div className="divide-y divide-gray-100">
+            {insights.map(insight => {
+              const typeInfo = INSIGHT_TYPE_LABELS[insight.insight_type] || INSIGHT_TYPE_LABELS.composite;
+              const confColor = CONFIDENCE_COLORS[insight.confidence] || CONFIDENCE_COLORS.medium;
+              const isExpanded = expandedInsightId === insight.id;
+
+              return (
+                <div key={insight.id} className="px-5 py-3">
+                  <div className="flex items-start gap-3">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className={`px-2 py-0.5 text-[10px] font-medium rounded-full ${typeInfo.color}`}>{typeInfo.label}</span>
+                        <span className={`px-1.5 py-0.5 text-[10px] font-medium rounded-full border ${confColor}`}>{insight.confidence}</span>
+                      </div>
+                      <p className="text-sm font-medium text-gray-900">{insight.title}</p>
+                      <p className="text-xs text-gray-500 mt-0.5">{insight.summary}</p>
+
+                      {isExpanded && (
+                        <div className="mt-3 space-y-2">
+                          {insight.recommendations && insight.recommendations.length > 0 && (
+                            <div>
+                              <h4 className="text-xs font-semibold text-gray-500 uppercase mb-1">Recommendations</h4>
+                              <ul className="space-y-1">
+                                {insight.recommendations.map((rec, i) => (
+                                  <li key={i} className="flex items-start gap-2 text-xs text-gray-600">
+                                    <span className="mt-1 w-1.5 h-1.5 rounded-full bg-brand-500 flex-shrink-0" />
+                                    <div>
+                                      <span className="font-medium">{rec.action}</span>
+                                      {rec.rationale && <span className="text-gray-400 ml-1">— {rec.rationale}</span>}
+                                    </div>
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        onClick={() => setExpandedInsightId(isExpanded ? null : insight.id)}
+                        className="p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded"
+                        title={isExpanded ? 'Collapse' : 'Expand'}
+                      >
+                        {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                      </button>
+                      <button
+                        onClick={() => handleInsightAction(insight.id, 'applied')}
+                        className="p-1 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded"
+                        title="Apply insight"
+                      >
+                        <Check className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={() => handleInsightAction(insight.id, 'dismissed')}
+                        className="p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded"
+                        title="Dismiss"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Aggregate Patterns */}
       {aggregate && (aggregate.product_usage.length > 0 || aggregate.buy_reasons.length > 0) && (
@@ -165,7 +336,7 @@ export function Customers() {
             <Building2 className="w-10 h-10 text-gray-300 mx-auto mb-3" />
             <p className="text-sm text-gray-500">
               {customers.length === 0
-                ? 'No customer profiles yet. Mark leads as "Closed Won" or "Existing Customer" to build your knowledge base.'
+                ? 'No customer profiles yet. Mark leads as "Closed Won" or "Existing Customer" to build your Win Book.'
                 : 'No customers match your search.'}
             </p>
           </div>

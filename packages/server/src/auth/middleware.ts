@@ -3,7 +3,7 @@ import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import { config } from '../config.js';
 import { getDb } from '../db/schema.js';
-import { getRolePermissions, userHasPermission } from './permissions.js';
+import { getRolePermissions, userHasPermission, getEffectiveUserPermissions } from './permissions.js';
 import type { User, UserRole, ApiKey } from '../types/index.js';
 
 export interface AuthRequest extends Request {
@@ -140,7 +140,7 @@ export function requirePermission(...permissions: string[]) {
     if (!req.user) return res.status(401).json({ error: 'Not authenticated' });
 
     const missing = permissions.filter(
-      p => !userHasPermission(req.user!.role, p, req.apiKeyScopes)
+      p => !userHasPermission(req.user!.role, p, req.apiKeyScopes, req.user!.id)
     );
 
     if (missing.length > 0) {
@@ -154,12 +154,12 @@ export function requirePermission(...permissions: string[]) {
   };
 }
 
-/** Get effective permissions for the current request (role perms ∩ API key scopes) */
+/** Get effective permissions for the current request (role perms + overrides ∩ API key scopes) */
 export function getEffectivePermissions(req: AuthRequest): string[] {
   if (!req.user) return [];
-  const rolePerms = getRolePermissions(req.user.role);
-  if (!req.apiKeyScopes) return rolePerms;
-  return req.apiKeyScopes.filter(s => rolePerms.includes(s));
+  const perms = getEffectiveUserPermissions(req.user.role, req.user.id);
+  if (!req.apiKeyScopes) return perms;
+  return req.apiKeyScopes.filter(s => perms.includes(s));
 }
 
 export { hashApiKey };

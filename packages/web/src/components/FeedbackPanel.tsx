@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { api } from '../api/client';
 import { formatDate } from '../utils/dates';
-import { Clock, History, ChevronDown, ChevronUp } from 'lucide-react';
+import { Clock, History, ChevronDown, ChevronUp, RotateCcw } from 'lucide-react';
 import { useToast } from './Toast';
 
 interface FeedbackPanelProps {
@@ -157,6 +157,7 @@ export default function FeedbackPanel({ leadId, companyName, feedbackList, onFee
   const [feedbackReason, setFeedbackReason] = useState('');
   const [retryDate, setRetryDate] = useState('');
   const [loading, setLoading] = useState(false);
+  const [resetting, setResetting] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
 
   // Outcome detail fields
@@ -231,6 +232,26 @@ export default function FeedbackPanel({ leadId, companyName, feedbackList, onFee
     setStalledStage('');
   }
 
+  async function handleResetFeedback() {
+    if (!confirm(`Reset feedback for ${companyName}? This will clear the verdict and any associated exclusions.`)) return;
+    setResetting(true);
+    try {
+      const result = await api(`/leads/${leadId}/reset-feedback`, { method: 'POST' }) as any;
+      if (result.exclusion_removed) {
+        showToast('success', 'Feedback reset', `${result.exclusion_removed} removed from exclusion list`);
+      } else {
+        showToast('success', 'Feedback reset');
+      }
+      resetForm();
+      initializedRef.current = false;
+      onFeedbackSubmitted();
+    } catch (err: any) {
+      showToast('error', 'Failed to reset feedback', err?.message || 'Please try again');
+    } finally {
+      setResetting(false);
+    }
+  }
+
   async function submit() {
     if (!selectedVerdict) return;
     setLoading(true);
@@ -299,14 +320,26 @@ export default function FeedbackPanel({ leadId, companyName, feedbackList, onFee
 
       {latestFeedback && (
         <div className={`p-3 rounded-lg text-sm border mb-3 ${VERDICT_COLORS[latestFeedback.verdict] || 'bg-gray-100 text-gray-600 border-gray-200'}`}>
-          <p className="font-medium">{ALL_VERDICT_LABELS[latestFeedback.verdict] || latestFeedback.verdict}</p>
-          {latestFeedback.reason && <p className="text-xs mt-1 opacity-80">{latestFeedback.reason}</p>}
-          {latestFeedback.retry_date && (
-            <p className="text-xs mt-1 flex items-center gap-1">
-              <Clock className="w-3 h-3" />
-              Re-outreach: {formatDate(latestFeedback.retry_date)}
-            </p>
-          )}
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <p className="font-medium">{ALL_VERDICT_LABELS[latestFeedback.verdict] || latestFeedback.verdict}</p>
+              {latestFeedback.reason && <p className="text-xs mt-1 opacity-80">{latestFeedback.reason}</p>}
+              {latestFeedback.retry_date && (
+                <p className="text-xs mt-1 flex items-center gap-1">
+                  <Clock className="w-3 h-3" />
+                  Re-outreach: {formatDate(latestFeedback.retry_date)}
+                </p>
+              )}
+            </div>
+            <button
+              onClick={handleResetFeedback}
+              disabled={resetting}
+              title="Reset feedback"
+              className="p-1 rounded text-current opacity-40 hover:opacity-100 hover:bg-black/10 transition-all disabled:opacity-20"
+            >
+              <RotateCcw className={`w-3.5 h-3.5 ${resetting ? 'animate-spin' : ''}`} />
+            </button>
+          </div>
         </div>
       )}
 

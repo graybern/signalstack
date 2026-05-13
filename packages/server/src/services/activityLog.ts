@@ -1,8 +1,8 @@
 import { v4 as uuidv4 } from 'uuid';
 import { getDb } from '../db/schema.js';
 
-export type EntityType = 'campaign' | 'lead' | 'icp_config' | 'exclusion' | 'user' | 'setting' | 'import' | 'api_key' | 'role';
-export type ActionType = 'created' | 'updated' | 'deleted' | 'reverted' | 'revoked' | 'reset_permissions';
+export type EntityType = 'campaign' | 'lead' | 'icp_config' | 'exclusion' | 'user' | 'setting' | 'import' | 'api_key' | 'role' | 'brief';
+export type ActionType = 'created' | 'updated' | 'deleted' | 'reverted' | 'revoked' | 'reset_permissions' | 'viewed';
 
 export interface ActivityEntry {
   id: string;

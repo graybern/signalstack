@@ -8,6 +8,24 @@ import type { Lead, Persona, LeadFeedback, FeedbackVerdict } from '../types/inde
 
 const router = Router();
 
+// Throttle view logging to avoid spamming activity_log
+const recentViews = new Map<string, number>();
+const VIEW_COOLDOWN_MS = 5 * 60 * 1000;
+
+function shouldLogView(userId: string, entityType: string, entityId: string): boolean {
+  const key = `${userId}:${entityType}:${entityId}`;
+  const now = Date.now();
+  const last = recentViews.get(key);
+  if (last && now - last < VIEW_COOLDOWN_MS) return false;
+  recentViews.set(key, now);
+  if (recentViews.size > 10000) {
+    for (const [k, v] of recentViews) {
+      if (now - v > VIEW_COOLDOWN_MS) recentViews.delete(k);
+    }
+  }
+  return true;
+}
+
 const VALID_VERDICTS: FeedbackVerdict[] = [
   'bad_fit', 'good_fit_response', 'good_fit_booked', 'good_fit_try_again', 'good_fit_no_response',
   'closed_won', 'closed_lost', 'existing_customer', 'stalled', 'nurture',
@@ -261,6 +279,17 @@ router.get('/:id', authenticate, (req: AuthRequest, res: Response) => {
 
   if (!lead) return res.status(404).json({ error: 'Lead not found' });
 
+  // Track lead view (throttled)
+  if (req.user && shouldLogView(req.user.id, 'lead', req.params.id)) {
+    logActivity({
+      userId: req.user.id,
+      entityType: 'lead',
+      entityId: req.params.id,
+      entityTitle: (lead as any).company_name,
+      action: 'viewed',
+    });
+  }
+
   const parsed = parseLead(lead);
 
   // Cross-campaign: find this company in other campaigns
@@ -501,6 +530,85 @@ router.post('/:id/feedback', authenticate, (req: AuthRequest, res: Response) => 
     exclusion_added: sideEffects.exclusion_added,
     customer_created: sideEffects.customer_created,
     analysis_triggered,
+  });
+});
+
+// Reset lead feedback — clears verdict, associated exclusions, and customer profiles
+router.post('/:id/reset-feedback', authenticate, requireMember, (req: AuthRequest, res: Response) => {
+  const db = getDb();
+  const lead = db.prepare(
+    'SELECT id, company_name, domain, campaign_id, current_feedback, lead_status FROM leads WHERE id = ?'
+  ).get(req.params.id) as any;
+  if (!lead) return res.status(404).json({ error: 'Lead not found' });
+  if (!lead.current_feedback) return res.status(400).json({ error: 'Lead has no feedback to reset' });
+
+  const previousFeedback = lead.current_feedback;
+  const previousStatus = lead.lead_status;
+  const sideEffects = { exclusion_removed: null as string | null, customer_removed: false };
+
+  const resetTx = db.transaction(() => {
+    // Get feedback IDs before deleting (for outcome details cleanup)
+    const feedbackIds = db.prepare('SELECT id FROM lead_feedback WHERE lead_id = ?').all(req.params.id) as { id: string }[];
+    for (const f of feedbackIds) {
+      db.prepare('DELETE FROM feedback_outcome_details WHERE feedback_id = ?').run(f.id);
+    }
+    db.prepare('DELETE FROM lead_feedback WHERE lead_id = ?').run(req.params.id);
+
+    db.prepare(
+      `UPDATE leads SET current_feedback = NULL, next_outreach_date = NULL, lead_status = 'scored', updated_at = datetime('now') WHERE id = ?`
+    ).run(req.params.id);
+
+    // Remove auto-created exclusion for closed_won / existing_customer
+    if (['closed_won', 'existing_customer'].includes(previousFeedback)) {
+      const exclusion = db.prepare(
+        "SELECT id FROM exclusions WHERE (company_name = ? OR (domain IS NOT NULL AND domain != '' AND domain = ?)) AND category = 'existing_customers'"
+      ).get(lead.company_name, lead.domain || '') as any;
+      if (exclusion) {
+        db.prepare('DELETE FROM exclusions WHERE id = ?').run(exclusion.id);
+        sideEffects.exclusion_removed = lead.company_name;
+      }
+
+      const customerProfile = db.prepare('SELECT id FROM customer_profiles WHERE original_lead_id = ?').get(req.params.id) as any;
+      if (customerProfile) {
+        db.prepare('DELETE FROM customer_profiles WHERE id = ?').run(customerProfile.id);
+        sideEffects.customer_removed = true;
+      }
+    }
+
+    // Remove auto-created exclusion for bad_fit competitors
+    if (previousFeedback === 'bad_fit') {
+      const exclusion = db.prepare(
+        "SELECT id FROM exclusions WHERE (company_name = ? OR (domain IS NOT NULL AND domain != '' AND domain = ?)) AND category = 'competitors'"
+      ).get(lead.company_name, lead.domain || '') as any;
+      if (exclusion) {
+        db.prepare('DELETE FROM exclusions WHERE id = ?').run(exclusion.id);
+        sideEffects.exclusion_removed = lead.company_name;
+      }
+    }
+  });
+
+  resetTx();
+
+  logActivity({
+    userId: req.user!.id,
+    entityType: 'lead',
+    entityId: req.params.id,
+    entityTitle: lead.company_name,
+    action: 'updated',
+    changes: {
+      feedback_reset: { old: previousFeedback, new: null },
+      lead_status: { old: previousStatus, new: 'scored' },
+      ...(sideEffects.exclusion_removed ? { exclusion_removed: { old: sideEffects.exclusion_removed, new: null } } : {}),
+      ...(sideEffects.customer_removed ? { customer_profile_removed: { old: true, new: null } } : {}),
+    },
+  });
+
+  res.json({
+    success: true,
+    previous_feedback: previousFeedback,
+    previous_status: previousStatus,
+    exclusion_removed: sideEffects.exclusion_removed,
+    customer_removed: sideEffects.customer_removed,
   });
 });
 

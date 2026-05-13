@@ -1,7 +1,7 @@
 import { Router, Response } from 'express';
 import { v4 as uuid } from 'uuid';
 import { getDb } from '../db/schema.js';
-import { authenticate, requireMember, AuthRequest } from '../auth/middleware.js';
+import { authenticate, requireMember, requirePermission, AuthRequest } from '../auth/middleware.js';
 import { generateRecommendations } from '../agent/recommendationEngine.js';
 import { ActivityLogger } from '../agent/activityLogger.js';
 import { logActivity } from '../services/activityLog.js';
@@ -418,7 +418,7 @@ router.get('/cross-campaign', authenticate, (_req: AuthRequest, res: Response) =
 });
 
 // ── GET /customer-intel — aggregate customer knowledge ──────────
-router.get('/customer-intel', authenticate, (_req: AuthRequest, res: Response) => {
+router.get('/customer-intel', authenticate, requirePermission('customers:read'), (_req: AuthRequest, res: Response) => {
   const db = getDb();
 
   const customers = db.prepare(
@@ -461,6 +461,203 @@ router.get('/customer-intel', authenticate, (_req: AuthRequest, res: Response) =
       buy_reasons: buyReasons.slice(0, 20),
     },
   });
+});
+
+// ── POST /customer-intel/analyze — AI analysis of customer patterns ──
+router.post('/customer-intel/analyze', authenticate, requirePermission('customers:read'), async (req: AuthRequest, res: Response) => {
+  const db = getDb();
+  const customers = db.prepare('SELECT * FROM customer_profiles').all() as any[];
+  if (customers.length < 3) {
+    return res.status(400).json({ error: 'Need at least 3 customer profiles for meaningful analysis' });
+  }
+
+  try {
+    const { createAIClient, getAIConfig, resolveModel } = await import('../config/vertexConfig.js');
+
+    const outcomes = db.prepare(`
+      SELECT fod.*, lf.verdict, l.segment, l.fit_score, l.company_name, c.name as campaign_name
+      FROM feedback_outcome_details fod
+      JOIN lead_feedback lf ON lf.id = fod.feedback_id
+      JOIN leads l ON l.id = fod.lead_id
+      LEFT JOIN campaigns c ON c.id = fod.campaign_id
+      WHERE lf.verdict IN ('closed_won', 'existing_customer')
+    `).all() as any[];
+
+    const icpConfig = db.prepare("SELECT value FROM app_settings WHERE key = 'icp_config'").get() as any;
+    const icp = icpConfig ? safeJsonParse(icpConfig.value, null) : null;
+
+    const productCounts: Record<string, number> = {};
+    const segmentCounts: Record<string, number> = {};
+    const channelCounts: Record<string, number> = {};
+    const personaCounts: Record<string, number> = {};
+    const dealValues: number[] = [];
+    const buyReasons: string[] = [];
+
+    for (const c of customers) {
+      const products = safeJsonParse(c.products_used, []);
+      for (const p of products) productCounts[p] = (productCounts[p] || 0) + 1;
+      if (c.why_they_bought) buyReasons.push(c.why_they_bought);
+      if (c.deal_value) {
+        const num = parseFloat(c.deal_value.replace(/[^0-9.]/g, ''));
+        if (!isNaN(num)) dealValues.push(num);
+      }
+    }
+
+    for (const o of outcomes) {
+      if (o.segment) segmentCounts[o.segment] = (segmentCounts[o.segment] || 0) + 1;
+      if (o.effective_channel) channelCounts[o.effective_channel] = (channelCounts[o.effective_channel] || 0) + 1;
+      if (o.effective_persona) personaCounts[o.effective_persona] = (personaCounts[o.effective_persona] || 0) + 1;
+    }
+
+    const lines: string[] = [
+      `Analyze ${customers.length} customer profiles for patterns, ICP validation, and actionable insights.`,
+      '',
+      `## Customer Profiles`,
+      ...customers.map((c: any) => {
+        const products = safeJsonParse(c.products_used, []);
+        return `- ${c.company_name}${c.domain ? ` (${c.domain})` : ''}: products=[${products.join(',')}], deal=${c.deal_value || 'unknown'}, why="${c.why_they_bought || 'unknown'}"`;
+      }),
+      '',
+      `## Aggregate Data`,
+      `Products: ${Object.entries(productCounts).sort((a, b) => b[1] - a[1]).map(([p, c]) => `${p}(${c})`).join(', ') || 'none'}`,
+      `Segments: ${Object.entries(segmentCounts).sort((a, b) => b[1] - a[1]).map(([s, c]) => `${s}(${c})`).join(', ') || 'none'}`,
+      `Channels: ${Object.entries(channelCounts).sort((a, b) => b[1] - a[1]).map(([ch, c]) => `${ch}(${c})`).join(', ') || 'none'}`,
+      `Personas: ${Object.entries(personaCounts).sort((a, b) => b[1] - a[1]).map(([p, c]) => `${p}(${c})`).join(', ') || 'none'}`,
+      `Deal values: ${dealValues.length > 0 ? `avg=$${Math.round(dealValues.reduce((a, b) => a + b, 0) / dealValues.length).toLocaleString()}, range=$${Math.min(...dealValues).toLocaleString()}-$${Math.max(...dealValues).toLocaleString()}` : 'no data'}`,
+      `Buy reasons: ${buyReasons.slice(0, 10).join('; ') || 'none'}`,
+    ];
+
+    if (icp) {
+      lines.push('', `## Current ICP Config (for validation)`, JSON.stringify(icp).substring(0, 1000));
+    }
+
+    const systemPrompt = `You are a customer intelligence analyst for a B2B sales intelligence platform. Analyze customer profiles and generate actionable insights.
+
+Return a JSON array of insight objects. Each must have:
+- "insight_type": one of "icp_validation", "win_patterns", "segment_concentration", "product_affinity", "revenue_insights", or "composite"
+- "title": concise title (under 80 chars)
+- "summary": 1-2 sentence summary with specific numbers/percentages
+- "details": object with supporting data and analysis
+- "recommendations": array of objects with "action" (what to do) and "rationale" (why)
+- "confidence": "low", "medium", or "high"
+
+Generate insights across ALL these categories:
+1. ICP Validation — compare won profiles against ICP config. Flag mismatches or underweighted signals.
+2. Win Patterns — which channels, personas, and messaging angles work best? What's the winning formula?
+3. Segment Concentration — where do most customers come from vs. where campaigns target? Are we fishing in the right pond?
+4. Product Affinity — cross-sell patterns, product adoption sequences.
+5. Revenue Insights — deal size patterns by segment, channel, persona. Where's the highest ACV?
+
+Return ONLY a JSON array.`;
+
+    const aiConfig = getAIConfig();
+    const client = await createAIClient();
+
+    const response = await client.messages.create({
+      model: resolveModel(aiConfig.defaultModel, aiConfig.provider),
+      max_tokens: 4096,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: lines.join('\n') }],
+    });
+
+    const rawText = response.content.find((b: any) => b.type === 'text')?.text || '';
+    const jsonMatch = rawText.match(/\[[\s\S]*\]/);
+    const jsonStr = jsonMatch ? jsonMatch[0] : '[]';
+
+    let rawInsights: any[];
+    try {
+      rawInsights = JSON.parse(jsonStr);
+      if (!Array.isArray(rawInsights)) rawInsights = [rawInsights];
+    } catch {
+      console.error('[analytics] Failed to parse customer analysis:', rawText.substring(0, 500));
+      return res.status(500).json({ error: 'Failed to parse AI analysis' });
+    }
+
+    const validTypes = ['icp_validation', 'win_patterns', 'segment_concentration', 'product_affinity', 'revenue_insights', 'composite'];
+
+    // Store in campaign_insights with campaign_id = '__customer_intel__'
+    db.prepare(
+      `UPDATE campaign_insights SET status = 'stale' WHERE campaign_id = '__customer_intel__' AND status = 'active'`
+    ).run();
+
+    const insertStmt = db.prepare(
+      `INSERT INTO campaign_insights (id, campaign_id, insight_type, title, summary, details, recommendations, data_snapshot, feedback_count, confidence)
+       VALUES (?,?,?,?,?,?,?,?,?,?)`
+    );
+
+    const insights: any[] = [];
+    for (const raw of rawInsights) {
+      if (!raw.title || !raw.summary) continue;
+      const insightType = validTypes.includes(raw.insight_type) ? raw.insight_type : 'composite';
+      const confidence = ['low', 'medium', 'high'].includes(raw.confidence) ? raw.confidence : 'medium';
+      const id = uuid();
+
+      insertStmt.run(
+        id, '__customer_intel__', insightType,
+        String(raw.title).substring(0, 200), String(raw.summary),
+        JSON.stringify(raw.details || {}),
+        raw.recommendations ? JSON.stringify(raw.recommendations) : null,
+        JSON.stringify({ customerCount: customers.length, productCounts, segmentCounts }),
+        customers.length, confidence,
+      );
+
+      insights.push({
+        id, campaign_id: '__customer_intel__', insight_type: insightType,
+        title: raw.title, summary: raw.summary, details: raw.details || {},
+        recommendations: raw.recommendations || [], confidence,
+        status: 'active', created_at: new Date().toISOString(),
+      });
+    }
+
+    res.json({ insights, count: insights.length });
+  } catch (err) {
+    console.error('[analytics] Customer analysis failed:', err);
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Analysis failed' });
+  }
+});
+
+// GET /customer-intel/insights — fetch stored customer insights
+router.get('/customer-intel/insights', authenticate, requirePermission('customers:read'), (_req: AuthRequest, res: Response) => {
+  const db = getDb();
+  const { status } = _req.query;
+
+  let sql = "SELECT * FROM campaign_insights WHERE campaign_id = '__customer_intel__'";
+  const params: any[] = [];
+
+  if (status && typeof status === 'string') {
+    sql += ' AND status = ?';
+    params.push(status);
+  }
+
+  sql += ' ORDER BY created_at DESC';
+
+  const rows = db.prepare(sql).all(...params) as any[];
+  const insights = rows.map(row => ({
+    ...row,
+    details: safeJsonParse(row.details, {}),
+    recommendations: safeJsonParse(row.recommendations, null),
+    data_snapshot: safeJsonParse(row.data_snapshot, null),
+  }));
+
+  res.json(insights);
+});
+
+// PATCH /customer-intel/insights/:id — apply/dismiss customer insight
+router.patch('/customer-intel/insights/:id', authenticate, requirePermission('customers:read'), (req: AuthRequest, res: Response) => {
+  const { status } = req.body;
+  if (!['applied', 'dismissed'].includes(status)) {
+    return res.status(400).json({ error: 'Status must be applied or dismissed' });
+  }
+
+  const db = getDb();
+  const insight = db.prepare("SELECT * FROM campaign_insights WHERE id = ? AND campaign_id = '__customer_intel__'").get(req.params.id) as any;
+  if (!insight) return res.status(404).json({ error: 'Insight not found' });
+
+  db.prepare(
+    `UPDATE campaign_insights SET status = ?, applied_at = datetime('now'), applied_by = ? WHERE id = ?`
+  ).run(status, req.user!.id, req.params.id);
+
+  res.json({ success: true });
 });
 
 // ── GET /global-insights — ICP refinement suggestions ────────

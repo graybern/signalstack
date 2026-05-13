@@ -966,6 +966,16 @@ interface TeamUserExtended extends TeamUser {
   status?: string;
   must_change_password?: number;
   last_login_at?: string | null;
+  last_activity_at?: string | null;
+  last_activity_summary?: string | null;
+  override_count?: number;
+}
+
+function formatActivitySummary(summary: string): string {
+  const [action, entity] = summary.split(':');
+  const actionLabel = action === 'viewed' ? 'Viewed' : action === 'created' ? 'Created' : action === 'updated' ? 'Updated' : action === 'deleted' ? 'Deleted' : action.charAt(0).toUpperCase() + action.slice(1);
+  const entityLabel = entity === 'icp_config' ? 'ICP' : entity === 'api_key' ? 'API Key' : entity ? entity.charAt(0).toUpperCase() + entity.slice(1) : '';
+  return `${actionLabel} ${entityLabel}`;
 }
 
 function TeamSection() {
@@ -986,6 +996,17 @@ function TeamSection() {
   // Reset password
   const [resetUserId, setResetUserId] = useState<string | null>(null);
   const [resetPassword, setResetPw] = useState('');
+
+  // Permission overrides
+  const [overrideUserId, setOverrideUserId] = useState<string | null>(null);
+  const [overrideUserName, setOverrideUserName] = useState('');
+  const [overrideUserRole, setOverrideUserRole] = useState('');
+  const [overrideGrants, setOverrideGrants] = useState<string[]>([]);
+  const [overrideRevokes, setOverrideRevokes] = useState<string[]>([]);
+  const [overrideRolePerms, setOverrideRolePerms] = useState<string[]>([]);
+  const [overrideCatalog, setOverrideCatalog] = useState<{ category: string; permissions: { key: string; label: string; description: string }[] }[]>([]);
+  const [overrideLoading, setOverrideLoading] = useState(false);
+  const [overrideSaving, setOverrideSaving] = useState(false);
 
   const isSuperAdmin = user?.role === 'superadmin';
   const getAssignableRoles = () => isSuperAdmin ? ['admin', 'operator', 'member', 'viewer'] : ['operator', 'member', 'viewer'];
@@ -1060,6 +1081,77 @@ function TeamSection() {
       setMessage({ type: 'success', text: `${name} removed from team.` });
       loadData();
     } catch (err: any) { setMessage({ type: 'error', text: err.message || 'Failed to remove user' }); }
+  };
+
+  const openOverrides = async (userId: string, userName: string, role: string) => {
+    setOverrideUserId(userId);
+    setOverrideUserName(userName);
+    setOverrideUserRole(role);
+    setOverrideLoading(true);
+    try {
+      const [permData, rolesData] = await Promise.all([
+        api(`/users/${userId}/permissions`),
+        api('/users/roles'),
+      ]);
+      setOverrideGrants(permData.overrides.grants || []);
+      setOverrideRevokes(permData.overrides.revokes || []);
+      setOverrideRolePerms(permData.role_permissions || []);
+      setOverrideCatalog(rolesData.permission_catalog || []);
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err.message || 'Failed to load permissions' });
+      setOverrideUserId(null);
+    } finally { setOverrideLoading(false); }
+  };
+
+  const toggleOverride = (perm: string) => {
+    const isRolePerm = overrideRolePerms.includes(perm);
+    const isGranted = overrideGrants.includes(perm);
+    const isRevoked = overrideRevokes.includes(perm);
+
+    if (isRolePerm) {
+      if (isRevoked) {
+        setOverrideRevokes(prev => prev.filter(p => p !== perm));
+      } else {
+        setOverrideRevokes(prev => [...prev, perm]);
+      }
+      setOverrideGrants(prev => prev.filter(p => p !== perm));
+    } else {
+      if (isGranted) {
+        setOverrideGrants(prev => prev.filter(p => p !== perm));
+      } else {
+        setOverrideGrants(prev => [...prev, perm]);
+      }
+      setOverrideRevokes(prev => prev.filter(p => p !== perm));
+    }
+  };
+
+  const saveOverrides = async () => {
+    if (!overrideUserId) return;
+    setOverrideSaving(true);
+    try {
+      await api(`/users/${overrideUserId}/permissions/overrides`, {
+        method: 'PUT',
+        body: JSON.stringify({ grants: overrideGrants, revokes: overrideRevokes }),
+      });
+      setMessage({ type: 'success', text: `Permission overrides saved for ${overrideUserName}` });
+      setOverrideUserId(null);
+      loadData();
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err.message || 'Failed to save overrides' });
+    } finally { setOverrideSaving(false); }
+  };
+
+  const clearOverrides = async () => {
+    if (!overrideUserId) return;
+    if (!confirm(`Clear all permission overrides for ${overrideUserName}?`)) return;
+    try {
+      await api(`/users/${overrideUserId}/permissions/overrides`, { method: 'DELETE' });
+      setMessage({ type: 'success', text: `Overrides cleared for ${overrideUserName}` });
+      setOverrideUserId(null);
+      loadData();
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err.message || 'Failed to clear overrides' });
+    }
   };
 
   if (loading) return <div className="text-gray-500 text-sm">Loading team...</div>;
@@ -1152,7 +1244,7 @@ function TeamSection() {
               <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">User</th>
               <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Role</th>
               <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
-              <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Last Login</th>
+              <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Last Activity</th>
               <th className="text-right px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Actions</th>
             </tr>
           </thead>
@@ -1202,8 +1294,11 @@ function TeamSection() {
                   </td>
                   <td className="px-4 py-3">
                     <span className="text-xs text-gray-500">
-                      {u.last_login_at ? formatDateTimeFull(u.last_login_at) : 'Never'}
+                      {u.last_activity_at ? formatDateTimeFull(u.last_activity_at) : u.last_login_at ? formatDateTimeFull(u.last_login_at) : 'Never'}
                     </span>
+                    {u.last_activity_summary && (
+                      <p className="text-[10px] text-gray-400 truncate max-w-[140px]">{formatActivitySummary(u.last_activity_summary)}</p>
+                    )}
                   </td>
                   <td className="px-4 py-3">
                     {canModify && (
@@ -1219,6 +1314,12 @@ function TeamSection() {
                           </div>
                         ) : (
                           <>
+                            {isSuperAdmin && (
+                              <button onClick={() => openOverrides(u.id, u.display_name, u.role)}
+                                title="Permission overrides" className="p-1.5 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded">
+                                <ShieldCheck className="w-3.5 h-3.5" />
+                              </button>
+                            )}
                             <button onClick={() => { setResetUserId(u.id); setResetPw(''); }}
                               title="Reset password" className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded">
                               <Key className="w-3.5 h-3.5" />
@@ -1264,6 +1365,78 @@ function TeamSection() {
           ))}
         </div>
       </div>
+
+      {/* Permission Overrides Modal */}
+      {overrideUserId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-lg max-h-[80vh] flex flex-col">
+            <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-semibold text-gray-900">Permission Overrides</h3>
+                <p className="text-xs text-gray-500 mt-0.5">{overrideUserName} — {ROLE_META[overrideUserRole]?.label || overrideUserRole} role</p>
+              </div>
+              <button onClick={() => setOverrideUserId(null)} className="p-1 text-gray-400 hover:text-gray-600"><X className="w-4 h-4" /></button>
+            </div>
+            <div className="flex-1 overflow-y-auto px-6 py-4">
+              {overrideLoading ? (
+                <div className="flex items-center justify-center py-8 text-gray-400">
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {overrideCatalog.map(cat => (
+                    <div key={cat.category}>
+                      <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">{cat.category}</h4>
+                      <div className="space-y-1">
+                        {cat.permissions.map(perm => {
+                          const isRolePerm = overrideRolePerms.includes(perm.key);
+                          const isGranted = overrideGrants.includes(perm.key);
+                          const isRevoked = overrideRevokes.includes(perm.key);
+                          const effective = (isRolePerm && !isRevoked) || isGranted;
+
+                          return (
+                            <button
+                              key={perm.key}
+                              onClick={() => toggleOverride(perm.key)}
+                              className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-left text-sm transition-colors ${
+                                isGranted ? 'bg-green-50 border border-green-200' :
+                                isRevoked ? 'bg-red-50 border border-red-200' :
+                                'bg-gray-50 border border-gray-100 hover:bg-gray-100'
+                              }`}
+                            >
+                              <div className="flex items-center gap-2 min-w-0">
+                                <div className={`w-2 h-2 rounded-full shrink-0 ${effective ? 'bg-green-500' : 'bg-gray-300'}`} />
+                                <span className={`text-xs font-medium truncate ${effective ? 'text-gray-900' : 'text-gray-400'}`}>
+                                  {perm.label}
+                                </span>
+                              </div>
+                              <div className="shrink-0 ml-2">
+                                {isGranted && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">Granted</span>}
+                                {isRevoked && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-100 text-red-700 font-medium">Revoked</span>}
+                                {!isGranted && !isRevoked && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500 font-medium">Inherit</span>}
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="px-6 py-3 border-t border-gray-200 flex items-center justify-between">
+              <button onClick={clearOverrides} className="text-xs text-gray-500 hover:text-red-600">Clear All Overrides</button>
+              <div className="flex items-center gap-2">
+                <button onClick={() => setOverrideUserId(null)} className="px-3 py-1.5 text-xs font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">Cancel</button>
+                <button onClick={saveOverrides} disabled={overrideSaving}
+                  className="px-4 py-1.5 text-xs font-medium text-white bg-brand-600 rounded-lg hover:bg-brand-700 disabled:opacity-50">
+                  {overrideSaving ? 'Saving...' : 'Save Overrides'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -5,7 +5,7 @@ import { v4 as uuid } from 'uuid';
 import { getDb } from '../db/schema.js';
 import { authenticate, requireAdmin, requireSuperAdmin, hasRole, AuthRequest } from '../auth/middleware.js';
 import { logActivity } from '../services/activityLog.js';
-import { PERMISSIONS, ALL_PERMISSIONS, DEFAULT_ROLE_PERMISSIONS, getRolePermissions, getPermissionCategories } from '../auth/permissions.js';
+import { PERMISSIONS, ALL_PERMISSIONS, DEFAULT_ROLE_PERMISSIONS, getRolePermissions, getPermissionCategories, getUserPermissionOverrides, getEffectiveUserPermissions } from '../auth/permissions.js';
 import type { UserRole } from '../types/index.js';
 
 const router = Router();
@@ -27,8 +27,13 @@ function getSetting(key: string, defaultValue: any): any {
 
 // GET / — List all users (admin+ only)
 router.get('/', authenticate, requireAdmin, (_req: AuthRequest, res: Response) => {
-  const users = getDb().prepare(
-    'SELECT id, email, display_name, role, status, must_change_password, last_login_at, created_at FROM users ORDER BY created_at'
+  const db = getDb();
+  const users = db.prepare(
+    `SELECT u.id, u.email, u.display_name, u.role, u.status, u.must_change_password, u.last_login_at, u.created_at,
+      (SELECT MAX(al.created_at) FROM activity_log al WHERE al.user_id = u.id) as last_activity_at,
+      (SELECT al.action || ':' || al.entity_type FROM activity_log al WHERE al.user_id = u.id ORDER BY al.created_at DESC LIMIT 1) as last_activity_summary,
+      (SELECT COUNT(*) FROM user_permission_overrides upo WHERE upo.user_id = u.id) as override_count
+     FROM users u ORDER BY u.created_at`
   ).all();
   res.json(users);
 });
@@ -327,6 +332,94 @@ router.post('/roles/:role/reset-permissions', authenticate, requireSuperAdmin, (
   });
 
   res.json({ success: true, role, permissions: defaults });
+});
+
+// ── Per-User Permission Overrides ─────────────────────────────
+
+// GET /:id/permissions — Get a user's effective permissions including overrides
+router.get('/:id/permissions', authenticate, requireAdmin, (req: AuthRequest, res: Response) => {
+  const db = getDb();
+  const target = db.prepare('SELECT id, role FROM users WHERE id = ?').get(req.params.id) as any;
+  if (!target) return res.status(404).json({ error: 'User not found' });
+
+  const rolePerms = getRolePermissions(target.role);
+  const overrides = getUserPermissionOverrides(req.params.id);
+  const effective = getEffectiveUserPermissions(target.role, req.params.id);
+
+  res.json({
+    role: target.role,
+    role_permissions: rolePerms,
+    overrides,
+    effective_permissions: effective,
+  });
+});
+
+// PUT /:id/permissions/overrides — Set permission overrides for a user (superadmin only)
+router.put('/:id/permissions/overrides', authenticate, requireSuperAdmin, (req: AuthRequest, res: Response) => {
+  const { grants = [], revokes = [] } = req.body;
+  const targetId = req.params.id;
+
+  const invalidGrants = grants.filter((p: string) => !ALL_PERMISSIONS.includes(p));
+  const invalidRevokes = revokes.filter((p: string) => !ALL_PERMISSIONS.includes(p));
+  if (invalidGrants.length || invalidRevokes.length) {
+    return res.status(400).json({ error: 'Invalid permissions', invalidGrants, invalidRevokes });
+  }
+
+  const db = getDb();
+  const target = db.prepare('SELECT id, role, display_name FROM users WHERE id = ?').get(targetId) as any;
+  if (!target) return res.status(404).json({ error: 'User not found' });
+
+  const oldOverrides = getUserPermissionOverrides(targetId);
+
+  const tx = db.transaction(() => {
+    db.prepare('DELETE FROM user_permission_overrides WHERE user_id = ?').run(targetId);
+    const insert = db.prepare('INSERT INTO user_permission_overrides (user_id, permission, type, granted_by) VALUES (?, ?, ?, ?)');
+    for (const perm of grants) insert.run(targetId, perm, 'grant', req.user!.id);
+    for (const perm of revokes) insert.run(targetId, perm, 'revoke', req.user!.id);
+  });
+  tx();
+
+  logActivity({
+    userId: req.user!.id,
+    entityType: 'user',
+    entityId: targetId,
+    entityTitle: target.display_name,
+    action: 'updated',
+    changes: {
+      permission_overrides: {
+        old: { grants: oldOverrides.grants, revokes: oldOverrides.revokes },
+        new: { grants, revokes },
+      },
+    },
+  });
+
+  res.json({ success: true, grants, revokes });
+});
+
+// DELETE /:id/permissions/overrides — Clear all overrides for a user (superadmin only)
+router.delete('/:id/permissions/overrides', authenticate, requireSuperAdmin, (req: AuthRequest, res: Response) => {
+  const db = getDb();
+  const target = db.prepare('SELECT id, display_name FROM users WHERE id = ?').get(req.params.id) as any;
+  if (!target) return res.status(404).json({ error: 'User not found' });
+
+  const oldOverrides = getUserPermissionOverrides(req.params.id);
+  db.prepare('DELETE FROM user_permission_overrides WHERE user_id = ?').run(req.params.id);
+
+  logActivity({
+    userId: req.user!.id,
+    entityType: 'user',
+    entityId: req.params.id,
+    entityTitle: target.display_name,
+    action: 'updated',
+    changes: {
+      permission_overrides: {
+        old: { grants: oldOverrides.grants, revokes: oldOverrides.revokes },
+        new: { grants: [], revokes: [] },
+      },
+    },
+  });
+
+  res.json({ success: true });
 });
 
 // ── Invite Management ─────────────────────────────────────────

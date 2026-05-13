@@ -39,6 +39,13 @@ export const PERMISSIONS: Record<string, PermissionDef> = {
   'webhooks:write':    { label: 'Edit Webhooks',      category: 'Webhooks',    description: 'Create, edit, and delete webhooks' },
 
   'api_keys:manage':   { label: 'Manage API Keys',    category: 'API Keys',    description: 'Create and revoke personal API keys' },
+
+  'customers:read':    { label: 'View Win Book',      category: 'Win Book',    description: 'View customer profiles and knowledge base' },
+  'customers:write':   { label: 'Edit Win Book',      category: 'Win Book',    description: 'Edit customer profiles and notes' },
+
+  'research:execute':  { label: 'Quick Research',     category: 'Research',    description: 'Run ad-hoc company research' },
+
+  'activity:read':     { label: 'View Activity Log',  category: 'Activity',    description: 'View audit trail and activity history' },
 };
 
 export const ALL_PERMISSIONS = Object.keys(PERMISSIONS);
@@ -56,6 +63,9 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     'icp:read', 'icp:write',
     'webhooks:read',
     'api_keys:manage',
+    'customers:read', 'customers:write',
+    'research:execute',
+    'activity:read',
   ],
   member: [
     'campaigns:read', 'campaigns:run',
@@ -65,12 +75,15 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     'exclusions:read',
     'icp:read',
     'api_keys:manage',
+    'customers:read',
+    'research:execute',
   ],
   viewer: [
     'campaigns:read',
     'leads:read',
     'runs:read',
     'analytics:read',
+    'customers:read',
   ],
 };
 
@@ -90,6 +103,20 @@ export function seedRolePermissions(): void {
   tx();
 }
 
+const NEW_PERMISSIONS = ['customers:read', 'customers:write', 'research:execute', 'activity:read'];
+
+export function ensureNewPermissions(): void {
+  const db = getDb();
+  for (const [role, perms] of Object.entries(DEFAULT_ROLE_PERMISSIONS)) {
+    const existing = new Set(getRolePermissions(role as UserRole));
+    for (const perm of perms) {
+      if (!existing.has(perm) && NEW_PERMISSIONS.includes(perm)) {
+        db.prepare('INSERT OR IGNORE INTO role_permissions (role, permission) VALUES (?, ?)').run(role, perm);
+      }
+    }
+  }
+}
+
 export function getRolePermissions(role: UserRole): string[] {
   const db = getDb();
   const rows = db.prepare('SELECT permission FROM role_permissions WHERE role = ?').all(role) as { permission: string }[];
@@ -99,9 +126,33 @@ export function getRolePermissions(role: UserRole): string[] {
   return rows.map(r => r.permission);
 }
 
-export function userHasPermission(role: UserRole, permission: string, apiKeyScopes?: string[]): boolean {
+export function getUserPermissionOverrides(userId: string): { grants: string[]; revokes: string[] } {
+  const db = getDb();
+  const rows = db.prepare('SELECT permission, type FROM user_permission_overrides WHERE user_id = ?').all(userId) as { permission: string; type: 'grant' | 'revoke' }[];
+  const grants = rows.filter(r => r.type === 'grant').map(r => r.permission);
+  const revokes = rows.filter(r => r.type === 'revoke').map(r => r.permission);
+  return { grants, revokes };
+}
+
+export function getEffectiveUserPermissions(role: UserRole, userId: string): string[] {
   const rolePerms = getRolePermissions(role);
-  if (!rolePerms.includes(permission)) return false;
+  const { grants, revokes } = getUserPermissionOverrides(userId);
+  const effective = new Set(rolePerms);
+  for (const g of grants) effective.add(g);
+  for (const r of revokes) effective.delete(r);
+  return Array.from(effective);
+}
+
+export function userHasPermission(role: UserRole, permission: string, apiKeyScopes?: string[], userId?: string): boolean {
+  let hasRolePerm: boolean;
+  if (userId) {
+    const effective = getEffectiveUserPermissions(role, userId);
+    hasRolePerm = effective.includes(permission);
+  } else {
+    const rolePerms = getRolePermissions(role);
+    hasRolePerm = rolePerms.includes(permission);
+  }
+  if (!hasRolePerm) return false;
   if (apiKeyScopes && !apiKeyScopes.includes(permission)) return false;
   return true;
 }

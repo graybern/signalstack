@@ -141,8 +141,9 @@ if (userCount === 0) {
 }
 
 // Seed role permissions on first run
-import { seedRolePermissions } from './auth/permissions.js';
+import { seedRolePermissions, ensureNewPermissions } from './auth/permissions.js';
 seedRolePermissions();
+ensureNewPermissions();
 
 initWebhookDispatcher();
 initNotificationDispatcher();

@@ -1,12 +1,12 @@
 import { Router, Response } from 'express';
-import { authenticate, requireAdmin, AuthRequest } from '../auth/middleware.js';
+import { authenticate, requireAdmin, requirePermission, AuthRequest } from '../auth/middleware.js';
 import { getDb } from '../db/schema.js';
 import { getActivityLog, getActivityEntry, logActivity } from '../services/activityLog.js';
 import type { EntityType } from '../services/activityLog.js';
 
 const router = Router();
 
-router.get('/', authenticate, (req: AuthRequest, res: Response) => {
+router.get('/', authenticate, requirePermission('activity:read'), (req: AuthRequest, res: Response) => {
   const { entity_type, entity_id, user_id, limit, offset } = req.query;
 
   const result = getActivityLog({

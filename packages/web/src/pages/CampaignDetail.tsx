@@ -20,6 +20,7 @@ import { AILogPanel } from '../components/AILogPanel';
 import { FunnelConfigurator } from '../components/FunnelConfigurator';
 import { useEventStream } from '../hooks/useEventStream';
 import { permissions } from '../utils/permissions';
+import { useToast } from '../components/Toast';
 
 interface SearchPattern {
   name: string;
@@ -84,6 +85,7 @@ const TABS: { id: TabId; label: string; icon: typeof Target }[] = [
 export function CampaignDetail() {
   const { id } = useParams<{ id: string }>();
   const { user } = useAuthContext();
+  const { showToast } = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
   const [campaign, setCampaign] = useState<CampaignFull | null>(null);
   const [loading, setLoading] = useState(true);
@@ -140,6 +142,11 @@ export function CampaignDetail() {
   const [analytics, setAnalytics] = useState<any>(null);
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
 
+  // Insights
+  const [insights, setInsights] = useState<any[]>([]);
+  const [insightsLoading, setInsightsLoading] = useState(false);
+  const [analyzing, setAnalyzing] = useState(false);
+
   // Sync tab to URL
   const switchTab = (tab: TabId) => {
     setActiveTab(tab);
@@ -165,6 +172,14 @@ export function CampaignDetail() {
       api('/exclusions?limit=10000').then((data: any) => {
         setGlobalExclusions((data.exclusions || []).map((e: any) => ({ id: e.id, company_name: e.company_name, domain: e.domain })));
       }).catch(() => {});
+    }
+  }, [id]);
+
+  // Eagerly fetch insights on campaign load for badge count
+  useEffect(() => {
+    if (id && insights.length === 0 && !insightsLoading) {
+      setInsightsLoading(true);
+      api(`/campaigns/${id}/insights`).then((data: any) => setInsights(Array.isArray(data) ? data : [])).catch(() => {}).finally(() => setInsightsLoading(false));
     }
   }, [id]);
 
@@ -526,6 +541,11 @@ export function CampaignDetail() {
                   {campaign.runs.length}
                 </span>
               )}
+              {tab.id === 'analytics' && insights.filter(i => i.status === 'active').length > 0 && (
+                <span className="text-xs px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-700">
+                  {insights.filter(i => i.status === 'active').length}
+                </span>
+              )}
             </button>
           ))}
         </nav>
@@ -578,7 +598,36 @@ export function CampaignDetail() {
       )}
 
       {activeTab === 'analytics' && (
-        <AnalyticsTab analytics={analytics} loading={analyticsLoading} />
+        <AnalyticsTab
+          analytics={analytics}
+          loading={analyticsLoading}
+          insights={insights}
+          insightsLoading={insightsLoading}
+          analyzing={analyzing}
+          onAnalyze={async () => {
+            if (!id) return;
+            setAnalyzing(true);
+            try {
+              const data = await api(`/campaigns/${id}/analyze`, { method: 'POST' }) as any;
+              setInsights(data.insights || []);
+              showToast('success', `${(data.insights || []).length} insights generated`);
+            } catch (err: any) {
+              showToast('error', 'Analysis failed', err?.message);
+            }
+            setAnalyzing(false);
+          }}
+          onInsightAction={async (insightId: string, action: 'applied' | 'dismissed') => {
+            if (!id) return;
+            try {
+              await api(`/campaigns/${id}/insights/${insightId}`, { method: 'PATCH', body: JSON.stringify({ status: action }), headers: { 'Content-Type': 'application/json' } });
+              setInsights(prev => prev.map(i => i.id === insightId ? { ...i, status: action, applied_at: action === 'applied' ? new Date().toISOString() : i.applied_at } : i));
+              showToast('success', action === 'applied' ? 'Insight applied' : 'Insight dismissed');
+            } catch (err: any) {
+              showToast('error', 'Failed to update insight', err?.message);
+            }
+          }}
+          canEdit={permissions.canEditCampaign(user?.role)}
+        />
       )}
 
       {activeTab === 'configure' && (
@@ -1212,25 +1261,265 @@ function RunsTab({
 
 // ── Analytics Tab ─────────────────────────────────────────────────
 
-function AnalyticsTab({ analytics, loading }: { analytics: any; loading: boolean }) {
-  if (loading) {
-    return (
-      <div className="flex justify-center py-12">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-brand-500" />
-      </div>
-    );
-  }
+function AnalyticsTab({ analytics, loading, insights, insightsLoading, analyzing, onAnalyze, onInsightAction, canEdit }: {
+  analytics: any; loading: boolean;
+  insights: any[]; insightsLoading: boolean; analyzing: boolean;
+  onAnalyze: () => void;
+  onInsightAction: (insightId: string, action: 'applied' | 'dismissed') => void;
+  canEdit: boolean;
+}) {
+  const feedbackCount = analytics?.feedback?.with_feedback || 0;
+  const threshold = 10;
 
-  if (!analytics) {
-    return (
-      <div className="text-center py-16 bg-white rounded-xl border border-gray-200">
-        <BarChart3 className="w-10 h-10 text-gray-300 mx-auto mb-3" />
-        <p className="text-sm text-gray-500">Failed to load analytics or no data available.</p>
-      </div>
-    );
-  }
+  return (
+    <div className="space-y-6">
+      {/* Feedback progress toward AI insights */}
+      {feedbackCount < threshold && (
+        <div className="bg-white rounded-xl border border-gray-200 p-4">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-sm font-medium text-gray-700">Feedback Progress</span>
+            <span className="text-xs text-gray-500">{feedbackCount} / {threshold}</span>
+          </div>
+          <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-brand-500 rounded-full transition-all"
+              style={{ width: `${Math.min((feedbackCount / threshold) * 100, 100)}%` }}
+            />
+          </div>
+          <p className="text-xs text-gray-400 mt-1.5">
+            {threshold - feedbackCount} more feedback {threshold - feedbackCount === 1 ? 'entry' : 'entries'} needed to unlock AI insights
+          </p>
+        </div>
+      )}
+      {feedbackCount >= threshold && (
+        <div className="bg-indigo-50 border border-indigo-200 rounded-xl px-4 py-3 flex items-center gap-2">
+          <TrendingUp className="w-4 h-4 text-indigo-600 shrink-0" />
+          <span className="text-sm text-indigo-700">AI insights available &mdash; {feedbackCount} feedback entries collected</span>
+        </div>
+      )}
+      <InsightsPanel
+        insights={insights}
+        loading={insightsLoading}
+        analyzing={analyzing}
+        onAnalyze={onAnalyze}
+        onAction={onInsightAction}
+        canEdit={canEdit}
+      />
+      {loading ? (
+        <div className="flex justify-center py-12">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-brand-500" />
+        </div>
+      ) : !analytics ? (
+        <div className="text-center py-16 bg-white rounded-xl border border-gray-200">
+          <BarChart3 className="w-10 h-10 text-gray-300 mx-auto mb-3" />
+          <p className="text-sm text-gray-500">Failed to load analytics or no data available.</p>
+        </div>
+      ) : (
+        <CampaignAnalytics data={analytics} />
+      )}
+    </div>
+  );
+}
 
-  return <CampaignAnalytics data={analytics} />;
+const INSIGHT_TYPE_CONFIG: Record<string, { label: string; color: string; icon: string }> = {
+  scoring_accuracy: { label: 'Scoring', color: 'bg-blue-100 text-blue-700', icon: 'T' },
+  persona_effectiveness: { label: 'Personas', color: 'bg-purple-100 text-purple-700', icon: 'P' },
+  vertical_performance: { label: 'Verticals', color: 'bg-green-100 text-green-700', icon: 'V' },
+  messaging_patterns: { label: 'Messaging', color: 'bg-amber-100 text-amber-700', icon: 'M' },
+  timing_patterns: { label: 'Timing', color: 'bg-cyan-100 text-cyan-700', icon: 'C' },
+  competitive_intel: { label: 'Competitive', color: 'bg-rose-100 text-rose-700', icon: 'W' },
+  composite: { label: 'Composite', color: 'bg-gray-100 text-gray-700', icon: 'A' },
+};
+
+const CONFIDENCE_BADGE: Record<string, string> = {
+  high: 'bg-green-100 text-green-700',
+  medium: 'bg-amber-100 text-amber-700',
+  low: 'bg-gray-100 text-gray-500',
+};
+
+function InsightsPanel({ insights, loading, analyzing, onAnalyze, onAction, canEdit }: {
+  insights: any[]; loading: boolean; analyzing: boolean;
+  onAnalyze: () => void;
+  onAction: (id: string, action: 'applied' | 'dismissed') => void;
+  canEdit: boolean;
+}) {
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const activeInsights = insights.filter(i => i.status === 'active');
+  const pastInsights = insights.filter(i => i.status !== 'active');
+
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 p-6">
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2">
+          <TrendingUp className="w-5 h-5 text-brand-600" />
+          <h3 className="font-semibold text-gray-900">Campaign Insights</h3>
+          {activeInsights.length > 0 && (
+            <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-brand-100 text-brand-700">{activeInsights.length}</span>
+          )}
+        </div>
+        <button
+          onClick={onAnalyze}
+          disabled={analyzing}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg border border-gray-300 hover:bg-gray-50 disabled:opacity-50 transition-colors"
+        >
+          <RefreshCw className={`w-3.5 h-3.5 ${analyzing ? 'animate-spin' : ''}`} />
+          {analyzing ? 'Analyzing...' : 'Analyze Feedback'}
+        </button>
+      </div>
+
+      {loading ? (
+        <div className="flex justify-center py-8">
+          <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-brand-500" />
+        </div>
+      ) : insights.length === 0 ? (
+        <div className="text-center py-8">
+          <TrendingUp className="w-8 h-8 text-gray-300 mx-auto mb-2" />
+          <p className="text-sm text-gray-500">No insights yet. Submit feedback on at least 5 leads, then click &ldquo;Analyze Feedback&rdquo; to generate insights.</p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {activeInsights.map(insight => (
+            <InsightCard
+              key={insight.id}
+              insight={insight}
+              expanded={expandedId === insight.id}
+              onToggle={() => setExpandedId(expandedId === insight.id ? null : insight.id)}
+              onAction={onAction}
+              canEdit={canEdit}
+            />
+          ))}
+          {pastInsights.length > 0 && (
+            <details className="mt-4">
+              <summary className="text-xs text-gray-400 cursor-pointer hover:text-gray-600">{pastInsights.length} past insight{pastInsights.length !== 1 ? 's' : ''} (applied/dismissed)</summary>
+              <div className="space-y-2 mt-2">
+                {pastInsights.map(insight => (
+                  <InsightCard
+                    key={insight.id}
+                    insight={insight}
+                    expanded={expandedId === insight.id}
+                    onToggle={() => setExpandedId(expandedId === insight.id ? null : insight.id)}
+                    onAction={onAction}
+                    canEdit={false}
+                  />
+                ))}
+              </div>
+            </details>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function InsightCard({ insight, expanded, onToggle, onAction, canEdit }: {
+  insight: any; expanded: boolean;
+  onToggle: () => void;
+  onAction: (id: string, action: 'applied' | 'dismissed') => void;
+  canEdit: boolean;
+}) {
+  const [confirming, setConfirming] = useState<string | null>(null);
+  const confirmTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  useEffect(() => () => clearTimeout(confirmTimerRef.current), []);
+  const typeConfig = INSIGHT_TYPE_CONFIG[insight.insight_type] || INSIGHT_TYPE_CONFIG.composite;
+  const confidenceClass = CONFIDENCE_BADGE[insight.confidence] || CONFIDENCE_BADGE.medium;
+  const isActive = insight.status === 'active';
+  const recommendations: any[] = insight.recommendations || [];
+
+  return (
+    <div className={`border rounded-lg ${isActive ? 'border-gray-200' : 'border-gray-100 opacity-60'}`}>
+      <button onClick={onToggle} className="w-full px-4 py-3 flex items-start gap-3 text-left hover:bg-gray-50 transition-colors">
+        <span className={`mt-0.5 flex-shrink-0 w-7 h-7 flex items-center justify-center rounded-lg text-xs font-bold ${typeConfig.color}`}>
+          {typeConfig.icon}
+        </span>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-0.5">
+            <span className="font-medium text-sm text-gray-900 truncate">{insight.title}</span>
+            <span className={`px-1.5 py-0.5 text-[10px] font-semibold rounded-full ${confidenceClass}`}>{insight.confidence}</span>
+            {insight.status === 'applied' && <span className="px-1.5 py-0.5 text-[10px] font-semibold rounded-full bg-green-100 text-green-700">Applied</span>}
+            {insight.status === 'dismissed' && <span className="px-1.5 py-0.5 text-[10px] font-semibold rounded-full bg-gray-100 text-gray-500">Dismissed</span>}
+          </div>
+          <p className="text-xs text-gray-500 line-clamp-2">{insight.summary}</p>
+        </div>
+        {expanded ? <ChevronUp className="w-4 h-4 text-gray-400 mt-1 flex-shrink-0" /> : <ChevronDown className="w-4 h-4 text-gray-400 mt-1 flex-shrink-0" />}
+      </button>
+
+      {expanded && (
+        <div className="px-4 pb-4 border-t border-gray-100">
+          <div className="mt-3 space-y-3">
+            {insight.details && typeof insight.details === 'object' && Object.keys(insight.details).length > 0 && (
+              <div>
+                <h4 className="text-xs font-semibold text-gray-500 uppercase mb-1">Analysis</h4>
+                <div className="text-sm text-gray-700 space-y-1">
+                  {Object.entries(insight.details).map(([key, val]) => (
+                    <p key={key}><span className="font-medium">{key.replace(/_/g, ' ')}:</span> {typeof val === 'string' ? val : JSON.stringify(val)}</p>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {recommendations.length > 0 && (
+              <div>
+                <h4 className="text-xs font-semibold text-gray-500 uppercase mb-1">Recommendations</h4>
+                <ul className="space-y-1.5">
+                  {recommendations.map((rec: any, i: number) => (
+                    <li key={i} className="flex items-start gap-2 text-sm">
+                      <span className="mt-1 w-1.5 h-1.5 rounded-full bg-brand-500 flex-shrink-0" />
+                      <div>
+                        <span className="text-gray-700">{rec.action}</span>
+                        {rec.field && <span className="ml-1 text-xs text-gray-400">({rec.field})</span>}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            <div className="flex items-center justify-between pt-2">
+              <span className="text-[10px] text-gray-400">
+                Based on {insight.feedback_count} feedback entries &middot; {new Date(insight.created_at).toLocaleDateString()}
+              </span>
+              {isActive && canEdit && (
+                <div className="flex items-center gap-2">
+                  {confirming === 'dismiss' ? (
+                    <button
+                      onClick={() => { onAction(insight.id, 'dismissed'); setConfirming(null); }}
+                      className="px-2.5 py-1 text-xs font-medium rounded-md bg-gray-600 text-white hover:bg-gray-700 transition-colors"
+                    >
+                      Confirm Dismiss?
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => { setConfirming('dismiss'); confirmTimerRef.current = setTimeout(() => setConfirming(c => c === 'dismiss' ? null : c), 3000); }}
+                      className="px-2.5 py-1 text-xs font-medium rounded-md border border-gray-200 text-gray-500 hover:bg-gray-50 transition-colors"
+                    >
+                      Dismiss
+                    </button>
+                  )}
+                  {recommendations.some((r: any) => r.field && r.value !== undefined) && (
+                    confirming === 'apply' ? (
+                      <button
+                        onClick={() => { onAction(insight.id, 'applied'); setConfirming(null); }}
+                        className="px-2.5 py-1 text-xs font-medium rounded-md bg-emerald-600 text-white hover:bg-emerald-700 transition-colors"
+                      >
+                        Confirm Apply?
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => { setConfirming('apply'); confirmTimerRef.current = setTimeout(() => setConfirming(c => c === 'apply' ? null : c), 3000); }}
+                        className="px-2.5 py-1 text-xs font-medium rounded-md bg-brand-600 text-white hover:bg-brand-700 transition-colors"
+                      >
+                        Apply
+                      </button>
+                    )
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 // ── Campaign ICP Configuration ───────────────────────────────────

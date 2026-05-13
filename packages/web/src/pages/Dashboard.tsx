@@ -1,8 +1,11 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api/client';
 import { timeAgo as timeAgoUtil, formatDate, formatDateShort } from '../utils/dates';
 import { useEventStream } from '../hooks/useEventStream';
+import { useAuthContext } from '../App';
+import { permissions } from '../utils/permissions';
+import { useToast } from '../components/Toast';
 import {
   Activity,
   BarChart3,
@@ -24,6 +27,11 @@ import {
   Calendar,
   Hash,
   DollarSign,
+  Brain,
+  Check,
+  X,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
@@ -600,7 +608,10 @@ export function Dashboard() {
       {/* ═══ Section 5: Cross-Campaign Run Trends ═══ */}
       <RunTrendsCharts />
 
-      {/* ═══ Section 6: AI Recommendations ═══ */}
+      {/* ═══ Section 6: Global Insights (ICP Refinement) ═══ */}
+      <GlobalInsightsCard />
+
+      {/* ═══ Section 7: AI Recommendations ═══ */}
       <div className="bg-white rounded-xl border border-gray-200 p-5">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
@@ -940,6 +951,187 @@ function CampaignPerformanceTable() {
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+const INSIGHT_TYPE_LABELS: Record<string, { label: string; color: string }> = {
+  scoring_accuracy: { label: 'Scoring', color: 'bg-blue-100 text-blue-700' },
+  persona_effectiveness: { label: 'Persona', color: 'bg-purple-100 text-purple-700' },
+  vertical_performance: { label: 'Vertical', color: 'bg-teal-100 text-teal-700' },
+  messaging_patterns: { label: 'Messaging', color: 'bg-amber-100 text-amber-700' },
+  timing_patterns: { label: 'Timing', color: 'bg-rose-100 text-rose-700' },
+  competitive_intel: { label: 'Competitive', color: 'bg-red-100 text-red-700' },
+  composite: { label: 'Composite', color: 'bg-indigo-100 text-indigo-700' },
+};
+
+const CONFIDENCE_COLORS: Record<string, string> = {
+  high: 'bg-emerald-100 text-emerald-700',
+  medium: 'bg-amber-100 text-amber-700',
+  low: 'bg-gray-100 text-gray-500',
+};
+
+function GlobalInsightsCard() {
+  const { user } = useAuthContext();
+  const { showToast } = useToast();
+  const [insights, setInsights] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState<string | null>(null);
+  const confirmTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  useEffect(() => () => clearTimeout(confirmTimerRef.current), []);
+
+  const canEdit = permissions.canAccessSettings(user?.role);
+
+  useEffect(() => {
+    api('/analytics/global-insights?status=active')
+      .then((data: any) => setInsights(Array.isArray(data) ? data : []))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  const handleAnalyze = async () => {
+    setAnalyzing(true);
+    try {
+      const data = await api('/analytics/global-insights/analyze', { method: 'POST' }) as any;
+      setInsights(data.insights || []);
+      showToast('success', `${data.count || 0} global insights generated`);
+    } catch (err: any) {
+      showToast('error', 'Analysis failed', err?.message);
+    } finally {
+      setAnalyzing(false);
+    }
+  };
+
+  const handleAction = async (id: string, action: 'applied' | 'dismissed') => {
+    try {
+      await api(`/analytics/global-insights/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status: action }),
+      });
+      setInsights(prev => prev.filter(i => i.id !== id));
+      setConfirming(null);
+      showToast('success', action === 'applied' ? 'Insight applied' : 'Insight dismissed');
+    } catch (err: any) {
+      showToast('error', 'Failed to update insight', err?.message);
+    }
+  };
+
+  if (!canEdit) return null;
+
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 p-5">
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2">
+          <Brain className="w-5 h-5 text-indigo-500" />
+          <h3 className="text-base font-semibold text-gray-900">System Insights</h3>
+          <span className="text-xs text-gray-400">Cross-campaign ICP refinement</span>
+          {insights.length > 0 && (
+            <span className="px-2 py-0.5 text-xs font-medium bg-indigo-100 text-indigo-700 rounded-full">
+              {insights.length}
+            </span>
+          )}
+        </div>
+        <button
+          onClick={handleAnalyze}
+          disabled={analyzing}
+          className="flex items-center gap-2 px-3 py-1.5 text-sm bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50"
+        >
+          {analyzing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Brain className="w-4 h-4" />}
+          {analyzing ? 'Analyzing...' : 'Run Analysis'}
+        </button>
+      </div>
+
+      {loading ? (
+        <div className="flex justify-center py-8"><Loader2 className="w-5 h-5 animate-spin text-gray-300" /></div>
+      ) : insights.length === 0 ? (
+        <p className="text-sm text-gray-400 text-center py-8">
+          No active insights. Click Run Analysis to analyze cross-campaign patterns.
+        </p>
+      ) : (
+        <div className="space-y-3">
+          {insights.map(insight => (
+            <div key={insight.id} className="border border-gray-100 rounded-lg p-3 hover:border-gray-200 transition-colors">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className={`px-1.5 py-0.5 text-[10px] font-semibold rounded ${INSIGHT_TYPE_LABELS[insight.insight_type]?.color || 'bg-gray-100 text-gray-600'}`}>
+                      {INSIGHT_TYPE_LABELS[insight.insight_type]?.label || insight.insight_type}
+                    </span>
+                    <span className={`px-1.5 py-0.5 text-[10px] font-medium rounded ${CONFIDENCE_COLORS[insight.confidence] || CONFIDENCE_COLORS.medium}`}>
+                      {insight.confidence}
+                    </span>
+                    <span className="text-sm font-medium text-gray-900">{insight.title}</span>
+                  </div>
+                  <p className="text-sm text-gray-600">{insight.summary}</p>
+                  {expanded === insight.id && insight.details && (
+                    <div className="mt-2 space-y-2">
+                      {typeof insight.details === 'object' && Object.entries(insight.details).map(([key, val]: [string, any]) => (
+                        <div key={key} className="text-xs">
+                          <span className="font-medium text-gray-500 capitalize">{key.replace(/_/g, ' ')}:</span>
+                          <span className="text-gray-600 ml-1">{typeof val === 'string' ? val : JSON.stringify(val)}</span>
+                        </div>
+                      ))}
+                      {insight.recommendations && (
+                        <div className="mt-2 pt-2 border-t border-gray-100">
+                          <p className="text-xs font-medium text-gray-500 mb-1">Recommendations:</p>
+                          {(Array.isArray(insight.recommendations) ? insight.recommendations : [insight.recommendations]).map((rec: any, i: number) => (
+                            <p key={i} className="text-xs text-gray-600">{typeof rec === 'string' ? rec : rec.description || JSON.stringify(rec)}</p>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  <button
+                    onClick={() => setExpanded(expanded === insight.id ? null : insight.id)}
+                    className="text-xs text-brand-600 hover:text-brand-700 mt-1 flex items-center gap-0.5"
+                  >
+                    {expanded === insight.id ? <>Less <ChevronUp className="w-3 h-3" /></> : <>Details <ChevronDown className="w-3 h-3" /></>}
+                  </button>
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  {confirming === `apply-${insight.id}` ? (
+                    <button
+                      onClick={() => handleAction(insight.id, 'applied')}
+                      className="px-2 py-1 text-xs bg-emerald-600 text-white rounded hover:bg-emerald-700"
+                    >
+                      Confirm
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => { setConfirming(`apply-${insight.id}`); confirmTimerRef.current = setTimeout(() => setConfirming(c => c === `apply-${insight.id}` ? null : c), 3000); }}
+                      className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded"
+                      title="Apply"
+                    >
+                      <Check className="w-4 h-4" />
+                    </button>
+                  )}
+                  {confirming === `dismiss-${insight.id}` ? (
+                    <button
+                      onClick={() => handleAction(insight.id, 'dismissed')}
+                      className="px-2 py-1 text-xs bg-gray-600 text-white rounded hover:bg-gray-700"
+                    >
+                      Confirm
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => { setConfirming(`dismiss-${insight.id}`); confirmTimerRef.current = setTimeout(() => setConfirming(c => c === `dismiss-${insight.id}` ? null : c), 3000); }}
+                      className="p-1.5 text-gray-400 hover:bg-gray-100 rounded"
+                      title="Dismiss"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+              </div>
+              <p className="text-[10px] text-gray-400 mt-1">
+                {insight.feedback_count} feedback entries &middot; {new Date(insight.created_at).toLocaleDateString()}
+              </p>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

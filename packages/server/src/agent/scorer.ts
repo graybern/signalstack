@@ -4,6 +4,7 @@ import { getScoringPrompt } from './prompts/scoring.js';
 import type { ExtendedICPConfig, ScoreBreakdown, FunnelStepConfig } from '../types/index.js';
 import type { ResearchCandidate } from './researcher.js';
 import type { TokenTracker } from './tokenTracker.js';
+import type { FeedbackContext } from './feedbackContext.js';
 
 export interface StreamContext {
   runId: string;
@@ -39,7 +40,8 @@ export async function scoreCandidate(
   tracker?: TokenTracker,
   promptInstructions?: string,
   stepConfig?: FunnelStepConfig,
-  streamCtx?: StreamContext
+  streamCtx?: StreamContext,
+  feedbackContext?: FeedbackContext | null,
 ): Promise<ScoringResult> {
   const aiConfig = getAIConfig();
   const client = await createAIClient();
@@ -97,7 +99,7 @@ ${candidate.notes}
 - **Competitors to Displace:** ${competitors.join(', ')}
 - **Segment Config:** VPN users range ${icpConfig.segments[candidate.segment].vpn_users_min}–${icpConfig.segments[candidate.segment].vpn_users_max}
 ${valueProps.length > 0 ? `- **Value Propositions:** ${valueProps.join(', ')}\n` : ''}${differentiators.length > 0 ? `- **Key Differentiators:** ${differentiators.join(', ')}\n` : ''}${campaignSignals.length > 0 ? `- **Campaign Target Signals:** ${campaignSignals.join(', ')}\n` : ''}${icpConfig.campaign_value_prop_angle ? `- **Campaign Value Prop Angle:** ${icpConfig.campaign_value_prop_angle}\n` : ''}${buyerPersonaSummary ? `- **Target Buyer Roles:** ${buyerPersonaSummary}\n` : ''}
-Score this company using the rubric. Apply the Evidence Density Modifier: ${signalCount} signals from ${sourceCount} sources should directly influence where you place scores within each tier. Cite specific signal counts in each category's evidence array.${promptInstructions ? `\n\n## Additional Instructions\n${promptInstructions}` : ''}`;
+Score this company using the rubric. Apply the Evidence Density Modifier: ${signalCount} signals from ${sourceCount} sources should directly influence where you place scores within each tier. Cite specific signal counts in each category's evidence array.${promptInstructions ? `\n\n## Additional Instructions\n${promptInstructions}` : ''}${feedbackContext ? `\n\n## Historical Campaign Patterns (from ${feedbackContext.feedbackCount} reviewed leads)\n${feedbackContext.scoring_adjustments}\n\n### Known Bad-Fit Patterns\n${feedbackContext.known_bad_patterns}` : ''}`;
 
   let rawText: string;
   let thinkingText = '';

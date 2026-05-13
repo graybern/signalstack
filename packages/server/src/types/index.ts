@@ -43,7 +43,7 @@ export interface PipelineRun {
 }
 
 export type SourceType = 'outbound_research' | 'outbound_campaign' | 'inbound_csv' | 'inbound_manual' | 'inbound_webhook';
-export type LeadStatus = 'imported' | 'enriching' | 'scored' | 'qualified' | 'disqualified' | 'contacted' | 'won' | 'lost';
+export type LeadStatus = 'imported' | 'enriching' | 'scored' | 'qualified' | 'disqualified' | 'contacted' | 'won' | 'lost' | 'meeting_booked' | 'closed_won' | 'closed_lost' | 'customer' | 'stalled' | 'nurture';
 
 export interface Lead {
   id: string;
@@ -95,15 +95,81 @@ export interface Persona {
   created_at: string;
 }
 
+export type FeedbackVerdict =
+  | 'bad_fit' | 'good_fit_response' | 'good_fit_booked' | 'good_fit_try_again' | 'good_fit_no_response'
+  | 'closed_won' | 'closed_lost' | 'existing_customer' | 'stalled' | 'nurture'
+  | 'good_fit' | 'not_fit';
+
+export type BadFitReason = 'wrong_segment' | 'too_small' | 'too_large' | 'wrong_vertical' | 'wrong_geo' | 'no_budget' | 'wrong_product_fit' | 'already_has_competitor' | 'other';
+export type LossReason = 'price' | 'feature_gap' | 'competitor_relationship' | 'timing' | 'no_decision' | 'champion_left' | 'procurement_block' | 'other';
+export type EffectiveChannel = 'email' | 'linkedin' | 'cold_call' | 'referral' | 'event' | 'inbound' | 'other';
+export type StalledStage = 'initial_outreach' | 'after_first_meeting' | 'during_evaluation' | 'procurement';
+
 export interface LeadFeedback {
   id: string;
   lead_id: string;
   user_id: string;
-  verdict: 'bad_fit' | 'good_fit_response' | 'good_fit_booked' | 'good_fit_try_again' | 'good_fit_no_response';
+  verdict: FeedbackVerdict;
   reason: string | null;
   retry_date: string | null;
   feedback_source: string;
   created_at: string;
+}
+
+export interface FeedbackOutcomeDetails {
+  id: string;
+  feedback_id: string;
+  lead_id: string;
+  campaign_id: string | null;
+  effective_persona: string | null;
+  effective_channel: EffectiveChannel | null;
+  effective_angle: string | null;
+  deal_value: string | null;
+  sales_cycle_days: number | null;
+  competitor_lost_to: string | null;
+  loss_reason: LossReason | null;
+  bad_fit_reasons: string | null;
+  customer_products: string | null;
+  customer_environment: string | null;
+  why_they_bought: string | null;
+  stalled_stage: StalledStage | null;
+  created_at: string;
+}
+
+export interface CustomerProfile {
+  id: string;
+  company_name: string;
+  domain: string | null;
+  products_used: string | null;
+  environment: string | null;
+  why_they_bought: string | null;
+  deal_value: string | null;
+  close_date: string | null;
+  original_lead_id: string | null;
+  campaign_id: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type InsightType = 'scoring_accuracy' | 'persona_effectiveness' | 'vertical_performance' | 'messaging_patterns' | 'timing_patterns' | 'competitive_intel' | 'composite';
+export type InsightStatus = 'active' | 'applied' | 'dismissed' | 'stale';
+
+export interface CampaignInsight {
+  id: string;
+  campaign_id: string;
+  insight_type: InsightType;
+  title: string;
+  summary: string;
+  details: Record<string, any>;
+  recommendations: Record<string, any>[] | null;
+  data_snapshot: Record<string, any> | null;
+  feedback_count: number;
+  confidence: 'low' | 'medium' | 'high';
+  status: InsightStatus;
+  created_at: string;
+  applied_at: string | null;
+  applied_by: string | null;
 }
 
 export interface RecommendationLedger {

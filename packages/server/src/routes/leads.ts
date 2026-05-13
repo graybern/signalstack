@@ -3,13 +3,28 @@ import { v4 as uuid } from 'uuid';
 import { getDb } from '../db/schema.js';
 import { authenticate, AuthRequest, requireOperator, requireAdmin, requireMember } from '../auth/middleware.js';
 import { logActivity } from '../services/activityLog.js';
-import type { Lead, Persona, LeadFeedback } from '../types/index.js';
+import { analyzeCampaignFeedback, getCampaignFeedbackCount } from '../agent/feedbackAnalyzer.js';
+import type { Lead, Persona, LeadFeedback, FeedbackVerdict } from '../types/index.js';
 
 const router = Router();
 
-const VALID_VERDICTS = ['bad_fit', 'good_fit_response', 'good_fit_booked', 'good_fit_try_again', 'good_fit_no_response'];
-// Keep legacy verdicts for backward compat reads
-const ALL_VERDICTS = [...VALID_VERDICTS, 'good_fit', 'not_fit'];
+const VALID_VERDICTS: FeedbackVerdict[] = [
+  'bad_fit', 'good_fit_response', 'good_fit_booked', 'good_fit_try_again', 'good_fit_no_response',
+  'closed_won', 'closed_lost', 'existing_customer', 'stalled', 'nurture',
+];
+const ALL_VERDICTS: string[] = [...VALID_VERDICTS, 'good_fit', 'not_fit'];
+
+const VERDICT_TO_LEAD_STATUS: Record<string, string> = {
+  good_fit_booked: 'meeting_booked',
+  closed_won: 'closed_won',
+  closed_lost: 'closed_lost',
+  existing_customer: 'customer',
+  stalled: 'stalled',
+  nurture: 'nurture',
+  bad_fit: 'disqualified',
+  good_fit_response: 'contacted',
+  good_fit_no_response: 'contacted',
+};
 
 router.get('/', authenticate, (req: AuthRequest, res: Response) => {
   const {
@@ -230,13 +245,49 @@ router.get('/:id', authenticate, (req: AuthRequest, res: Response) => {
     `SELECT l.*,
       (SELECT json_group_array(json_object('id',p.id,'role_type',p.role_type,'name',p.name,'title',p.title,'linkedin_url',p.linkedin_url,'department',p.department,'tenure',p.tenure,'outreach_angle',p.outreach_angle,'talking_points',p.talking_points,'outreach_message',p.outreach_message,'social_signals',p.social_signals,'buying_signals',p.buying_signals))
        FROM personas p WHERE p.lead_id = l.id) as personas_json,
-      (SELECT json_group_array(json_object('id',f.id,'verdict',f.verdict,'reason',f.reason,'user_id',f.user_id,'retry_date',f.retry_date,'feedback_source',f.feedback_source,'created_at',f.created_at))
-       FROM lead_feedback f WHERE f.lead_id = l.id ORDER BY f.created_at DESC) as feedback_json
+      (SELECT json_group_array(json_object(
+         'id',f.id,'verdict',f.verdict,'reason',f.reason,'user_id',f.user_id,
+         'retry_date',f.retry_date,'feedback_source',f.feedback_source,'created_at',f.created_at,
+         'effective_persona',od.effective_persona,'effective_channel',od.effective_channel,
+         'effective_angle',od.effective_angle,'deal_value',od.deal_value,
+         'competitor_lost_to',od.competitor_lost_to,'loss_reason',od.loss_reason,
+         'bad_fit_reasons',od.bad_fit_reasons,'stalled_stage',od.stalled_stage
+       ))
+       FROM lead_feedback f
+       LEFT JOIN feedback_outcome_details od ON od.feedback_id = f.id
+       WHERE f.lead_id = l.id ORDER BY f.created_at DESC) as feedback_json
      FROM leads l WHERE l.id = ?`
   ).get(req.params.id);
 
   if (!lead) return res.status(404).json({ error: 'Lead not found' });
-  res.json(parseLead(lead));
+
+  const parsed = parseLead(lead);
+
+  // Cross-campaign: find this company in other campaigns
+  if (parsed.domain) {
+    const crossCampaign = db.prepare(`
+      SELECT l.id, l.campaign_id, l.fit_score, l.lead_status, l.current_feedback, l.created_at,
+        c.name as campaign_name
+      FROM leads l
+      JOIN campaigns c ON c.id = l.campaign_id
+      WHERE l.domain = ? AND l.id != ? AND l.campaign_id IS NOT NULL
+      ORDER BY l.created_at DESC
+    `).all(parsed.domain, req.params.id) as any[];
+
+    if (crossCampaign.length > 0) {
+      (parsed as any).cross_campaign = crossCampaign.map(cc => ({
+        lead_id: cc.id,
+        campaign_id: cc.campaign_id,
+        campaign_name: cc.campaign_name,
+        fit_score: cc.fit_score,
+        lead_status: cc.lead_status,
+        feedback: cc.current_feedback,
+        created_at: cc.created_at,
+      }));
+    }
+  }
+
+  res.json(parsed);
 });
 
 router.post('/:id/rerun-brief', authenticate, requireMember, async (req: AuthRequest, res: Response) => {
@@ -284,33 +335,173 @@ router.post('/:id/rerun-brief', authenticate, requireMember, async (req: AuthReq
 });
 
 router.post('/:id/feedback', authenticate, (req: AuthRequest, res: Response) => {
-  const { verdict, reason, retry_date } = req.body;
+  const { verdict, reason, retry_date, outcome_details } = req.body;
 
-  // Map legacy verdicts to new ones
   let mappedVerdict = verdict;
   if (verdict === 'not_fit') mappedVerdict = 'bad_fit';
   if (verdict === 'good_fit') mappedVerdict = 'good_fit_response';
 
-  if (!ALL_VERDICTS.includes(verdict) && !VALID_VERDICTS.includes(verdict)) {
+  if (!ALL_VERDICTS.includes(verdict) && !VALID_VERDICTS.includes(verdict as FeedbackVerdict)) {
     return res.status(400).json({ error: `verdict must be one of: ${VALID_VERDICTS.join(', ')}` });
   }
 
   const db = getDb();
-  const lead = db.prepare('SELECT id FROM leads WHERE id = ?').get(req.params.id);
+  const lead = db.prepare('SELECT id, company_name, domain, campaign_id, current_feedback, lead_status FROM leads WHERE id = ?').get(req.params.id) as any;
   if (!lead) return res.status(404).json({ error: 'Lead not found' });
 
-  const id = uuid();
-  db.prepare(
-    `INSERT INTO lead_feedback (id, lead_id, user_id, verdict, reason, retry_date, feedback_source) VALUES (?,?,?,?,?,?,?)
-     ON CONFLICT(lead_id, user_id) DO UPDATE SET verdict=excluded.verdict, reason=excluded.reason, retry_date=excluded.retry_date, created_at=datetime('now')`
-  ).run(id, req.params.id, req.user!.id, mappedVerdict, reason || null, retry_date || null, 'manual');
+  const feedbackId = uuid();
 
-  // Update denormalized columns on the lead
-  db.prepare(
-    `UPDATE leads SET current_feedback = ?, next_outreach_date = ? WHERE id = ?`
-  ).run(mappedVerdict, mappedVerdict === 'good_fit_try_again' ? (retry_date || null) : null, req.params.id);
+  const sideEffects = { exclusion_added: null as string | null, customer_created: false };
 
-  res.json({ success: true });
+  const feedbackTx = db.transaction(() => {
+    db.prepare(
+      `INSERT INTO lead_feedback (id, lead_id, user_id, verdict, reason, retry_date, feedback_source) VALUES (?,?,?,?,?,?,?)
+       ON CONFLICT(lead_id, user_id) DO UPDATE SET verdict=excluded.verdict, reason=excluded.reason, retry_date=excluded.retry_date, created_at=datetime('now')`
+    ).run(feedbackId, req.params.id, req.user!.id, mappedVerdict, reason || null, retry_date || null, 'manual');
+
+    // Get the actual feedback ID (may differ if upserted)
+    const actualFeedback = db.prepare('SELECT id FROM lead_feedback WHERE lead_id = ? AND user_id = ?').get(req.params.id, req.user!.id) as any;
+    const actualFeedbackId = actualFeedback?.id || feedbackId;
+
+    // Update denormalized columns + lead_status sync
+    const newStatus = VERDICT_TO_LEAD_STATUS[mappedVerdict];
+    const nextOutreach = mappedVerdict === 'good_fit_try_again' ? (retry_date || null) : null;
+    if (newStatus) {
+      db.prepare(
+        `UPDATE leads SET current_feedback = ?, next_outreach_date = ?, lead_status = ?, updated_at = datetime('now') WHERE id = ?`
+      ).run(mappedVerdict, nextOutreach, newStatus, req.params.id);
+    } else {
+      db.prepare(
+        `UPDATE leads SET current_feedback = ?, next_outreach_date = ?, updated_at = datetime('now') WHERE id = ?`
+      ).run(mappedVerdict, nextOutreach, req.params.id);
+    }
+
+    // Store structured outcome details if provided
+    if (outcome_details && typeof outcome_details === 'object') {
+      const od = outcome_details;
+      db.prepare(`DELETE FROM feedback_outcome_details WHERE feedback_id = ?`).run(actualFeedbackId);
+      db.prepare(
+        `INSERT INTO feedback_outcome_details (id, feedback_id, lead_id, campaign_id, effective_persona, effective_channel, effective_angle, deal_value, sales_cycle_days, competitor_lost_to, loss_reason, bad_fit_reasons, customer_products, customer_environment, why_they_bought, stalled_stage)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+      ).run(
+        uuid(), actualFeedbackId, req.params.id, lead.campaign_id || null,
+        od.effective_persona || null, od.effective_channel || null, od.effective_angle || null,
+        od.deal_value || null, od.sales_cycle_days || null,
+        od.competitor_lost_to || null, od.loss_reason || null,
+        od.bad_fit_reasons ? JSON.stringify(od.bad_fit_reasons) : null,
+        od.customer_products ? JSON.stringify(od.customer_products) : null,
+        od.customer_environment ? JSON.stringify(od.customer_environment) : null,
+        od.why_they_bought || null, od.stalled_stage || null,
+      );
+    }
+
+    // Auto-exclusion + customer profile for won/customer verdicts
+    if (['existing_customer', 'closed_won'].includes(mappedVerdict)) {
+      const existingExcl = db.prepare(
+        'SELECT id FROM exclusions WHERE company_name = ? OR (domain IS NOT NULL AND domain = ?)'
+      ).get(lead.company_name, lead.domain || '') as any;
+
+      if (!existingExcl) {
+        db.prepare(
+          `INSERT INTO exclusions (id, company_name, domain, reason, category, added_by) VALUES (?,?,?,?,?,?)`
+        ).run(
+          uuid(), lead.company_name, lead.domain || null,
+          mappedVerdict === 'closed_won' ? 'Won deal — auto-excluded' : 'Existing customer — auto-excluded',
+          'existing_customers', req.user!.id,
+        );
+        sideEffects.exclusion_added = lead.company_name;
+      }
+
+      // Upsert customer profile
+      const od = outcome_details || {};
+      db.prepare(
+        `INSERT INTO customer_profiles (id, company_name, domain, products_used, environment, why_they_bought, deal_value, close_date, original_lead_id, campaign_id)
+         VALUES (?,?,?,?,?,?,?,?,?,?)
+         ON CONFLICT(domain) DO UPDATE SET
+           products_used = COALESCE(excluded.products_used, customer_profiles.products_used),
+           environment = COALESCE(excluded.environment, customer_profiles.environment),
+           why_they_bought = COALESCE(excluded.why_they_bought, customer_profiles.why_they_bought),
+           deal_value = COALESCE(excluded.deal_value, customer_profiles.deal_value),
+           updated_at = datetime('now')`
+      ).run(
+        uuid(), lead.company_name, lead.domain || null,
+        od.customer_products ? JSON.stringify(od.customer_products) : null,
+        od.customer_environment ? JSON.stringify(od.customer_environment) : null,
+        od.why_they_bought || null, od.deal_value || null,
+        mappedVerdict === 'closed_won' ? new Date().toISOString().slice(0, 10) : null,
+        req.params.id, lead.campaign_id || null,
+      );
+      sideEffects.customer_created = true;
+    }
+
+    // Auto-exclusion for competitors (bad_fit with is_competitor reason)
+    if (mappedVerdict === 'bad_fit' && outcome_details?.bad_fit_reasons?.includes('is_competitor')) {
+      const existingExcl = db.prepare(
+        'SELECT id FROM exclusions WHERE company_name = ? OR (domain IS NOT NULL AND domain = ?)'
+      ).get(lead.company_name, lead.domain || '') as any;
+
+      if (!existingExcl) {
+        db.prepare(
+          `INSERT INTO exclusions (id, company_name, domain, reason, category, added_by) VALUES (?,?,?,?,?,?)`
+        ).run(
+          uuid(), lead.company_name, lead.domain || null,
+          'Competitor — auto-excluded',
+          'competitors', req.user!.id,
+        );
+        sideEffects.exclusion_added = lead.company_name;
+      }
+    }
+  });
+
+  feedbackTx();
+
+  // Activity log for feedback changes
+  const changes: Record<string, { old?: unknown; new: unknown }> = {
+    feedback: { old: lead.current_feedback || null, new: mappedVerdict },
+  };
+  if (reason) changes.reason = { old: null, new: reason };
+  if (sideEffects.exclusion_added) changes.exclusion_added = { old: null, new: sideEffects.exclusion_added };
+  if (sideEffects.customer_created) changes.customer_created = { old: null, new: true };
+  if (outcome_details) {
+    if (outcome_details.effective_persona) changes.persona = { old: null, new: outcome_details.effective_persona };
+    if (outcome_details.effective_channel) changes.channel = { old: null, new: outcome_details.effective_channel };
+    if (outcome_details.deal_value) changes.deal_value = { old: null, new: outcome_details.deal_value };
+    if (outcome_details.competitor_lost_to) changes.competitor = { old: null, new: outcome_details.competitor_lost_to };
+    if (outcome_details.loss_reason) changes.loss_reason = { old: null, new: outcome_details.loss_reason };
+  }
+  logActivity({
+    userId: req.user!.id,
+    entityType: 'lead',
+    entityId: req.params.id,
+    entityTitle: lead.company_name,
+    action: lead.current_feedback ? 'updated' : 'created',
+    changes,
+    snapshot: { verdict: mappedVerdict, lead_status: VERDICT_TO_LEAD_STATUS[mappedVerdict] || null },
+  });
+
+  // Threshold trigger: auto-analyze every 10 feedback entries
+  let analysis_triggered = false;
+  if (lead.campaign_id) {
+    const count = getCampaignFeedbackCount(lead.campaign_id);
+    if (count >= 10 && count % 10 === 0) {
+      analysis_triggered = true;
+      const cid = lead.campaign_id;
+      setImmediate(() => {
+        analyzeCampaignFeedback(cid).catch(err =>
+          console.error(`[leads] Auto-analysis for campaign ${cid} failed:`, err)
+        );
+      });
+    }
+  }
+
+  res.json({
+    success: true,
+    verdict: mappedVerdict,
+    lead_status: VERDICT_TO_LEAD_STATUS[mappedVerdict] || null,
+    exclusion_added: sideEffects.exclusion_added,
+    customer_created: sideEffects.customer_created,
+    analysis_triggered,
+  });
 });
 
 // Delete all leads from a specific run

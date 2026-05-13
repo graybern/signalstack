@@ -10,37 +10,10 @@ import { renderInlineMarkdown } from '../utils/inlineMarkdown';
 import {
   ArrowLeft, ExternalLink, Building2, Users, MapPin, Globe, Calendar,
   Briefcase, Linkedin, MessageSquare, Shield, Server, ChevronDown, ChevronUp,
-  Signal, Clock, History, Trash2, AlertTriangle, Brain, FileText, Download,
+  Signal, Trash2, AlertTriangle, Brain, FileText, Download, Layers,
   ClipboardCheck, RefreshCw, Sparkles, Check, Circle, XCircle, ArrowRight,
 } from 'lucide-react';
-
-const VERDICT_OPTIONS = [
-  { value: 'bad_fit', label: 'Bad Fit', color: 'bg-red-600 hover:bg-red-700', icon: '✕' },
-  { value: 'good_fit_response', label: 'Response', color: 'bg-green-600 hover:bg-green-700', icon: '✓' },
-  { value: 'good_fit_booked', label: 'Booked', color: 'bg-blue-600 hover:bg-blue-700', icon: '★' },
-  { value: 'good_fit_try_again', label: 'Try Again', color: 'bg-amber-600 hover:bg-amber-700', icon: '↻' },
-  { value: 'good_fit_no_response', label: 'No Response', color: 'bg-gray-500 hover:bg-gray-600', icon: '—' },
-];
-
-const FEEDBACK_COLORS: Record<string, string> = {
-  bad_fit: 'bg-red-50 text-red-700 border-red-200',
-  good_fit_response: 'bg-green-50 text-green-700 border-green-200',
-  good_fit_booked: 'bg-blue-50 text-blue-700 border-blue-200',
-  good_fit_try_again: 'bg-amber-50 text-amber-700 border-amber-200',
-  good_fit_no_response: 'bg-gray-100 text-gray-600 border-gray-200',
-  good_fit: 'bg-green-50 text-green-700 border-green-200',
-  not_fit: 'bg-red-50 text-red-700 border-red-200',
-};
-
-const FEEDBACK_LABELS: Record<string, string> = {
-  bad_fit: 'Bad Fit',
-  good_fit_response: 'Response',
-  good_fit_booked: 'Booked',
-  good_fit_try_again: 'Try Again',
-  good_fit_no_response: 'No Response',
-  good_fit: 'Good Fit',
-  not_fit: 'Bad Fit',
-};
+import FeedbackPanel from '../components/FeedbackPanel';
 
 export function LeadDetail() {
   const { id } = useParams();
@@ -56,12 +29,7 @@ export function LeadDetail() {
   const [failedStage, setFailedStage] = useState<string | null>(null);
   const [rerunRunId, setRerunRunId] = useState<string | null>(null);
   const [rerunVisible, setRerunVisible] = useState(false);
-  const [feedbackLoading, setFeedbackLoading] = useState(false);
-  const [feedbackReason, setFeedbackReason] = useState('');
-  const [retryDate, setRetryDate] = useState('');
-  const [selectedVerdict, setSelectedVerdict] = useState('');
   const [expandedPersona, setExpandedPersona] = useState<number>(-1);
-  const [showFeedbackHistory, setShowFeedbackHistory] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [showBriefMenu, setShowBriefMenu] = useState(false);
@@ -173,26 +141,11 @@ export function LeadDetail() {
     }
   };
 
-  async function submitFeedback() {
-    if (!selectedVerdict) return;
-    setFeedbackLoading(true);
+  async function refreshLead() {
     try {
-      await api(`/leads/${id}/feedback`, {
-        method: 'POST',
-        body: JSON.stringify({
-          verdict: selectedVerdict,
-          reason: feedbackReason || undefined,
-          retry_date: selectedVerdict === 'good_fit_try_again' ? retryDate || undefined : undefined,
-        }),
-      });
       const updated = await api(`/leads/${id}`);
       setLead(updated);
-      setFeedbackReason('');
-      setRetryDate('');
-      setSelectedVerdict('');
-    } finally {
-      setFeedbackLoading(false);
-    }
+    } catch {}
   }
 
   if (loading) return <div className="flex justify-center py-12"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-brand-500" /></div>;
@@ -206,7 +159,6 @@ export function LeadDetail() {
   const sources = lead.sources_parsed || [];
   const outreach = lead.outreach_strategy_parsed;
   const feedbackList: any[] = lead.feedback || [];
-  const latestFeedback = feedbackList[0];
   const signalCount = lead.signal_count || 0;
 
   function renderWithCitations(text: string) {
@@ -426,6 +378,31 @@ export function LeadDetail() {
         </div>
       </div>
 
+      {/* Cross-Campaign Badge */}
+      {(lead as any).cross_campaign?.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl px-5 py-3 mb-4 flex items-start gap-3">
+          <Layers className="w-4 h-4 text-amber-600 mt-0.5 flex-shrink-0" />
+          <div>
+            <p className="text-sm font-medium text-amber-800">Also in {(lead as any).cross_campaign.length} other campaign{(lead as any).cross_campaign.length !== 1 ? 's' : ''}</p>
+            <div className="flex flex-wrap gap-2 mt-1.5">
+              {(lead as any).cross_campaign.map((cc: any) => (
+                <Link
+                  key={cc.lead_id}
+                  to={`/leads/${cc.lead_id}`}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-white border border-amber-200 text-amber-700 hover:bg-amber-100 transition-colors"
+                >
+                  {cc.campaign_name}
+                  <span className="text-amber-500">&middot;</span>
+                  <span>{cc.fit_score}/100</span>
+                  {cc.feedback && <span className="text-amber-500">&middot;</span>}
+                  {cc.feedback && <span className="capitalize">{cc.feedback.replace(/_/g, ' ')}</span>}
+                </Link>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* Main content */}
         <div className="lg:col-span-2 space-y-4">
@@ -639,108 +616,12 @@ export function LeadDetail() {
 
         {/* Sidebar */}
         <div className="space-y-4">
-          {/* Feedback */}
-          <div className="bg-white rounded-xl border border-gray-200 p-4">
-            <h3 className="font-medium text-gray-900 mb-3">Feedback</h3>
-
-            {/* Current feedback status */}
-            {latestFeedback && (
-              <div className={`p-3 rounded-lg text-sm border mb-3 ${FEEDBACK_COLORS[latestFeedback.verdict] || 'bg-gray-100 text-gray-600 border-gray-200'}`}>
-                <p className="font-medium">{FEEDBACK_LABELS[latestFeedback.verdict] || latestFeedback.verdict}</p>
-                {latestFeedback.reason && <p className="text-xs mt-1 opacity-80">{latestFeedback.reason}</p>}
-                {latestFeedback.retry_date && (
-                  <p className="text-xs mt-1 flex items-center gap-1">
-                    <Clock className="w-3 h-3" />
-                    Re-outreach: {formatDate(latestFeedback.retry_date)}
-                  </p>
-                )}
-              </div>
-            )}
-
-            {/* Verdict selector */}
-            <div className="space-y-3">
-              <div className="grid grid-cols-2 gap-1.5">
-                {VERDICT_OPTIONS.map(opt => (
-                  <button
-                    key={opt.value}
-                    onClick={() => setSelectedVerdict(selectedVerdict === opt.value ? '' : opt.value)}
-                    disabled={feedbackLoading}
-                    className={`flex items-center justify-center gap-1 px-2 py-2 rounded-lg text-xs font-medium transition-colors ${
-                      selectedVerdict === opt.value
-                        ? `${opt.color} text-white`
-                        : 'bg-gray-50 text-gray-700 border border-gray-200 hover:bg-gray-100'
-                    } disabled:opacity-50`}
-                  >
-                    <span>{opt.icon}</span>
-                    {opt.label}
-                  </button>
-                ))}
-              </div>
-
-              {/* Retry date picker for Try Again */}
-              {selectedVerdict === 'good_fit_try_again' && (
-                <div>
-                  <label className="block text-xs text-gray-500 mb-1">Next outreach date</label>
-                  <input
-                    type="date"
-                    value={retryDate}
-                    onChange={e => setRetryDate(e.target.value)}
-                    min={new Date().toISOString().slice(0, 10)}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm"
-                  />
-                </div>
-              )}
-
-              {selectedVerdict && (
-                <>
-                  <textarea
-                    value={feedbackReason}
-                    onChange={e => setFeedbackReason(e.target.value)}
-                    placeholder="Optional reason..."
-                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm resize-none h-16 focus:outline-none focus:ring-2 focus:ring-brand-500"
-                  />
-                  <button
-                    onClick={submitFeedback}
-                    disabled={feedbackLoading}
-                    className="w-full px-3 py-2 bg-brand-600 text-white rounded-lg text-sm font-medium hover:bg-brand-700 disabled:opacity-50"
-                  >
-                    {feedbackLoading ? 'Saving...' : latestFeedback ? 'Update Feedback' : 'Submit Feedback'}
-                  </button>
-                </>
-              )}
-            </div>
-
-            {/* Feedback history */}
-            {feedbackList.length > 1 && (
-              <div className="mt-3 pt-3 border-t border-gray-100">
-                <button
-                  onClick={() => setShowFeedbackHistory(!showFeedbackHistory)}
-                  className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700"
-                >
-                  <History className="w-3 h-3" />
-                  {showFeedbackHistory ? 'Hide' : 'Show'} history ({feedbackList.length})
-                </button>
-                {showFeedbackHistory && (
-                  <div className="mt-2 space-y-2">
-                    {feedbackList.map((f: any, i: number) => (
-                      <div key={f.id || i} className="flex items-start gap-2 text-xs">
-                        <div className={`w-2 h-2 rounded-full mt-1 flex-shrink-0 ${
-                          f.verdict.includes('good_fit') ? 'bg-green-500' : 'bg-red-500'
-                        }`} />
-                        <div>
-                          <span className="font-medium text-gray-700">{FEEDBACK_LABELS[f.verdict] || f.verdict}</span>
-                          {f.reason && <span className="text-gray-500"> — {f.reason}</span>}
-                          {f.created_at && (
-                            <p className="text-gray-400">{formatDate(f.created_at)}</p>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
+          <FeedbackPanel
+            leadId={lead.id}
+            companyName={lead.company_name}
+            feedbackList={feedbackList}
+            onFeedbackSubmitted={refreshLead}
+          />
 
           {/* Tech Stack */}
           {techStack && (

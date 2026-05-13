@@ -9,6 +9,8 @@ import { getCampaignResearchPrompt } from './prompts/campaign.js';
 import { TokenTracker, MultiModelTokenTracker } from './tokenTracker.js';
 import { ActivityLogger } from './activityLogger.js';
 import { registerRun, unregisterRun } from './runRegistry.js';
+import { buildFeedbackContext } from './feedbackContext.js';
+import type { FeedbackContext } from './feedbackContext.js';
 import type { ResearchCandidate } from './researcher.js';
 import type { ScoringResult } from './scorer.js';
 import type { BriefResult } from './briefWriter.js';
@@ -347,6 +349,7 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
     let candidates: ResearchCandidate[] = [];
     let scoredCandidates: { candidate: ResearchCandidate; score: ScoringResult }[] = [];
     const briefResults: { candidate: ResearchCandidate; score: ScoringResult; brief: BriefResult }[] = [];
+    let feedbackCtx: FeedbackContext | null = null;
 
     // ── Intermediate persistence helpers ──
     const upsertLeadStage = db.prepare(
@@ -586,6 +589,17 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
 
           let existingLeadNames = new Set<string>();
           let recentLedgerNames = new Set<string>();
+          let customerNames = new Set<string>();
+
+          // Build customer dedup set from customer_profiles + existing_customers exclusions
+          const customerProfiles = db.prepare('SELECT company_name, domain FROM customer_profiles').all() as any[];
+          const customerExclusions = db.prepare(
+            "SELECT company_name, domain FROM exclusions WHERE category = 'existing_customers'"
+          ).all() as any[];
+          for (const c of [...customerProfiles, ...customerExclusions]) {
+            customerNames.add(c.company_name.toLowerCase());
+            if (c.domain) customerNames.add(c.domain.toLowerCase());
+          }
 
           if (filterExistingLeads) {
             const existingLeads = db.prepare(
@@ -642,7 +656,19 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
               logger.thinking('discover', `Removed ${beforeExcl - batchCandidates.length} excluded companies (${beforeExcl} → ${batchCandidates.length})`);
             }
 
-            // 2. Employee count validation — hard floor + segment thresholds
+            // 2. Customer dedup — never surface existing customers
+            if (customerNames.size > 0) {
+              const beforeCustomer = batchCandidates.length;
+              batchCandidates = batchCandidates.filter(c => {
+                return !customerNames.has(c.company_name.toLowerCase()) &&
+                       !(c.domain && customerNames.has(c.domain.toLowerCase()));
+              });
+              if (beforeCustomer !== batchCandidates.length) {
+                logger.thinking('discover', `Removed ${beforeCustomer - batchCandidates.length} existing customers (${beforeCustomer} → ${batchCandidates.length})`);
+              }
+            }
+
+            // 3. Employee count validation — hard floor + segment thresholds
             const sd = icpConfig.segment_details;
             const segmentThresholds = {
               SMB: { min: sd?.SMB?.employee_min ?? 30, max: sd?.SMB?.employee_max ?? 350 },
@@ -661,7 +687,7 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
               logger.thinking('discover', `Removed ${beforeSeg - batchCandidates.length} candidates below employee threshold (${beforeSeg} → ${batchCandidates.length})`);
             }
 
-            // 3. Existing leads dedup
+            // 4. Existing leads dedup
             if (filterExistingLeads && existingLeadNames.size > 0) {
               const beforeLeads = batchCandidates.length;
               batchCandidates = batchCandidates.filter(c => {
@@ -673,7 +699,7 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
               }
             }
 
-            // 4. Recommendations ledger dedup
+            // 5. Recommendations ledger dedup
             if (recentLedgerNames.size > 0) {
               const beforeLedger = batchCandidates.length;
               batchCandidates = batchCandidates.filter(c => !recentLedgerNames.has(c.company_name.toLowerCase()));
@@ -682,7 +708,7 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
               }
             }
 
-            // 5. Fuzzy dedup against already-found candidates in this run
+            // 6. Fuzzy dedup against already-found candidates in this run
             const beforeDedup = batchCandidates.length;
             batchCandidates = batchCandidates.filter(c =>
               !candidates.some(existing => isFuzzyDuplicate(existing.company_name, c.company_name))
@@ -846,6 +872,17 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
         case 'score': {
           // Update total steps now we know actual candidate count
           totalSteps = stepNumber + candidates.length + Math.min(candidates.length, targetCount) + 1;
+
+          // Build feedback context from historical outcomes for this campaign
+          try {
+            feedbackCtx = buildFeedbackContext(campaignId);
+            if (feedbackCtx) {
+              logger.thinking('score', `Applying learning from ${feedbackCtx.feedbackCount} historical feedback entries`);
+            }
+          } catch (e) {
+            logger.thinking('score', 'Could not load feedback context — proceeding without historical learning');
+          }
+
           logger.phaseStart('score', `Scoring ${candidates.length} candidates against ICP (model: ${stepModel})...`);
           const scoreTracker = tracker.getTrackerForModel(stepModel);
           scoredCandidates = [];
@@ -857,7 +894,7 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
             }
             emitProgress('score', candidate.company_name);
             logger.thinking('score', `Scoring ${candidate.company_name} against ICP criteria...`);
-            const score = await scoreCandidate(candidate, icpConfig, stepModel, scoreTracker, step.prompt_instructions, step, { runId, campaignId, phase: 'score' });
+            const score = await scoreCandidate(candidate, icpConfig, stepModel, scoreTracker, step.prompt_instructions, step, { runId, campaignId, phase: 'score' }, feedbackCtx);
             scoredCandidates.push({ candidate, score });
             if (score.reasoning) {
               logger.thinking('score', `[${candidate.company_name}] ${score.reasoning.substring(0, 300)}${score.reasoning.length > 300 ? '...' : ''}`);
@@ -924,7 +961,7 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
             try {
               // Outreach tone: prefer funnel step config, fall back to prompt config
               const briefTone = step.outreach_tone || promptConfig?.outreach_tone;
-              const brief = await generateBrief(candidate, score, icpConfig, stepModel, briefTracker, step.prompt_instructions, briefTone, step, { runId, campaignId, phase: 'brief' });
+              const brief = await generateBrief(candidate, score, icpConfig, stepModel, briefTracker, step.prompt_instructions, briefTone, step, { runId, campaignId, phase: 'brief' }, feedbackCtx);
               briefResults.push({ candidate, score, brief });
               const painSummary = brief.pain_hypotheses?.slice(0, 2).map((p: any) => typeof p === 'string' ? p : p.hypothesis || p.pain).filter(Boolean).join('; ');
               logger.finding('brief', candidate.company_name, `Brief ready — ${brief.personas?.length || 0} personas, ${brief.why_now?.length || 0} triggers`, {
@@ -1508,10 +1545,14 @@ export async function rerunBriefForLead(leadId: string): Promise<{ success: bool
     message: `Generating brief with ${model}...`,
   });
 
+  // Load feedback context for the lead's campaign (if any)
+  const rerunFeedbackCtx = lead.campaign_id ? buildFeedbackContext(lead.campaign_id) : null;
+
   const brief = await generateBrief(
     candidate, score, icpConfig, model, tracker,
     briefStep?.prompt_instructions, briefTone, briefStep,
-    { runId: lead.run_id, campaignId: lead.campaign_id, phase: 'brief-rerun' }
+    { runId: lead.run_id, campaignId: lead.campaign_id, phase: 'brief-rerun' },
+    rerunFeedbackCtx,
   );
 
   // Update lead with new brief data

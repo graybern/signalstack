@@ -14,6 +14,7 @@ import type { ResearchCandidate } from './researcher.js';
 import type { ScoringResult } from './scorer.js';
 import type { TokenTracker } from './tokenTracker.js';
 import type { StreamContext } from './scorer.js';
+import type { FeedbackContext } from './feedbackContext.js';
 
 export interface PersonaBrief {
   role_type: 'champion' | 'economic_buyer' | 'executive_sponsor';
@@ -116,7 +117,8 @@ export async function generateBrief(
   promptInstructions?: string,
   outreachTone?: string,
   stepConfig?: FunnelStepConfig,
-  streamCtx?: StreamContext
+  streamCtx?: StreamContext,
+  feedbackContext?: FeedbackContext | null,
 ): Promise<BriefResult> {
   const aiConfig = getAIConfig();
   const client = await createAIClient();
@@ -168,7 +170,7 @@ ${candidate.notes}
 ## ICP Context
 ${icpConfig.verticals?.length ? `- **Target Verticals:** ${icpConfig.verticals.join(', ')}\n` : ''}${icpConfig.competitors?.length ? `- **Competitors:** ${icpConfig.competitors.join(', ')}\n` : ''}${icpConfig.tech_signals?.length ? `- **Tech Signals:** ${icpConfig.tech_signals.join(', ')}\n` : ''}${valueProps.length > 0 ? `- **Value Propositions:** ${valueProps.join(', ')}\n` : ''}${differentiators.length > 0 ? `- **Key Differentiators:** ${differentiators.join(', ')}\n` : ''}${icpConfig.campaign_target_signals?.length ? `- **Campaign Target Signals:** ${icpConfig.campaign_target_signals.join(', ')}\n` : ''}${icpConfig.campaign_value_prop_angle ? `- **Value Prop Angle:** ${icpConfig.campaign_value_prop_angle}\n` : ''}${Object.keys(icpConfig.success_stories || {}).length > 0 ? `- **Success Stories:** ${Object.entries(icpConfig.success_stories).map(([v, c]) => `${v}: ${(c as string[]).join(', ')}`).join('; ')}\n` : ''}
 
-${candidate.key_people?.length ? `## Key People Found\nReal people identified at this company (use these for personas — do NOT fabricate additional names):\n${candidate.key_people.map(p => `- **${p.name}** — ${p.title}${p.linkedin_url ? ` (${p.linkedin_url})` : ''}`).join('\n')}\n\n` : ''}Generate the full lead brief as a JSON object.${outreachTone ? `\n\n## Outreach Tone\nWrite all outreach messaging in a ${outreachTone} tone.` : ''}${stepConfig?.persona_types?.length ? `\n\n## Persona Types\nOnly generate personas for these roles: ${stepConfig.persona_types.join(', ')}. Do not include other role types.` : ''}${stepConfig?.brief_depth === 'quick' ? `\n\n## Brief Depth: Quick\nGenerate a snapshot: company overview, 2 pain hypotheses, 1 persona. Skip extended analysis.` : stepConfig?.brief_depth === 'comprehensive' ? `\n\n## Brief Depth: Comprehensive\nGenerate an exhaustive brief with extended analysis, multiple outreach variants per persona, detailed competitive positioning, and thorough why-now analysis.` : ''}${promptInstructions ? `\n\n## Additional Instructions\n${promptInstructions}` : ''}`;
+${candidate.key_people?.length ? `## Key People Found\nReal people identified at this company (use these for personas — do NOT fabricate additional names):\n${candidate.key_people.map(p => `- **${p.name}** — ${p.title}${p.linkedin_url ? ` (${p.linkedin_url})` : ''}`).join('\n')}\n\n` : ''}Generate the full lead brief as a JSON object.${outreachTone ? `\n\n## Outreach Tone\nWrite all outreach messaging in a ${outreachTone} tone.` : ''}${stepConfig?.persona_types?.length ? `\n\n## Persona Types\nOnly generate personas for these roles: ${stepConfig.persona_types.join(', ')}. Do not include other role types.` : ''}${stepConfig?.brief_depth === 'quick' ? `\n\n## Brief Depth: Quick\nGenerate a snapshot: company overview, 2 pain hypotheses, 1 persona. Skip extended analysis.` : stepConfig?.brief_depth === 'comprehensive' ? `\n\n## Brief Depth: Comprehensive\nGenerate an exhaustive brief with extended analysis, multiple outreach variants per persona, detailed competitive positioning, and thorough why-now analysis.` : ''}${promptInstructions ? `\n\n## Additional Instructions\n${promptInstructions}` : ''}${feedbackContext ? `\n\n## Campaign Learning (from ${feedbackContext.feedbackCount} reviewed leads)\n### Persona Effectiveness\n${feedbackContext.effective_personas}\n\n### Messaging That Works\n${feedbackContext.messaging_guidance}\n\n### Competitive Intelligence from Closed Deals\n${feedbackContext.competitive_intel}` : ''}`;
 
   let rawText: string;
   let thinkingText = '';

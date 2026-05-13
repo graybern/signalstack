@@ -75,6 +75,11 @@ const FEEDBACK_OPTIONS = [
   { value: 'good_fit_booked', label: 'Booked' },
   { value: 'good_fit_try_again', label: 'Try Again' },
   { value: 'good_fit_no_response', label: 'No Response' },
+  { value: 'closed_won', label: 'Closed Won' },
+  { value: 'closed_lost', label: 'Closed Lost' },
+  { value: 'existing_customer', label: 'Existing Customer' },
+  { value: 'stalled', label: 'Stalled' },
+  { value: 'nurture', label: 'Nurture' },
   { value: 'none', label: 'No Feedback' },
 ];
 
@@ -84,7 +89,11 @@ const FEEDBACK_COLORS: Record<string, string> = {
   good_fit_booked: 'bg-blue-50 text-blue-700 border-blue-200',
   good_fit_try_again: 'bg-amber-50 text-amber-700 border-amber-200',
   good_fit_no_response: 'bg-gray-100 text-gray-600 border-gray-200',
-  // Legacy
+  closed_won: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+  closed_lost: 'bg-rose-50 text-rose-700 border-rose-200',
+  existing_customer: 'bg-purple-50 text-purple-700 border-purple-200',
+  stalled: 'bg-slate-50 text-slate-600 border-slate-200',
+  nurture: 'bg-sky-50 text-sky-700 border-sky-200',
   good_fit: 'bg-green-50 text-green-700 border-green-200',
   not_fit: 'bg-red-50 text-red-700 border-red-200',
 };
@@ -95,6 +104,11 @@ const FEEDBACK_LABELS: Record<string, string> = {
   good_fit_booked: 'Booked',
   good_fit_try_again: 'Try Again',
   good_fit_no_response: 'No Response',
+  closed_won: 'Closed Won',
+  closed_lost: 'Closed Lost',
+  existing_customer: 'Customer',
+  stalled: 'Stalled',
+  nurture: 'Nurture',
   good_fit: 'Good Fit',
   not_fit: 'Bad Fit',
 };

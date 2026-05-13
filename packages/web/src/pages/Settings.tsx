@@ -69,6 +69,9 @@ interface ExclusionEntry {
   domain?: string;
   industry?: string;
   reason?: string;
+  category?: string;
+  added_by?: string;
+  created_at?: string;
 }
 
 const ROLE_META: Record<string, { icon: any; label: string; color: string; bg: string; description: string }> = {
@@ -750,10 +753,19 @@ function DataSourcesSection() {
 
 // ── Global Exclusions Section ──────────────────────────────────
 
+const CATEGORY_BADGES: Record<string, { label: string; color: string }> = {
+  existing_customers: { label: 'Customer', color: 'bg-purple-100 text-purple-700' },
+  competitors: { label: 'Competitor', color: 'bg-red-100 text-red-700' },
+  disqualifying_criteria: { label: 'Disqualified', color: 'bg-amber-100 text-amber-700' },
+  previous_rejections: { label: 'Rejected', color: 'bg-orange-100 text-orange-700' },
+  custom: { label: 'Manual', color: 'bg-gray-100 text-gray-600' },
+};
+
 function GlobalExclusionsSection() {
   const [exclusions, setExclusions] = useState<ExclusionEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('all');
   const [showAdd, setShowAdd] = useState(false);
   const [newName, setNewName] = useState('');
   const [newDomain, setNewDomain] = useState('');
@@ -794,10 +806,14 @@ function GlobalExclusionsSection() {
 
   if (loading) return <div className="text-gray-500 text-sm">Loading exclusions...</div>;
 
-  const filtered = exclusions.filter(e =>
-    e.company_name.toLowerCase().includes(search.toLowerCase()) ||
-    (e.domain || '').toLowerCase().includes(search.toLowerCase())
-  );
+  const categories = Array.from(new Set(exclusions.map(e => e.category || 'manual').filter(Boolean)));
+
+  const filtered = exclusions.filter(e => {
+    const matchesSearch = e.company_name.toLowerCase().includes(search.toLowerCase()) ||
+      (e.domain || '').toLowerCase().includes(search.toLowerCase());
+    const matchesCategory = categoryFilter === 'all' || (e.category || 'manual') === categoryFilter;
+    return matchesSearch && matchesCategory;
+  });
 
   return (
     <div className="space-y-4">
@@ -807,8 +823,22 @@ function GlobalExclusionsSection() {
         </p>
       </div>
 
-      <div className="flex items-center justify-between">
-        <input type="text" placeholder="Search exclusions..." value={search} onChange={e => setSearch(e.target.value)} className="px-3 py-2 text-sm border border-gray-300 rounded-lg w-64" />
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2 flex-1">
+          <input type="text" placeholder="Search exclusions..." value={search} onChange={e => setSearch(e.target.value)} className="px-3 py-2 text-sm border border-gray-300 rounded-lg w-64" />
+          {categories.length > 1 && (
+            <select
+              value={categoryFilter}
+              onChange={e => setCategoryFilter(e.target.value)}
+              className="px-3 py-2 text-sm border border-gray-300 rounded-lg bg-white"
+            >
+              <option value="all">All categories</option>
+              {categories.map(cat => (
+                <option key={cat} value={cat}>{CATEGORY_BADGES[cat]?.label || cat}</option>
+              ))}
+            </select>
+          )}
+        </div>
         <div className="flex gap-2">
           <button onClick={() => setShowAdd(!showAdd)} className="flex items-center gap-1 px-3 py-2 text-sm font-medium text-white bg-brand-600 rounded-lg hover:bg-brand-700">
             {showAdd ? <X className="w-3.5 h-3.5" /> : <Plus className="w-3.5 h-3.5" />}
@@ -841,17 +871,28 @@ function GlobalExclusionsSection() {
             {search ? 'No exclusions match your search' : 'No global exclusions yet'}
           </div>
         ) : (
-          filtered.map(exc => (
-            <div key={exc.id} className="flex items-center justify-between px-4 py-3">
-              <div>
-                <p className="text-sm font-medium text-gray-900">{exc.company_name}</p>
-                <p className="text-xs text-gray-500">{exc.domain}{exc.reason ? ` — ${exc.reason}` : ''}</p>
+          filtered.map(exc => {
+            const catKey = exc.category || 'custom';
+            const badge = CATEGORY_BADGES[catKey] || CATEGORY_BADGES.custom;
+            return (
+              <div key={exc.id} className="flex items-center justify-between px-4 py-3">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-medium text-gray-900">{exc.company_name}</p>
+                    <span className={`px-1.5 py-0.5 text-[10px] font-semibold rounded ${badge.color}`}>{badge.label}</span>
+                  </div>
+                  <p className="text-xs text-gray-500">
+                    {exc.domain || ''}
+                    {exc.reason ? `${exc.domain ? ' — ' : ''}${exc.reason}` : ''}
+                    {exc.created_at ? <span className="text-gray-400 ml-2">{new Date(exc.created_at).toLocaleDateString()}</span> : ''}
+                  </p>
+                </div>
+                <button onClick={() => handleDelete(exc.id)} className="p-1 text-gray-300 hover:text-red-500 shrink-0">
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
               </div>
-              <button onClick={() => handleDelete(exc.id)} className="p-1 text-gray-300 hover:text-red-500">
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          ))
+            );
+          })
         )}
       </div>
 

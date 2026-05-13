@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom';
 import { ScoreBadge, ConfidenceBadge, SegmentBadge } from './ScoreBadge';
-import { Building2, Users, MapPin, ExternalLink, ThumbsUp, ThumbsDown, Zap } from 'lucide-react';
+import { Building2, Users, MapPin, ExternalLink, ThumbsUp, ThumbsDown, Minus, Zap } from 'lucide-react';
 import { stripMarkdown } from '../utils/inlineMarkdown';
 
 interface LeadCardProps {
@@ -75,8 +75,17 @@ export function LeadCard({ lead }: LeadCardProps) {
               <StatusBadge status={lead.lead_status} />
             )}
             {feedback && (
-              <span className={`flex items-center gap-1 text-xs ${feedback.verdict === 'good_fit' ? 'text-emerald-600' : 'text-red-500'}`}>
-                {feedback.verdict === 'good_fit' ? <ThumbsUp className="w-3 h-3" /> : <ThumbsDown className="w-3 h-3" />}
+              <span className={`flex items-center gap-1 text-xs ${
+                ['closed_won', 'good_fit_booked', 'good_fit_response', 'good_fit'].includes(feedback.verdict) ? 'text-emerald-600'
+                : ['existing_customer'].includes(feedback.verdict) ? 'text-purple-600'
+                : ['stalled', 'nurture', 'good_fit_try_again', 'good_fit_no_response'].includes(feedback.verdict) ? 'text-amber-600'
+                : 'text-red-500'
+              }`}>
+                {['closed_won', 'good_fit_booked', 'good_fit_response', 'good_fit'].includes(feedback.verdict)
+                  ? <ThumbsUp className="w-3 h-3" />
+                  : ['existing_customer', 'stalled', 'nurture', 'good_fit_try_again', 'good_fit_no_response'].includes(feedback.verdict)
+                  ? <Minus className="w-3 h-3" />
+                  : <ThumbsDown className="w-3 h-3" />}
               </span>
             )}
           </div>

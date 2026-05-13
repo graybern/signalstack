@@ -708,6 +708,101 @@ function initSchema(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
   `);
 
+  // Migrate lead_feedback to support richer verdict types (closed_won, closed_lost, existing_customer, stalled, nurture)
+  const feedbackTableInfo = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='lead_feedback'").get() as { sql: string } | undefined;
+  if (feedbackTableInfo && !feedbackTableInfo.sql.includes('closed_won')) {
+    db.pragma('foreign_keys = OFF');
+    db.transaction(() => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS lead_feedback_new (
+          id              TEXT PRIMARY KEY,
+          lead_id         TEXT REFERENCES leads(id),
+          user_id         TEXT REFERENCES users(id),
+          verdict         TEXT NOT NULL CHECK(verdict IN ('bad_fit','good_fit_response','good_fit_booked','good_fit_try_again','good_fit_no_response','closed_won','closed_lost','existing_customer','stalled','nurture','good_fit','not_fit')),
+          reason          TEXT,
+          retry_date      TEXT,
+          feedback_source TEXT DEFAULT 'manual',
+          created_at      TEXT DEFAULT (datetime('now')),
+          UNIQUE(lead_id, user_id)
+        );
+        INSERT OR IGNORE INTO lead_feedback_new(id, lead_id, user_id, verdict, reason, retry_date, feedback_source, created_at)
+          SELECT id, lead_id, user_id, verdict, reason, retry_date, feedback_source, created_at FROM lead_feedback;
+        DROP TABLE lead_feedback;
+        ALTER TABLE lead_feedback_new RENAME TO lead_feedback;
+        CREATE INDEX IF NOT EXISTS idx_feedback_lead_id ON lead_feedback(lead_id);
+      `);
+    })();
+    db.pragma('foreign_keys = ON');
+  }
+
+  // Feedback outcome details — structured data for each feedback entry
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS feedback_outcome_details (
+      id                    TEXT PRIMARY KEY,
+      feedback_id           TEXT NOT NULL REFERENCES lead_feedback(id),
+      lead_id               TEXT NOT NULL REFERENCES leads(id),
+      campaign_id           TEXT,
+      effective_persona     TEXT,
+      effective_channel     TEXT,
+      effective_angle       TEXT,
+      deal_value            TEXT,
+      sales_cycle_days      INTEGER,
+      competitor_lost_to    TEXT,
+      loss_reason           TEXT,
+      bad_fit_reasons       TEXT,
+      customer_products     TEXT,
+      customer_environment  TEXT,
+      why_they_bought       TEXT,
+      stalled_stage         TEXT,
+      created_at            TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_outcome_lead ON feedback_outcome_details(lead_id);
+    CREATE INDEX IF NOT EXISTS idx_outcome_campaign ON feedback_outcome_details(campaign_id);
+    CREATE INDEX IF NOT EXISTS idx_outcome_feedback ON feedback_outcome_details(feedback_id);
+  `);
+
+  // Customer profiles — cross-campaign customer knowledge base
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS customer_profiles (
+      id               TEXT PRIMARY KEY,
+      company_name     TEXT NOT NULL,
+      domain           TEXT UNIQUE,
+      products_used    TEXT,
+      environment      TEXT,
+      why_they_bought  TEXT,
+      deal_value       TEXT,
+      close_date       TEXT,
+      original_lead_id TEXT,
+      campaign_id      TEXT,
+      notes            TEXT,
+      created_at       TEXT DEFAULT (datetime('now')),
+      updated_at       TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_customer_domain ON customer_profiles(domain);
+    CREATE INDEX IF NOT EXISTS idx_customer_company ON customer_profiles(company_name);
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS campaign_insights (
+      id              TEXT PRIMARY KEY,
+      campaign_id     TEXT NOT NULL,
+      insight_type    TEXT NOT NULL,
+      title           TEXT NOT NULL,
+      summary         TEXT NOT NULL,
+      details         TEXT NOT NULL,
+      recommendations TEXT,
+      data_snapshot   TEXT,
+      feedback_count  INTEGER DEFAULT 0,
+      confidence      TEXT DEFAULT 'medium' CHECK(confidence IN ('low','medium','high')),
+      status          TEXT DEFAULT 'active' CHECK(status IN ('active','applied','dismissed','stale')),
+      created_at      TEXT DEFAULT (datetime('now')),
+      applied_at      TEXT,
+      applied_by      TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_insights_campaign ON campaign_insights(campaign_id);
+    CREATE INDEX IF NOT EXISTS idx_insights_status ON campaign_insights(campaign_id, status);
+  `);
+
   seedIcpDefaults(db);
 }
 

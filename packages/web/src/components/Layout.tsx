@@ -12,6 +12,7 @@ import {
   Zap,
   ClipboardList,
   Search,
+  Building2,
 } from 'lucide-react';
 import { permissions } from '../utils/permissions';
 
@@ -41,6 +42,7 @@ export function Layout() {
         { to: '/runs', icon: History, label: 'Run History' },
         { to: '/research', icon: Search, label: 'Quick Research' },
         ...(permissions.canAccessSettings(role) ? [{ to: '/activity', icon: ClipboardList, label: 'Activity Log' }] : []),
+        { to: '/customers', icon: Building2, label: 'Customers' },
       ],
     },
     ...(permissions.canViewConnect(role) ? [{

@@ -6,6 +6,12 @@ import { generateRecommendations } from '../agent/recommendationEngine.js';
 import { ActivityLogger } from '../agent/activityLogger.js';
 import { logActivity } from '../services/activityLog.js';
 import { getSetting, saveSetting } from './icp.js';
+import { analyzeGlobalPatterns } from '../agent/feedbackAnalyzer.js';
+
+function safeJsonParse(val: string | null | undefined, fallback: any): any {
+  if (!val) return fallback;
+  try { return JSON.parse(val); } catch { return fallback; }
+}
 
 const router = Router();
 
@@ -324,6 +330,201 @@ router.patch('/recommendations/:id', authenticate, requireMember, (req: AuthRequ
   });
 
   res.json({ success: true, applied });
+});
+
+// ── GET /cross-campaign — overlapping leads, conversion comparison ──
+router.get('/cross-campaign', authenticate, (_req: AuthRequest, res: Response) => {
+  const db = getDb();
+
+  // Per-campaign conversion metrics
+  const campaignMetrics = db.prepare(`
+    SELECT c.id, c.name,
+      COUNT(l.id) as total_leads,
+      AVG(l.fit_score) as avg_score,
+      SUM(CASE WHEN l.current_feedback IN ('good_fit_booked','good_fit_response','closed_won') THEN 1 ELSE 0 END) as positive,
+      SUM(CASE WHEN l.current_feedback IN ('bad_fit','closed_lost') THEN 1 ELSE 0 END) as negative,
+      SUM(CASE WHEN l.current_feedback = 'closed_won' THEN 1 ELSE 0 END) as won,
+      SUM(CASE WHEN l.current_feedback = 'closed_lost' THEN 1 ELSE 0 END) as lost,
+      SUM(CASE WHEN l.current_feedback IS NOT NULL THEN 1 ELSE 0 END) as with_feedback
+    FROM campaigns c
+    LEFT JOIN leads l ON l.campaign_id = c.id
+    WHERE c.status = 'active'
+    GROUP BY c.id
+    ORDER BY c.created_at DESC
+  `).all() as any[];
+
+  const campaigns = campaignMetrics.map(c => ({
+    id: c.id,
+    name: c.name,
+    total_leads: c.total_leads,
+    avg_score: c.avg_score ? Math.round(c.avg_score) : null,
+    positive: c.positive,
+    negative: c.negative,
+    won: c.won,
+    lost: c.lost,
+    win_rate: (c.won + c.lost) > 0 ? Math.round((c.won / (c.won + c.lost)) * 100) : null,
+    feedback_rate: c.total_leads > 0 ? Math.round((c.with_feedback / c.total_leads) * 100) : 0,
+  }));
+
+  // Overlapping leads — companies appearing in multiple campaigns
+  const overlaps = db.prepare(`
+    SELECT domain, company_name, COUNT(DISTINCT campaign_id) as campaign_count,
+      GROUP_CONCAT(DISTINCT campaign_id) as campaign_ids
+    FROM leads
+    WHERE domain IS NOT NULL AND campaign_id IS NOT NULL
+    GROUP BY domain
+    HAVING campaign_count > 1
+    ORDER BY campaign_count DESC
+    LIMIT 50
+  `).all() as any[];
+
+  const overlapDetails = overlaps.map(o => {
+    const campaignIds = o.campaign_ids.split(',');
+    const campaignNames = campaignIds.map((cid: string) => {
+      const c = campaignMetrics.find(cm => cm.id === cid);
+      return c?.name || cid;
+    });
+    return {
+      domain: o.domain,
+      company_name: o.company_name,
+      campaign_count: o.campaign_count,
+      campaigns: campaignNames,
+    };
+  });
+
+  // Cost comparison (from pipeline_runs)
+  const costByCampaign = db.prepare(`
+    SELECT c.id, c.name,
+      COUNT(pr.id) as run_count,
+      SUM(pr.estimated_cost) as total_cost,
+      SUM(pr.lead_count) as total_leads_generated,
+      SUM(pr.input_tokens) as total_input_tokens,
+      SUM(pr.output_tokens) as total_output_tokens
+    FROM campaigns c
+    LEFT JOIN pipeline_runs pr ON pr.campaign_id = c.id AND pr.status = 'completed'
+    WHERE c.status = 'active'
+    GROUP BY c.id
+    ORDER BY total_cost DESC
+  `).all() as any[];
+
+  const costComparison = costByCampaign.map(c => ({
+    ...c,
+    cost_per_lead: c.total_leads_generated > 0
+      ? Math.round((c.total_cost / c.total_leads_generated) * 100) / 100
+      : null,
+  }));
+
+  res.json({ campaigns, overlapping_leads: overlapDetails, cost_comparison: costComparison });
+});
+
+// ── GET /customer-intel — aggregate customer knowledge ──────────
+router.get('/customer-intel', authenticate, (_req: AuthRequest, res: Response) => {
+  const db = getDb();
+
+  const customers = db.prepare(
+    'SELECT * FROM customer_profiles ORDER BY updated_at DESC'
+  ).all() as any[];
+
+  const parsed = customers.map(c => ({
+    ...c,
+    products_used: safeJsonParse(c.products_used, []),
+    environment: safeJsonParse(c.environment, {}),
+  }));
+
+  // Aggregate characteristics
+  const productCounts: Record<string, number> = {};
+  const envKeys: Record<string, Record<string, number>> = {};
+  const buyReasons: string[] = [];
+
+  for (const c of parsed) {
+    if (Array.isArray(c.products_used)) {
+      for (const p of c.products_used) {
+        productCounts[p] = (productCounts[p] || 0) + 1;
+      }
+    }
+    if (c.environment && typeof c.environment === 'object') {
+      for (const [key, val] of Object.entries(c.environment)) {
+        if (!envKeys[key]) envKeys[key] = {};
+        const v = String(val);
+        envKeys[key][v] = (envKeys[key][v] || 0) + 1;
+      }
+    }
+    if (c.why_they_bought) buyReasons.push(c.why_they_bought);
+  }
+
+  res.json({
+    total_customers: customers.length,
+    customers: parsed,
+    aggregate: {
+      product_usage: Object.entries(productCounts).sort((a, b) => b[1] - a[1]),
+      environment_patterns: envKeys,
+      buy_reasons: buyReasons.slice(0, 20),
+    },
+  });
+});
+
+// ── GET /global-insights — ICP refinement suggestions ────────
+router.get('/global-insights', authenticate, (_req: AuthRequest, res: Response) => {
+  const db = getDb();
+  const { status } = _req.query;
+
+  let sql = "SELECT * FROM campaign_insights WHERE campaign_id = '__global__'";
+  const params: any[] = [];
+
+  if (status && typeof status === 'string') {
+    sql += ' AND status = ?';
+    params.push(status);
+  }
+
+  sql += ' ORDER BY created_at DESC';
+
+  const rows = db.prepare(sql).all(...params) as any[];
+  const insights = rows.map(row => ({
+    ...row,
+    details: safeJsonParse(row.details, {}),
+    recommendations: safeJsonParse(row.recommendations, null),
+    data_snapshot: safeJsonParse(row.data_snapshot, null),
+  }));
+
+  res.json(insights);
+});
+
+router.post('/global-insights/analyze', authenticate, requireMember, async (_req: AuthRequest, res: Response) => {
+  try {
+    const insights = await analyzeGlobalPatterns();
+    res.json({ insights, count: insights.length });
+  } catch (err) {
+    console.error('[analytics] Global analysis failed:', err);
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Analysis failed' });
+  }
+});
+
+// ── PATCH /global-insights/:id — apply/dismiss ────────────────
+router.patch('/global-insights/:id', authenticate, requireMember, (req: AuthRequest, res: Response) => {
+  const { status } = req.body;
+  if (!['applied', 'dismissed'].includes(status)) {
+    return res.status(400).json({ error: 'Status must be applied or dismissed' });
+  }
+
+  const db = getDb();
+  const insight = db.prepare('SELECT * FROM campaign_insights WHERE id = ?').get(req.params.id) as any;
+  if (!insight) return res.status(404).json({ error: 'Insight not found' });
+
+  db.prepare(
+    `UPDATE campaign_insights SET status = ?, applied_at = datetime('now'), applied_by = ? WHERE id = ?`
+  ).run(status, req.user!.id, req.params.id);
+
+  logActivity({
+    userId: req.user!.id,
+    entityType: 'setting',
+    entityId: req.params.id,
+    entityTitle: insight.title,
+    action: status === 'applied' ? 'updated' : 'deleted',
+    changes: { status: { old: insight.status, new: status } },
+    snapshot: { type: insight.insight_type, title: insight.title, summary: insight.summary },
+  });
+
+  res.json({ success: true });
 });
 
 // ── GET /run-trends — Cross-campaign score + cost trends ──────

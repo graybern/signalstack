@@ -15,9 +15,11 @@ import { CampaignCreate } from './pages/CampaignCreate';
 import { Inbound } from './pages/Inbound';
 import { ActivityLog } from './pages/ActivityLog';
 import { QuickResearch } from './pages/QuickResearch';
+import { Customers } from './pages/Customers';
 import React, { createContext, useContext, useState } from 'react';
 import { api } from './api/client';
 import { Zap, Lock } from 'lucide-react';
+import { ToastProvider } from './components/Toast';
 
 interface AuthContextType {
   user: any;
@@ -109,6 +111,7 @@ export default function App() {
 
   return (
     <AuthContext.Provider value={auth}>
+      <ToastProvider>
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={auth.user ? <Navigate to="/" replace /> : <Login />} />
@@ -126,6 +129,7 @@ export default function App() {
             <Route path="runs/:id" element={<RunDetail />} />
             <Route path="research" element={<QuickResearch />} />
             <Route path="activity" element={<ActivityLog />} />
+            <Route path="customers" element={<Customers />} />
             {/* Connect */}
             <Route path="import" element={<Inbound />} />
             <Route path="export" element={<ExportPage />} />
@@ -143,6 +147,7 @@ export default function App() {
           </Route>
         </Routes>
       </BrowserRouter>
+      </ToastProvider>
     </AuthContext.Provider>
   );
 }

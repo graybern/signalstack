@@ -7,7 +7,8 @@ import { getSetting, getDefaultPipelineConfig, getDefaultPromptConfig, getDefaul
 import { registerCampaignCron, unregisterCampaignCron } from '../scheduler/campaignScheduler.js';
 import { logActivity, computeChanges } from '../services/activityLog.js';
 import { sendTestNotification } from '../services/notificationDispatcher.js';
-import type { CampaignParsed, CampaignExclusionConfig, Exclusion } from '../types/index.js';
+import { analyzeCampaignFeedback } from '../agent/feedbackAnalyzer.js';
+import type { CampaignParsed, CampaignExclusionConfig, Exclusion, CampaignInsight } from '../types/index.js';
 
 const router = Router();
 
@@ -702,6 +703,95 @@ router.post('/:id/run', authenticate, requireMember, async (req: AuthRequest, re
     run_id: newRun?.id || null,
     targeted_leads: targetLeadIds?.length || 0,
   });
+});
+
+// ── Campaign Insights ───────────────────────────────────────────
+
+router.get('/:id/insights', authenticate, (req: AuthRequest, res: Response) => {
+  const db = getDb();
+  const { status, type } = req.query;
+
+  let sql = 'SELECT * FROM campaign_insights WHERE campaign_id = ?';
+  const params: any[] = [req.params.id];
+
+  if (status && typeof status === 'string') {
+    sql += ' AND status = ?';
+    params.push(status);
+  }
+  if (type && typeof type === 'string') {
+    sql += ' AND insight_type = ?';
+    params.push(type);
+  }
+
+  sql += ' ORDER BY created_at DESC';
+
+  const rows = db.prepare(sql).all(...params) as any[];
+  const insights: CampaignInsight[] = rows.map(row => ({
+    ...row,
+    details: safeJsonParse(row.details, {}),
+    recommendations: safeJsonParse(row.recommendations, null),
+    data_snapshot: safeJsonParse(row.data_snapshot, null),
+  }));
+
+  res.json(insights);
+});
+
+router.post('/:id/analyze', authenticate, requireMember, async (req: AuthRequest, res: Response) => {
+  try {
+    const insights = await analyzeCampaignFeedback(req.params.id);
+    res.json({ insights, count: insights.length });
+  } catch (err) {
+    console.error('[campaigns] Analysis failed:', err);
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Analysis failed' });
+  }
+});
+
+router.patch('/:id/insights/:insightId', authenticate, requireOperator, (req: AuthRequest, res: Response) => {
+  const db = getDb();
+  const { status } = req.body;
+
+  if (!status || !['applied', 'dismissed'].includes(status)) {
+    return res.status(400).json({ error: 'status must be "applied" or "dismissed"' });
+  }
+
+  const insight = db.prepare(
+    'SELECT * FROM campaign_insights WHERE id = ? AND campaign_id = ?'
+  ).get(req.params.insightId, req.params.id) as any;
+
+  if (!insight) return res.status(404).json({ error: 'Insight not found' });
+
+  if (status === 'applied') {
+    db.prepare(
+      `UPDATE campaign_insights SET status = 'applied', applied_at = datetime('now'), applied_by = ? WHERE id = ?`
+    ).run(req.user!.id, req.params.insightId);
+
+    const ALLOWED_ICP_FIELDS = new Set([
+      'min_employees', 'max_employees', 'target_industries', 'exclude_industries',
+      'target_regions', 'tech_signals', 'anti_patterns', 'target_categories',
+      'min_score', 'segment', 'verticals',
+    ]);
+    const recommendations = safeJsonParse(insight.recommendations, []);
+    const configUpdates: Record<string, any> = {};
+    for (const rec of recommendations) {
+      if (rec.field && rec.value !== undefined && ALLOWED_ICP_FIELDS.has(rec.field)) {
+        configUpdates[rec.field] = rec.value;
+      }
+    }
+
+    if (Object.keys(configUpdates).length > 0) {
+      const campaign = db.prepare('SELECT icp_overrides FROM campaigns WHERE id = ?').get(req.params.id) as any;
+      const existing = safeJsonParse(campaign?.icp_overrides, {});
+      const merged = { ...existing, ...configUpdates };
+      db.prepare('UPDATE campaigns SET icp_overrides = ?, updated_at = datetime(\'now\') WHERE id = ?')
+        .run(JSON.stringify(merged), req.params.id);
+    }
+  } else {
+    db.prepare(
+      `UPDATE campaign_insights SET status = 'dismissed' WHERE id = ?`
+    ).run(req.params.insightId);
+  }
+
+  res.json({ success: true, status });
 });
 
 export default router;

@@ -1,8 +1,8 @@
 # SignalStack — AI-Powered Prospect Intelligence
 
-**Stack signals from 14+ sources. Qualify leads with AI. Arm your reps with intelligence briefs.**
+**Stack signals from 14+ sources. Qualify leads with AI. Learn from every outcome. Arm your reps with intelligence briefs.**
 
-SignalStack is the intelligence layer that sits before your outreach stack. It answers the two hardest questions in B2B sales: **"Who should we talk to?"** and **"What should we say?"**
+SignalStack is the intelligence layer that sits before your outreach stack. It answers the two hardest questions in B2B sales: **"Who should we talk to?"** and **"What should we say?"** — and gets better at both with every deal your team closes, loses, or walks away from.
 
 ---
 
@@ -23,7 +23,8 @@ SignalStack takes a fundamentally different approach: **stack multiple real-time
 2. **14+ Enrichment Sources** — 5 free built-in sources run automatically; 9 API-connected sources for deeper data
 3. **Signal Convergence** — When inbound leads match outbound campaign patterns, they're flagged as highest priority
 4. **Intelligence Briefs** — Not just scores — full briefs with pain hypotheses, competitive displacement strategies, buyer personas, and personalized outreach angles
-5. **Export to Your Outreach Stack** — SignalStack does the thinking; your outreach tool (Outreach.io, Salesloft, HubSpot, Apollo) does the sending
+5. **Closed-Loop Learning** — Every sales outcome (booked, won, lost, bad fit) feeds back into future scoring, briefing, and targeting — the system improves with every rep interaction
+6. **Export to Your Outreach Stack** — SignalStack does the thinking; your outreach tool (Outreach.io, Salesloft, HubSpot, Apollo) does the sending
 
 ### Why This Matters
 
@@ -34,6 +35,8 @@ SignalStack takes a fundamentally different approach: **stack multiple real-time
 | Inbound leads sit unqualified for days | Auto-enriched, scored, and qualified on import |
 | No connection between inbound interest and outbound targeting | Signal convergence flags high-priority overlaps |
 | Generic outreach, low reply rates | Personalized pain hypotheses and talking points per persona |
+| No feedback loop — same mistakes repeated across campaigns | AI learns from every outcome to improve scoring accuracy and brief quality over time |
+| Existing customers resurface as new leads | Auto-exclusion: won deals and known customers are filtered from all future runs |
 
 ---
 
@@ -223,6 +226,41 @@ Plus a full **intelligence brief** with:
 
 ---
 
+## Feedback & Learning System
+
+SignalStack isn't a one-shot pipeline — it's a **learning system** that improves with every sales outcome your team records.
+
+### Outcome Tracking
+
+After a rep acts on a brief, they record what happened through a structured feedback flow:
+
+| Outcome | What It Captures | System Action |
+|---------|------------------|---------------|
+| **Booked Meeting** | Which persona role and channel worked, what angle resonated | Tracks effective outreach patterns |
+| **Closed Won** | Deal value, why they bought, products purchased, effective channel | Auto-adds to exclusion list + customer knowledge base |
+| **Closed Lost** | Competitor lost to, loss reason (price, feature gap, timing, etc.) | Feeds competitive intelligence into future briefs |
+| **Bad Fit** | Structured reasons (wrong segment, too small, wrong vertical, etc.) | Identifies scoring blind spots |
+| **Already a Customer** | Products used, environment details, why they bought | Auto-excludes from all future campaigns |
+| **Try Later** | Re-outreach date | Snoozes and resurfaces with a fresh brief on target date |
+| **Stalled** | Where in the process they went dark | Timing pattern analysis |
+
+### Cross-Campaign Intelligence
+
+- **Customer dedup** — Companies marked as customers or won deals are automatically excluded from all future campaign runs across the entire platform
+- **Cross-campaign lead detection** — When a lead appears in multiple active campaigns, it's flagged so teams can coordinate
+- **Customer knowledge base** — Environment data, products used, and buying motivations are captured to refine the ICP over time
+
+### How Learning Feeds Back
+
+Every piece of feedback makes future runs smarter:
+
+1. **Scoring calibration** — If the system consistently scores a type of company high but reps mark them as bad fits, the scoring adjustments surface in the next run's context
+2. **Persona effectiveness** — If Champions (Director-level) generate most booked meetings while C-suite cold outreach fails, briefs shift persona targeting accordingly
+3. **Messaging guidance** — Angles that resonate in won deals get amplified; angles that correlate with losses get deprioritized
+4. **Competitive intelligence** — Loss patterns against specific competitors inform displacement strategies in future briefs
+
+---
+
 ## Integration Layer
 
 SignalStack is designed to be a **node in your pipeline**, not a standalone tool. It exposes a full integration layer for connecting to upstream and downstream systems.
@@ -373,6 +411,7 @@ packages/
     │   ├── components/
     │   │   ├── Layout.tsx           # Sidebar navigation
     │   │   ├── LeadCard.tsx         # Lead summary card with badges
+    │   │   ├── FeedbackPanel.tsx    # Outcome capture with contextual sub-forms
     │   │   └── ScoreBadge.tsx       # Score/segment/confidence badges
     │   └── api/client.ts           # API client with auth
     └── package.json

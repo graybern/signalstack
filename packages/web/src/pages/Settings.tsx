@@ -1,4 +1,4 @@
-import React, { useState, useEffect, Fragment } from 'react';
+import React, { useState, useEffect, useRef, useCallback, Fragment } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthContext } from '../App';
 import { api } from '../api/client';
@@ -765,31 +765,59 @@ function GlobalExclusionsSection() {
   const [exclusions, setExclusions] = useState<ExclusionEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('all');
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(0);
+  const [categories, setCategories] = useState<string[]>([]);
   const [showAdd, setShowAdd] = useState(false);
   const [newName, setNewName] = useState('');
   const [newDomain, setNewDomain] = useState('');
   const [newReason, setNewReason] = useState('');
+  const debounceRef = useRef<ReturnType<typeof setTimeout>>();
+  const PAGE_SIZE = 50;
 
-  const loadExclusions = async () => {
+  const loadExclusions = useCallback(async (p: number, s: string, cat: string) => {
+    setLoading(true);
     try {
-      const data = await api('/exclusions');
+      const params = new URLSearchParams({ page: String(p), limit: String(PAGE_SIZE) });
+      if (s) params.set('search', s);
+      if (cat && cat !== 'all') params.set('category', cat);
+      const data = await api(`/exclusions?${params}`);
       setExclusions(data.exclusions || []);
+      setTotal(data.total || 0);
+      setTotalPages(data.totalPages || 0);
+      if (data.categories) setCategories(data.categories);
     } catch (err) {
       console.error(err);
     } finally {
       setLoading(false);
     }
+  }, []);
+
+  useEffect(() => { loadExclusions(page, debouncedSearch, categoryFilter); }, [page, debouncedSearch, categoryFilter, loadExclusions]);
+
+  const onSearchChange = (value: string) => {
+    setSearch(value);
+    clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      setDebouncedSearch(value);
+      setPage(1);
+    }, 300);
   };
 
-  useEffect(() => { loadExclusions(); }, []);
+  const onCategoryChange = (value: string) => {
+    setCategoryFilter(value);
+    setPage(1);
+  };
 
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
       await api('/exclusions', { method: 'POST', body: JSON.stringify({ company_name: newName, domain: newDomain, reason: newReason }) });
       setNewName(''); setNewDomain(''); setNewReason(''); setShowAdd(false);
-      loadExclusions();
+      loadExclusions(page, debouncedSearch, categoryFilter);
     } catch (err: any) {
       alert(err.message || 'Failed to add exclusion');
     }
@@ -798,22 +826,18 @@ function GlobalExclusionsSection() {
   const handleDelete = async (id: string) => {
     try {
       await api(`/exclusions/${id}`, { method: 'DELETE' });
-      loadExclusions();
+      if (exclusions.length === 1 && page > 1) {
+        setPage(page - 1);
+      } else {
+        loadExclusions(page, debouncedSearch, categoryFilter);
+      }
     } catch (err: any) {
       alert(err.message || 'Failed to delete');
     }
   };
 
-  if (loading) return <div className="text-gray-500 text-sm">Loading exclusions...</div>;
-
-  const categories = Array.from(new Set(exclusions.map(e => e.category || 'manual').filter(Boolean)));
-
-  const filtered = exclusions.filter(e => {
-    const matchesSearch = e.company_name.toLowerCase().includes(search.toLowerCase()) ||
-      (e.domain || '').toLowerCase().includes(search.toLowerCase());
-    const matchesCategory = categoryFilter === 'all' || (e.category || 'manual') === categoryFilter;
-    return matchesSearch && matchesCategory;
-  });
+  const rangeStart = (page - 1) * PAGE_SIZE + 1;
+  const rangeEnd = Math.min(page * PAGE_SIZE, total);
 
   return (
     <div className="space-y-4">
@@ -825,11 +849,22 @@ function GlobalExclusionsSection() {
 
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2 flex-1">
-          <input type="text" placeholder="Search exclusions..." value={search} onChange={e => setSearch(e.target.value)} className="px-3 py-2 text-sm border border-gray-300 rounded-lg w-64" />
+          <div className="relative">
+            <input
+              type="text"
+              placeholder="Search exclusions..."
+              value={search}
+              onChange={e => onSearchChange(e.target.value)}
+              className="px-3 py-2 text-sm border border-gray-300 rounded-lg w-64"
+            />
+            {search !== debouncedSearch && (
+              <Loader2 className="absolute right-2.5 top-2.5 w-3.5 h-3.5 text-gray-400 animate-spin" />
+            )}
+          </div>
           {categories.length > 1 && (
             <select
               value={categoryFilter}
-              onChange={e => setCategoryFilter(e.target.value)}
+              onChange={e => onCategoryChange(e.target.value)}
               className="px-3 py-2 text-sm border border-gray-300 rounded-lg bg-white"
             >
               <option value="all">All categories</option>
@@ -865,13 +900,13 @@ function GlobalExclusionsSection() {
         </form>
       )}
 
-      <div className="bg-white border border-gray-200 rounded-lg divide-y divide-gray-100">
-        {filtered.length === 0 ? (
+      <div className={`bg-white border border-gray-200 rounded-lg divide-y divide-gray-100 ${loading ? 'opacity-60' : ''}`}>
+        {!loading && exclusions.length === 0 ? (
           <div className="px-6 py-8 text-center text-sm text-gray-500">
-            {search ? 'No exclusions match your search' : 'No global exclusions yet'}
+            {debouncedSearch ? 'No exclusions match your search' : 'No global exclusions yet'}
           </div>
         ) : (
-          filtered.map(exc => {
+          exclusions.map(exc => {
             const catKey = exc.category || 'custom';
             const badge = CATEGORY_BADGES[catKey] || CATEGORY_BADGES.custom;
             return (
@@ -896,7 +931,31 @@ function GlobalExclusionsSection() {
         )}
       </div>
 
-      <p className="text-xs text-gray-400">{exclusions.length} total exclusion{exclusions.length !== 1 ? 's' : ''}</p>
+      <div className="flex items-center justify-between">
+        <p className="text-xs text-gray-400">
+          {total > 0 ? `Showing ${rangeStart.toLocaleString()}–${rangeEnd.toLocaleString()} of ${total.toLocaleString()} exclusion${total !== 1 ? 's' : ''}` : '0 exclusions'}
+          {debouncedSearch ? ` matching "${debouncedSearch}"` : ''}
+        </p>
+        {totalPages > 1 && (
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setPage(p => Math.max(1, p - 1))}
+              disabled={page <= 1}
+              className="px-2.5 py-1 text-xs font-medium rounded-md border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Previous
+            </button>
+            <span className="text-xs text-gray-500">Page {page} of {totalPages}</span>
+            <button
+              onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+              disabled={page >= totalPages}
+              className="px-2.5 py-1 text-xs font-medium rounded-md border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Next
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

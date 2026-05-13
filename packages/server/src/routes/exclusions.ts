@@ -10,9 +10,11 @@ const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
 router.get('/', authenticate, (req: AuthRequest, res: Response) => {
-  const { search, page = '1', limit = '100', campaign_id } = req.query;
+  const { search, page = '1', limit = '50', campaign_id, category } = req.query;
   const db = getDb();
-  const offset = (parseInt(page as string) - 1) * parseInt(limit as string);
+  const pageNum = parseInt(page as string);
+  const limitNum = parseInt(limit as string);
+  const offset = (pageNum - 1) * limitNum;
 
   // If campaign_id provided, return merged exclusions (global + campaign adds - exemptions)
   if (campaign_id) {
@@ -37,16 +39,30 @@ router.get('/', authenticate, (req: AuthRequest, res: Response) => {
     return res.json({ exclusions: merged, total: merged.length });
   }
 
+  const conditions: string[] = [];
+  const params: any[] = [];
+
   if (search) {
     const pattern = `%${search}%`;
-    const total = (db.prepare('SELECT COUNT(*) as c FROM exclusions WHERE company_name LIKE ? OR domain LIKE ?').get(pattern, pattern) as any).c;
-    const rows = db.prepare('SELECT * FROM exclusions WHERE company_name LIKE ? OR domain LIKE ? ORDER BY company_name LIMIT ? OFFSET ?').all(pattern, pattern, parseInt(limit as string), offset);
-    return res.json({ exclusions: rows, total });
+    conditions.push('(company_name LIKE ? OR domain LIKE ?)');
+    params.push(pattern, pattern);
   }
 
-  const total = (db.prepare('SELECT COUNT(*) as c FROM exclusions').get() as any).c;
-  const rows = db.prepare('SELECT * FROM exclusions ORDER BY company_name LIMIT ? OFFSET ?').all(parseInt(limit as string), offset);
-  res.json({ exclusions: rows, total });
+  if (category && category !== 'all') {
+    conditions.push('category = ?');
+    params.push(category);
+  }
+
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+  const total = (db.prepare(`SELECT COUNT(*) as c FROM exclusions ${where}`).get(...params) as any).c;
+  const rows = db.prepare(`SELECT * FROM exclusions ${where} ORDER BY company_name LIMIT ? OFFSET ?`).all(...params, limitNum, offset);
+  const totalPages = Math.ceil(total / limitNum);
+
+  const allCategories = (db.prepare('SELECT DISTINCT category FROM exclusions WHERE category IS NOT NULL').all() as any[])
+    .map(r => r.category);
+
+  res.json({ exclusions: rows, total, page: pageNum, limit: limitNum, totalPages, categories: allCategories });
 });
 
 router.post('/', authenticate, requireOperator, (req: AuthRequest, res: Response) => {

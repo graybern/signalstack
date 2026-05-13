@@ -28,6 +28,7 @@ import { GoogleNewsAdapter } from './adapters/googleNews.js';
 import { HackerNewsAdapter } from './adapters/hackerNews.js';
 import { TechFingerprintAdapter } from './adapters/techFingerprint.js';
 import { SerperSearchAdapter } from './adapters/serperSearch.js';
+import { LinkedInAdapter } from './adapters/linkedin.js';
 import { getSetting } from '../../routes/icp.js';
 import { getDefaultDataSources } from './types.js';
 
@@ -48,7 +49,8 @@ const ADAPTERS: Record<string, DataSourceAdapter> = {
   crunchbase: new CrunchbaseAdapter(),
   apollo: new ApolloAdapter(),
   salesforce: new SalesforceAdapter(),
-  // Future: linkedin, clearbit, sixsense, hunter, builtwith
+  linkedin: new LinkedInAdapter(),
+  // Future: clearbit, sixsense, hunter, builtwith
 };
 
 /**
@@ -65,6 +67,10 @@ export function getDataSourceConfigs(): DataSourceConfig[] {
   return defaults.map(d => {
     const existing = savedMap.get(d.id);
     if (existing) {
+      // If the default changed from requires_key to free (or vice versa), trust the new default
+      if (existing.requires_key !== d.requires_key) {
+        return { ...d, settings: { ...d.settings, ...existing.settings } };
+      }
       return { ...d, ...existing };
     }
     return d;
@@ -188,10 +194,15 @@ async function enrichSingleCandidate(
   errors: EnrichmentSummary['errors']
 ): Promise<{ candidate: ResearchCandidate; wasEnriched: boolean }> {
   const enrichments: Partial<CompanyEnrichment>[] = [];
+  let discoveredLinkedinUrl = candidate.linkedin_company_url || '';
 
   for (const sourceConfig of sources) {
     const adapter = ADAPTERS[sourceConfig.id];
     if (!adapter) continue;
+
+    if (discoveredLinkedinUrl) {
+      sourceConfig.settings = { ...sourceConfig.settings, linkedin_url: discoveredLinkedinUrl };
+    }
 
     try {
       const enrichment = await adapter.enrichCompany(
@@ -201,6 +212,9 @@ async function enrichSingleCandidate(
       );
       if (Object.keys(enrichment).length > 0) {
         enrichments.push(enrichment);
+        if (enrichment.linkedin_url && !discoveredLinkedinUrl) {
+          discoveredLinkedinUrl = enrichment.linkedin_url;
+        }
       }
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);

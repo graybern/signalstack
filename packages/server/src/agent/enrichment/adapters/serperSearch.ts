@@ -362,12 +362,13 @@ export class SerperSearchAdapter implements DataSourceAdapter {
     }
 
     // LinkedIn-style bare range: "501-1,000" or "· 201-500 ·" (no trailing keyword)
+    // Use upper end — LinkedIn buckets undercount; real count tends toward upper bound
     const bareRange = text.match(/(?:^|[·|\s])(\d[\d,]*)\s*[-–—]\s*(\d[\d,]*)(?:\s*[·|\s]|$)/);
     if (bareRange) {
       const low = parseInt(bareRange[1].replace(/,/g, ''), 10);
       const high = parseInt(bareRange[2].replace(/,/g, ''), 10);
       if (low >= 10 && high <= 500000 && high > low) {
-        return Math.round((low + high) / 2);
+        return high;
       }
     }
 

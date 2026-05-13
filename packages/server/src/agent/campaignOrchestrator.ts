@@ -85,6 +85,16 @@ function buildLegacyFunnel(pipelineConfig: Record<string, any>): FunnelConfig {
   };
 }
 
+function recalcSegment(emp: number | null, icpConfig: ExtendedICPConfig): 'ENT' | 'MM' | 'SMB' {
+  if (emp == null) return 'MM';
+  const sd = icpConfig.segment_details;
+  const entMin = sd?.ENT?.employee_min ?? 651;
+  const mmMin = sd?.MM?.employee_min ?? 351;
+  if (emp >= entMin) return 'ENT';
+  if (emp >= mmMin) return 'MM';
+  return 'SMB';
+}
+
 // ── Qualify step: rules-based, zero-token filtering ──────────
 function executeQualifyStep(
   step: FunnelStepConfig,
@@ -454,7 +464,7 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
         return {
           company_name: l.company_name,
           domain: l.website || l.domain || '',
-          segment: l.segment || 'MM',
+          segment: recalcSegment(l.employee_count, icpConfig),
           employee_count_estimate: l.employee_count,
           hq_location: l.hq_location,
           founded_year: l.founded_year,
@@ -464,6 +474,7 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
           signals: candidateData.signals || [],
           sources: candidateData.sources || [],
           notes: candidateData.notes || '',
+          linkedin_company_url: l.linkedin_company_url || undefined,
         };
       }) as ResearchCandidate[];
 
@@ -791,6 +802,9 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
             candidates,
             { sourceOverrides: enrichSourceOverrides, skipSources }
           );
+          for (const c of enrichedCandidates) {
+            c.segment = recalcSegment(c.employee_count_estimate, icpConfig);
+          }
           if (enrichmentSummary.enriched_count > 0) {
             logger.finding('enrich', '', `Enriched ${enrichmentSummary.enriched_count}/${enrichmentSummary.total_candidates} candidates`, {
               sources_used: enrichmentSummary.sources_used,
@@ -1350,16 +1364,9 @@ async function researchCampaignPattern(
       domain: c.domain || (c as any).website || (c as any).url || '',
       segment: (() => {
         const emp = c.employee_count_estimate ?? (c as any).employees ?? (c as any).employee_count ?? null;
-        if (emp != null) {
-          const sd = icpConfig.segment_details;
-          const entMin = sd?.ENT?.employee_min ?? 651;
-          const mmMin = sd?.MM?.employee_min ?? 351;
-          if (emp >= entMin) return 'ENT';
-          if (emp >= mmMin) return 'MM';
-          return 'SMB';
-        }
-        return (['ENT', 'MM', 'SMB'].includes(c.segment) ? c.segment : 'MM');
-      })() as 'ENT' | 'MM' | 'SMB',
+        if (emp != null) return recalcSegment(emp, icpConfig);
+        return (['ENT', 'MM', 'SMB'].includes(c.segment) ? c.segment : 'MM') as 'ENT' | 'MM' | 'SMB';
+      })(),
       employee_count_estimate: c.employee_count_estimate ?? (c as any).employees ?? (c as any).employee_count ?? null,
       hq_location: c.hq_location ?? (c as any).location ?? (c as any).headquarters ?? null,
       founded_year: c.founded_year ?? (c as any).year_founded ?? null,
@@ -1468,7 +1475,7 @@ export async function rerunBriefForLead(leadId: string): Promise<{ success: bool
   const candidate: ResearchCandidate = {
     company_name: lead.company_name,
     domain: lead.website || lead.domain || '',
-    segment: lead.segment || 'MM',
+    segment: recalcSegment(lead.employee_count, icpConfig),
     employee_count_estimate: lead.employee_count,
     hq_location: lead.hq_location,
     founded_year: lead.founded_year,

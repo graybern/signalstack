@@ -421,7 +421,8 @@ packages/
 
 ### Prerequisites
 - Node.js 18+
-- An Anthropic API key
+- **Vertex AI**: A GCP project with Vertex AI enabled + `gcloud` CLI authenticated
+- **Or Anthropic API**: An Anthropic API key (`sk-ant-...`)
 
 ### Setup
 
@@ -430,14 +431,91 @@ packages/
 npm install
 
 # Set environment variables
-cp packages/server/.env.example packages/server/.env
-# Edit .env with your ANTHROPIC_API_KEY
+cp .env.example .env
+# Edit .env — see "AI Provider" sections below for Vertex AI vs Anthropic API
 
-# Start the API server (port 3001)
-npm run dev -w packages/server
+# Start both server (:3001) and frontend (:5173)
+npm run dev
+```
 
-# Start the frontend (port 5173) — in a separate terminal
-npm run dev -w packages/web
+### AI Provider: Vertex AI (recommended)
+
+SignalStack uses the Anthropic Vertex AI SDK (`@anthropic-ai/vertex-sdk`) to call Claude. This gives you access to Claude models through your existing GCP project without needing a separate Anthropic API key.
+
+**Required environment variables:**
+
+```bash
+CLOUD_ML_REGION=us-east5                          # Vertex AI region
+ANTHROPIC_VERTEX_PROJECT_ID=your-gcp-project-id   # GCP project with Vertex AI enabled
+```
+
+**Local development** — uses your existing gcloud session (Application Default Credentials):
+
+```bash
+# Authenticate with gcloud (one-time)
+gcloud auth application-default login
+
+# That's it — the Vertex SDK picks up ADC automatically
+```
+
+**Container / self-hosted deployment** — your local gcloud session isn't available inside the container. Two options:
+
+#### Option A: Use your existing ADC credentials (quick setup)
+
+If you've already run `gcloud auth application-default login` locally, you can mount those credentials directly:
+
+```bash
+# Find your ADC credentials file
+cat ~/.config/gcloud/application_default_credentials.json
+```
+
+Mount this file into the container and point the SDK to it:
+
+| Mount | Type | Container Path | Purpose |
+|-------|------|----------------|---------|
+| **SQLite data** | Volume (persistent) | `/app/packages/server/data` | Database survives container rebuilds |
+| **ADC credentials** | File (read-only) | `/app/secrets/sa-key.json` | Vertex AI authentication |
+
+Set these environment variables:
+
+```bash
+CLOUD_ML_REGION=us-east5
+ANTHROPIC_VERTEX_PROJECT_ID=your-gcp-project-id
+GOOGLE_APPLICATION_CREDENTIALS=/app/secrets/sa-key.json
+JWT_SECRET=<random-string>              # generate with: openssl rand -base64 32
+```
+
+> **Note:** ADC credentials use a refresh token tied to your Google account. If your session is revoked or expires, the container will lose Vertex AI access. For long-running production deployments, use a service account key (Option B).
+
+#### Option B: Create a service account key (production)
+
+```bash
+# 1. Create a service account (or use an existing one)
+gcloud iam service-accounts create signalstack-vertex \
+  --display-name="SignalStack Vertex AI"
+
+# 2. Grant the Vertex AI User role
+gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
+  --member="serviceAccount:signalstack-vertex@YOUR_PROJECT_ID.iam.gserviceaccount.com" \
+  --role="roles/aiplatform.user"
+
+# 3. Generate a key file
+gcloud iam service-accounts keys create sa-key.json \
+  --iam-account=signalstack-vertex@YOUR_PROJECT_ID.iam.gserviceaccount.com
+```
+
+Then configure the same two mounts and environment variables as Option A, using the generated `sa-key.json` as the credentials file.
+
+#### Using docker-compose
+
+If using `docker-compose`, both mounts and the env var are already configured in `docker-compose.yml`. Just set `GOOGLE_SA_KEY_PATH` to the path of your credentials file on the host (defaults to `./sa-key.json`).
+
+### AI Provider: Anthropic API (alternative)
+
+If you prefer to use the Anthropic API directly instead of Vertex AI:
+
+```bash
+ANTHROPIC_API_KEY=sk-ant-...   # No service account or GCP project needed
 ```
 
 ### First Run

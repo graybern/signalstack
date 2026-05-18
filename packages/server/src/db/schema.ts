@@ -616,6 +616,7 @@ function initSchema(db: Database.Database) {
     if (!newRunCols.find(c => c.name === 'run_type')) db.exec("ALTER TABLE pipeline_runs ADD COLUMN run_type TEXT DEFAULT 'pipeline'");
     if (!newRunCols.find(c => c.name === 'campaign_id')) db.exec('ALTER TABLE pipeline_runs ADD COLUMN campaign_id TEXT');
     if (!newRunCols.find(c => c.name === 'steps_run')) db.exec("ALTER TABLE pipeline_runs ADD COLUMN steps_run TEXT");
+    if (!newRunCols.find(c => c.name === 'target_lead_ids')) db.exec("ALTER TABLE pipeline_runs ADD COLUMN target_lead_ids TEXT");
     // Recreate indexes
     db.exec(`
       CREATE INDEX IF NOT EXISTS idx_runs_campaign_id ON pipeline_runs(campaign_id);

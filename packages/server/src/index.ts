@@ -140,6 +140,14 @@ if (userCount === 0) {
   console.log('Created default admin user (admin@example.com / admin123 — must change on first login)');
 }
 
+// Clean up stale pipeline runs (orphaned by server crash)
+const staleRuns = db.prepare(
+  "UPDATE pipeline_runs SET status = 'failed', completed_at = datetime('now'), error_message = 'Server restarted while run was in progress' WHERE status IN ('running', 'pending') AND started_at < datetime('now', '-2 hours')"
+).run();
+if (staleRuns.changes > 0) {
+  console.log(`[startup] Cleaned up ${staleRuns.changes} stale pipeline run(s)`);
+}
+
 // Seed role permissions on first run
 import { seedRolePermissions, ensureNewPermissions } from './auth/permissions.js';
 seedRolePermissions();

@@ -1,6 +1,7 @@
 import { createAIClient, getAIConfig, resolveModel } from '../config/vertexConfig.js';
 import { streamAICall } from './streamingAI.js';
 import { getScoringPrompt } from './prompts/scoring.js';
+import { withRetry } from './retry.js';
 import type { ExtendedICPConfig, ScoreBreakdown, FunnelStepConfig } from '../types/index.js';
 import type { ResearchCandidate } from './researcher.js';
 import type { TokenTracker } from './tokenTracker.js';
@@ -107,25 +108,29 @@ Score this company using the rubric. Apply the Evidence Density Modifier: ${sign
   const maxTok = stepConfig?.max_tokens || 4096;
 
   if (streamCtx) {
-    const result = await streamAICall({
-      model: model || aiConfig.defaultModel,
-      max_tokens: maxTok,
-      system: systemPrompt,
-      userMessage,
-      thinking_budget: 8000,
-      tracker,
-      context: { ...streamCtx, companyName: candidate.company_name },
-    });
+    const result = await withRetry(
+      () => streamAICall({
+        model: model || aiConfig.defaultModel,
+        max_tokens: maxTok,
+        system: systemPrompt,
+        userMessage,
+        thinking_budget: 8000,
+        tracker,
+        context: { ...streamCtx, companyName: candidate.company_name },
+      }),
+    );
     rawText = result.text;
     thinkingText = result.thinking;
   } else {
-    const response = await client.messages.create({
-      model: resolveModel(model || aiConfig.defaultModel, aiConfig.provider),
-      max_tokens: maxTok + 8000,
-      system: systemPrompt,
-      messages: [{ role: 'user', content: userMessage }],
-      thinking: { type: 'enabled', budget_tokens: 8000 },
-    } as any);
+    const response = await withRetry(
+      () => client.messages.create({
+        model: resolveModel(model || aiConfig.defaultModel, aiConfig.provider),
+        max_tokens: maxTok + 8000,
+        system: systemPrompt,
+        messages: [{ role: 'user', content: userMessage }],
+        thinking: { type: 'enabled', budget_tokens: 8000 },
+      } as any),
+    );
     if (tracker) tracker.addUsage(response);
     rawText = response.content.find((b: any) => b.type === 'text')?.text || '';
     thinkingText = response.content.find((b: any) => b.type === 'thinking')?.thinking || '';

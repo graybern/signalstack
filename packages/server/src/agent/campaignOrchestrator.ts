@@ -350,6 +350,7 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
     let scoredCandidates: { candidate: ResearchCandidate; score: ScoringResult }[] = [];
     const briefResults: { candidate: ResearchCandidate; score: ScoringResult; brief: BriefResult }[] = [];
     let feedbackCtx: FeedbackContext | null = null;
+    const failedLeads: { company: string; stage: 'score' | 'brief'; error: string }[] = [];
 
     // ── Intermediate persistence helpers ──
     const upsertLeadStage = db.prepare(
@@ -886,7 +887,8 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
           logger.phaseStart('score', `Scoring ${candidates.length} candidates against ICP (model: ${stepModel})...`);
           const scoreTracker = tracker.getTrackerForModel(stepModel);
           scoredCandidates = [];
-          for (const candidate of candidates) {
+          for (let ci = 0; ci < candidates.length; ci++) {
+            const candidate = candidates[ci];
             if (signal.aborted) throw new Error('Run cancelled by user');
             const leadId = getLeadId(candidate.company_name);
             if (targetLeadIds?.length) {
@@ -894,18 +896,45 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
             }
             emitProgress('score', candidate.company_name);
             logger.thinking('score', `Scoring ${candidate.company_name} against ICP criteria...`);
-            const score = await scoreCandidate(candidate, icpConfig, stepModel, scoreTracker, step.prompt_instructions, step, { runId, campaignId, phase: 'score' }, feedbackCtx);
-            scoredCandidates.push({ candidate, score });
-            if (score.reasoning) {
-              logger.thinking('score', `[${candidate.company_name}] ${score.reasoning.substring(0, 300)}${score.reasoning.length > 300 ? '...' : ''}`);
-            }
-            logger.finding('score', candidate.company_name, `Score: ${score.fit_score}/100 — ${score.fit_score_label}`, {
-              fit_score: score.fit_score,
-              label: score.fit_score_label,
-              confidence: score.confidence,
-            });
-            if (targetLeadIds?.length) {
-              eventBus.emit('lead.stage_rerun', { lead_id: leadId, company_name: candidate.company_name, stage: 'score', status: 'completed', message: `Score: ${score.fit_score}/100 — ${score.fit_score_label}`, run_id: runId });
+            try {
+              const score = await scoreCandidate(candidate, icpConfig, stepModel, scoreTracker, step.prompt_instructions, step, { runId, campaignId, phase: 'score' }, feedbackCtx);
+              scoredCandidates.push({ candidate, score });
+              if (score.reasoning) {
+                logger.thinking('score', `[${candidate.company_name}] ${score.reasoning.substring(0, 300)}${score.reasoning.length > 300 ? '...' : ''}`);
+              }
+              logger.finding('score', candidate.company_name, `Score: ${score.fit_score}/100 — ${score.fit_score_label}`, {
+                fit_score: score.fit_score,
+                label: score.fit_score_label,
+                confidence: score.confidence,
+              });
+              if (targetLeadIds?.length) {
+                eventBus.emit('lead.stage_rerun', { lead_id: leadId, company_name: candidate.company_name, stage: 'score', status: 'completed', message: `Score: ${score.fit_score}/100 — ${score.fit_score_label}`, run_id: runId });
+              }
+            } catch (scoreErr) {
+              const errMsg = scoreErr instanceof Error ? scoreErr.message : String(scoreErr);
+              logger.error('score', `Scoring failed for ${candidate.company_name} — will retry in recovery pass`, errMsg);
+              scoredCandidates.push({
+                candidate,
+                score: {
+                  fit_score: 0,
+                  fit_score_label: '1 star',
+                  confidence: 'low' as const,
+                  score_breakdown: {
+                    segment_scale_fit: { points: 0, evidence: ['Scoring failed — pending recovery'] },
+                    why_now_triggers: { points: 0, evidence: ['Scoring failed — pending recovery'] },
+                    remote_access_pain: { points: 0, evidence: ['Scoring failed — pending recovery'] },
+                    displacement_wedge: { points: 0, evidence: ['Scoring failed — pending recovery'] },
+                    vertical_playbook: { points: 0, evidence: ['Scoring failed — pending recovery'] },
+                    buyer_access_readiness: { points: 0, evidence: ['Scoring failed — pending recovery'] },
+                    penalties: [],
+                    total: 0,
+                  },
+                },
+              });
+              failedLeads.push({ company: candidate.company_name, stage: 'score', error: errMsg });
+              if (targetLeadIds?.length) {
+                eventBus.emit('lead.stage_rerun', { lead_id: leadId, company_name: candidate.company_name, stage: 'score', status: 'failed', message: `Scoring failed — will retry: ${errMsg}`, run_id: runId });
+              }
             }
           }
           logger.phaseComplete('score', `Scoring complete — ${scoredCandidates.length} candidates scored`, {
@@ -974,10 +1003,12 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
                 eventBus.emit('lead.brief_rerun', { lead_id: leadId, company_name: candidate.company_name, status: 'completed', message: `Brief generated for ${candidate.company_name}` });
               }
             } catch (briefErr) {
-              logger.error('brief', `Brief failed for ${candidate.company_name} — skipping`, briefErr instanceof Error ? briefErr.message : String(briefErr));
+              const errMsg = briefErr instanceof Error ? briefErr.message : String(briefErr);
+              logger.error('brief', `Brief failed for ${candidate.company_name} — will retry in recovery pass`, errMsg);
+              failedLeads.push({ company: candidate.company_name, stage: 'brief', error: errMsg });
               if (targetLeadIds?.length) {
-                eventBus.emit('lead.stage_rerun', { lead_id: leadId, company_name: candidate.company_name, stage: 'brief', status: 'failed', message: briefErr instanceof Error ? briefErr.message : 'Brief generation failed', run_id: runId });
-                eventBus.emit('lead.brief_rerun', { lead_id: leadId, company_name: candidate.company_name, status: 'failed', message: briefErr instanceof Error ? briefErr.message : 'Brief generation failed' });
+                eventBus.emit('lead.stage_rerun', { lead_id: leadId, company_name: candidate.company_name, stage: 'brief', status: 'failed', message: `Brief failed — will retry: ${errMsg}`, run_id: runId });
+                eventBus.emit('lead.brief_rerun', { lead_id: leadId, company_name: candidate.company_name, status: 'failed', message: `Brief failed — will retry: ${errMsg}` });
               }
             }
           }
@@ -991,6 +1022,133 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
         }
 
         case 'audit': {
+          // ── Recovery pass: retry failed/incomplete leads before auditing ──
+          const needsScoreRecovery = failedLeads.filter(f => f.stage === 'score');
+          const needsBriefRecovery = failedLeads.filter(f => f.stage === 'brief');
+          // Also detect implicitly failed briefs (parse errors that returned fallback data)
+          const implicitBriefFailures = briefResults
+            .filter(br => br.brief.brief_markdown?.includes('parsing error') || (br.brief.pain_hypotheses?.length === 0 && br.brief.outreach_strategy === ''))
+            .map(br => br.candidate.company_name);
+
+          const totalRecoveryNeeded = needsScoreRecovery.length + needsBriefRecovery.length + implicitBriefFailures.length;
+
+          if (totalRecoveryNeeded > 0 && !signal.aborted) {
+            logger.phaseStart('audit', `Recovery: retrying ${totalRecoveryNeeded} incomplete lead${totalRecoveryNeeded !== 1 ? 's' : ''}...`);
+            let recovered = 0;
+
+            const recoveryScoreModel = activeSteps.find(s => s.id === 'score')?.model || defaultModel;
+            const recoveryBriefModel = activeSteps.find(s => s.id === 'brief')?.model || defaultModel;
+            const recoveryScoreTracker = tracker.getTrackerForModel(recoveryScoreModel);
+            const recoveryBriefTracker = tracker.getTrackerForModel(recoveryBriefModel);
+            const briefStep = activeSteps.find(s => s.id === 'brief');
+            const scoreStep = activeSteps.find(s => s.id === 'score');
+
+            // Retry failed scores
+            for (const failed of needsScoreRecovery) {
+              if (signal.aborted) break;
+              const candidate = candidates.find(c => c.company_name === failed.company);
+              if (!candidate) continue;
+              const leadId = getLeadId(candidate.company_name);
+
+              logger.thinking('audit', `Retrying score for ${candidate.company_name}...`);
+              if (targetLeadIds?.length) {
+                eventBus.emit('lead.stage_rerun', { lead_id: leadId, company_name: candidate.company_name, stage: 'score', status: 'processing', message: `Recovery: retrying score...`, run_id: runId });
+              }
+              try {
+                const score = await scoreCandidate(candidate, icpConfig, recoveryScoreModel, recoveryScoreTracker, scoreStep?.prompt_instructions, scoreStep, { runId, campaignId, phase: 'score' }, feedbackCtx);
+                // Update the entry in scoredCandidates
+                const idx = scoredCandidates.findIndex(sc => sc.candidate.company_name === candidate.company_name);
+                if (idx !== -1) scoredCandidates[idx] = { candidate, score };
+                logger.finding('audit', candidate.company_name, `Score recovered: ${score.fit_score}/100 — ${score.fit_score_label}`, { fit_score: score.fit_score });
+                if (targetLeadIds?.length) {
+                  eventBus.emit('lead.stage_rerun', { lead_id: leadId, company_name: candidate.company_name, stage: 'score', status: 'completed', message: `Score recovered: ${score.fit_score}/100`, run_id: runId });
+                }
+                recovered++;
+
+                // Also generate brief for this newly-scored lead
+                const briefTone = briefStep?.outreach_tone || promptConfig?.outreach_tone;
+                logger.thinking('audit', `Generating brief for recovered lead ${candidate.company_name}...`);
+                try {
+                  const brief = await generateBrief(candidate, score, icpConfig, recoveryBriefModel, recoveryBriefTracker, briefStep?.prompt_instructions, briefTone, briefStep, { runId, campaignId, phase: 'brief' }, feedbackCtx);
+                  briefResults.push({ candidate, score, brief });
+                  logger.finding('audit', candidate.company_name, `Brief recovered — ${brief.personas?.length || 0} personas`, {});
+                } catch (briefRecErr) {
+                  logger.error('audit', `Brief recovery also failed for ${candidate.company_name}`, briefRecErr instanceof Error ? briefRecErr.message : String(briefRecErr));
+                }
+              } catch (scoreRecErr) {
+                logger.error('audit', `Score recovery failed for ${candidate.company_name} — completing with partial data`, scoreRecErr instanceof Error ? scoreRecErr.message : String(scoreRecErr));
+              }
+            }
+
+            // Retry failed briefs (leads that scored successfully but brief threw)
+            for (const failed of needsBriefRecovery) {
+              if (signal.aborted) break;
+              const scored = scoredCandidates.find(sc => sc.candidate.company_name === failed.company);
+              if (!scored) continue;
+              // Skip if this lead already got a brief from score recovery above
+              if (briefResults.some(br => br.candidate.company_name === failed.company)) continue;
+
+              const leadId = getLeadId(failed.company);
+              logger.thinking('audit', `Retrying brief for ${failed.company}...`);
+              if (targetLeadIds?.length) {
+                eventBus.emit('lead.stage_rerun', { lead_id: leadId, company_name: failed.company, stage: 'brief', status: 'processing', message: `Recovery: retrying brief...`, run_id: runId });
+              }
+              try {
+                const briefTone = briefStep?.outreach_tone || promptConfig?.outreach_tone;
+                const brief = await generateBrief(scored.candidate, scored.score, icpConfig, recoveryBriefModel, recoveryBriefTracker, briefStep?.prompt_instructions, briefTone, briefStep, { runId, campaignId, phase: 'brief' }, feedbackCtx);
+                briefResults.push({ candidate: scored.candidate, score: scored.score, brief });
+                logger.finding('audit', failed.company, `Brief recovered — ${brief.personas?.length || 0} personas`, {});
+                if (targetLeadIds?.length) {
+                  eventBus.emit('lead.stage_rerun', { lead_id: leadId, company_name: failed.company, stage: 'brief', status: 'completed', message: `Brief recovered — ${brief.personas?.length || 0} personas`, run_id: runId });
+                }
+                recovered++;
+              } catch (briefRecErr) {
+                logger.error('audit', `Brief recovery failed for ${failed.company} — completing with partial data`, briefRecErr instanceof Error ? briefRecErr.message : String(briefRecErr));
+              }
+            }
+
+            // Retry implicitly failed briefs (parse errors that returned fallback data)
+            for (const company of implicitBriefFailures) {
+              if (signal.aborted) break;
+              const existingIdx = briefResults.findIndex(br => br.candidate.company_name === company);
+              if (existingIdx === -1) continue;
+              const { candidate, score } = briefResults[existingIdx];
+              const leadId = getLeadId(company);
+
+              logger.thinking('audit', `Retrying incomplete brief for ${company}...`);
+              if (targetLeadIds?.length) {
+                eventBus.emit('lead.stage_rerun', { lead_id: leadId, company_name: company, stage: 'brief', status: 'processing', message: `Recovery: retrying incomplete brief...`, run_id: runId });
+              }
+              try {
+                const briefTone = briefStep?.outreach_tone || promptConfig?.outreach_tone;
+                const brief = await generateBrief(candidate, score, icpConfig, recoveryBriefModel, recoveryBriefTracker, briefStep?.prompt_instructions, briefTone, briefStep, { runId, campaignId, phase: 'brief' }, feedbackCtx);
+                if (brief.pain_hypotheses?.length > 0 || brief.outreach_strategy) {
+                  briefResults[existingIdx] = { candidate, score, brief };
+                  logger.finding('audit', company, `Brief improved — ${brief.personas?.length || 0} personas, ${brief.pain_hypotheses?.length || 0} hypotheses`, {});
+                  recovered++;
+                } else {
+                  logger.thinking('audit', `Retry for ${company} produced similar quality — keeping original`);
+                }
+              } catch {
+                logger.thinking('audit', `Brief retry failed for ${company} — keeping original`);
+              }
+            }
+
+            // Re-persist recovered results
+            if (recovered > 0) {
+              const briefScoreMap = new Map(briefResults.map(br => [br.candidate.company_name, br.score]));
+              const briefMap = new Map(briefResults.map(br => [br.candidate.company_name, br.brief]));
+              const briefThinkingMap = new Map(briefResults.map(br => [br.candidate.company_name, { scorer: br.score.reasoning || undefined, brief: br.brief.thinking || undefined }]));
+              persistCandidates('briefed', briefResults.map(br => br.candidate), briefScoreMap, briefMap, briefThinkingMap);
+            }
+
+            const stillFailed = totalRecoveryNeeded - recovered;
+            logger.phaseComplete('audit', `Recovery complete: ${recovered}/${totalRecoveryNeeded} leads recovered${stillFailed > 0 ? ` (${stillFailed} remain incomplete)` : ''}`, {
+              recovered,
+              still_failed: stillFailed,
+            });
+          }
+
           if (briefResults.length === 0) {
             logger.thinking('audit', 'No briefs to audit — skipping');
             break;

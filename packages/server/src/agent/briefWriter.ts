@@ -1,6 +1,7 @@
 import { createAIClient, getAIConfig, resolveModel } from '../config/vertexConfig.js';
 import { streamAICall } from './streamingAI.js';
 import { getBriefPrompt } from './prompts/brief.js';
+import { withRetry } from './retry.js';
 import type {
   ExtendedICPConfig,
   PainHypothesis,
@@ -176,27 +177,31 @@ ${candidate.key_people?.length ? `## Key People Found\nReal people identified at
   let thinkingText = '';
 
   if (streamCtx) {
-    const result = await streamAICall({
-      model: model || aiConfig.defaultModel,
-      max_tokens: stepConfig?.max_tokens || 16384,
-      system: systemPrompt,
-      userMessage,
-      thinking_budget: 10000,
-      tracker,
-      context: { ...streamCtx, companyName: candidate.company_name },
-    });
+    const result = await withRetry(
+      () => streamAICall({
+        model: model || aiConfig.defaultModel,
+        max_tokens: stepConfig?.max_tokens || 16384,
+        system: systemPrompt,
+        userMessage,
+        thinking_budget: 10000,
+        tracker,
+        context: { ...streamCtx, companyName: candidate.company_name },
+      }),
+    );
     rawText = result.text;
     thinkingText = result.thinking;
   } else {
     const maxTok = stepConfig?.max_tokens || 16384;
-    const stream = client.messages.stream({
-      model: resolveModel(model || aiConfig.defaultModel, aiConfig.provider),
-      max_tokens: maxTok + 10000,
-      system: systemPrompt,
-      messages: [{ role: 'user', content: userMessage }],
-      thinking: { type: 'enabled', budget_tokens: 10000 },
-    } as any);
-    const finalMessage = await stream.finalMessage();
+    const finalMessage = await withRetry(async () => {
+      const stream = client.messages.stream({
+        model: resolveModel(model || aiConfig.defaultModel, aiConfig.provider),
+        max_tokens: maxTok + 10000,
+        system: systemPrompt,
+        messages: [{ role: 'user', content: userMessage }],
+        thinking: { type: 'enabled', budget_tokens: 10000 },
+      } as any);
+      return stream.finalMessage();
+    });
     if (tracker) tracker.addUsage(finalMessage);
     rawText = finalMessage.content.find((b: any) => b.type === 'text')?.text || '';
     thinkingText = finalMessage.content.find((b: any) => b.type === 'thinking')?.thinking || '';

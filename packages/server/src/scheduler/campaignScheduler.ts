@@ -3,6 +3,7 @@ import { CronExpressionParser } from 'cron-parser';
 import { v4 as uuid } from 'uuid';
 import { getDb } from '../db/schema.js';
 import { runCampaign } from '../agent/campaignOrchestrator.js';
+import { eventBus } from '../events/eventBus.js';
 
 const activeTasks = new Map<string, ScheduledTask>();
 
@@ -90,6 +91,12 @@ function detectMissedRuns(campaignId: string, campaignName: string, cronExpressi
 
     if (inserted > 0) {
       console.warn(`[scheduler] Recorded ${inserted} missed run(s) for "${campaignName}" since ${since.toISOString()}`);
+      eventBus.emit('campaign.missed', {
+        campaign_id: campaignId,
+        campaign_name: campaignName,
+        missed_count: inserted,
+        missed_times: missed.slice(-5).map(d => d.toISOString()),
+      });
     }
   } catch (err) {
     console.error(`[scheduler] Failed to detect missed runs for "${campaignName}":`, err);

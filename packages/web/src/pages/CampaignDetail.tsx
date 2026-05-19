@@ -2163,9 +2163,10 @@ const DEST_TYPES = [
 ];
 
 const FORMAT_OPTIONS = [
-  { value: 'slack', label: 'Slack', description: 'Flat key-value for Workflow Builder' },
+  { value: 'slack', label: 'Slack', description: 'Rich cards via incoming webhook' },
   { value: 'teams', label: 'Teams', description: 'Adaptive Card via incoming webhook' },
   { value: 'json', label: 'JSON', description: 'Structured JSON for generic endpoints' },
+  { value: 'generic', label: 'Generic', description: 'Flat key-value pairs for any webhook' },
 ];
 
 function destTypeConfig(type: string) {
@@ -2197,7 +2198,7 @@ function FeedTab({
     const id = crypto.randomUUID();
     const tc = destTypeConfig(type);
     let config: any;
-    if (type === 'webhook') config = { url: '', format: 'json', method: 'POST', headers: {}, secret: '' };
+    if (type === 'webhook') config = { url: '', format: 'slack', method: 'POST', headers: {}, secret: '' };
     else config = {};
     const dest: any = {
       id, type, label: tc.label, enabled: true,
@@ -2400,7 +2401,7 @@ function FeedTab({
                       <>
                         <div>
                           <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Payload Format</label>
-                          <div className="grid grid-cols-3 gap-2">
+                          <div className="grid grid-cols-2 gap-2">
                             {FORMAT_OPTIONS.map(f => (
                               <button
                                 key={f.value}
@@ -2424,11 +2425,16 @@ function FeedTab({
                             value={dest.config?.url || ''}
                             onChange={e => updateDest(dest.id, { config: { ...dest.config, url: e.target.value } })}
                             className="w-full px-3 py-1.5 border border-gray-300 rounded-lg text-sm font-mono"
-                            placeholder={dest.config?.format === 'slack' ? 'https://hooks.slack.com/triggers/T.../...' : dest.config?.format === 'teams' ? 'https://outlook.office.com/webhook/...' : 'https://your-endpoint.com/webhook'}
+                            placeholder={dest.config?.format === 'slack' ? 'https://hooks.slack.com/services/T.../B.../...' : dest.config?.format === 'teams' ? 'https://outlook.office.com/webhook/...' : 'https://your-endpoint.com/webhook'}
                           />
                           {dest.config?.format === 'slack' && (
                             <p className="text-xs text-gray-400 mt-1">
-                              Create a <a href="https://slack.com/help/articles/360041352714" target="_blank" rel="noopener noreferrer" className="text-brand-600 hover:text-brand-700 underline">Workflow</a> with a webhook trigger. Variables: <code className="bg-gray-100 px-1 rounded">campaign</code>, <code className="bg-gray-100 px-1 rounded">status</code>, <code className="bg-gray-100 px-1 rounded">headline</code>, <code className="bg-gray-100 px-1 rounded">summary</code>, <code className="bg-gray-100 px-1 rounded">lead_count</code>, <code className="bg-gray-100 px-1 rounded">top_leads</code>, <code className="bg-gray-100 px-1 rounded">link</code>
+                              Create an <a href="https://api.slack.com/messaging/webhooks" target="_blank" rel="noopener noreferrer" className="text-brand-600 hover:text-brand-700 underline">incoming webhook</a> in your Slack workspace. Notifications appear as color-coded attachment cards.
+                            </p>
+                          )}
+                          {dest.config?.format === 'generic' && (
+                            <p className="text-xs text-gray-400 mt-1">
+                              Flat key-value payload compatible with Slack <a href="https://slack.com/help/articles/360041352714" target="_blank" rel="noopener noreferrer" className="text-brand-600 hover:text-brand-700 underline">Workflow Builder</a> and similar tools. Keys: <code className="bg-gray-100 px-1 rounded">campaign</code>, <code className="bg-gray-100 px-1 rounded">status</code>, <code className="bg-gray-100 px-1 rounded">headline</code>, <code className="bg-gray-100 px-1 rounded">summary</code>, <code className="bg-gray-100 px-1 rounded">lead_count</code>, <code className="bg-gray-100 px-1 rounded">top_leads</code>, <code className="bg-gray-100 px-1 rounded">link</code>
                             </p>
                           )}
                         </div>

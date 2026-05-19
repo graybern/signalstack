@@ -436,6 +436,35 @@ function initSchema(db: Database.Database) {
     }
   }
 
+  // Migrate notification format 'slack' → 'generic' (old Workflow Builder format)
+  const campColsSchemaVer = db.prepare("PRAGMA table_info(campaigns)").all() as { name: string }[];
+  if (!campColsSchemaVer.find(c => c.name === 'notification_schema_version')) {
+    db.exec("ALTER TABLE campaigns ADD COLUMN notification_schema_version INTEGER DEFAULT 0");
+    const rows = db.prepare(
+      "SELECT id, notification_destinations FROM campaigns WHERE notification_destinations IS NOT NULL AND notification_destinations != '[]'"
+    ).all() as { id: string; notification_destinations: string }[];
+    for (const row of rows) {
+      try {
+        const dests = JSON.parse(row.notification_destinations) as any[];
+        let changed = false;
+        const migrated = dests.map(d => {
+          if (d.type === 'webhook' && d.config?.format === 'slack') {
+            changed = true;
+            return { ...d, config: { ...d.config, format: 'generic' } };
+          }
+          return d;
+        });
+        if (changed) {
+          db.prepare("UPDATE campaigns SET notification_destinations = ?, notification_schema_version = 1 WHERE id = ?")
+            .run(JSON.stringify(migrated), row.id);
+        } else {
+          db.prepare("UPDATE campaigns SET notification_schema_version = 1 WHERE id = ?").run(row.id);
+        }
+      } catch { /* skip malformed JSON */ }
+    }
+    db.exec("UPDATE campaigns SET notification_schema_version = 1 WHERE notification_schema_version = 0");
+  }
+
   // Indexes on campaign_id and inbound columns (must come after ALTERs)
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_leads_campaign_id ON leads(campaign_id);

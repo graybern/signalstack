@@ -423,7 +423,7 @@ export interface CampaignExclusionConfig {
 // ── Notification Destinations ──────────────────────────────────────
 
 export type NotificationDestinationType = 'webhook' | 'rss';
-export type WebhookPayloadFormat = 'slack' | 'teams' | 'json';
+export type WebhookPayloadFormat = 'slack' | 'teams' | 'json' | 'generic';
 
 export interface NotificationDestinationBase {
   id: string;

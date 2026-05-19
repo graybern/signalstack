@@ -112,6 +112,12 @@ export interface EventPayloads {
     partial_leads: number;
     run_type?: string;
   };
+  'campaign.missed': {
+    campaign_id: string;
+    campaign_name: string;
+    missed_count: number;
+    missed_times: string[];
+  };
   'pipeline.started': {
     run_id: string;
     triggered_by: string;

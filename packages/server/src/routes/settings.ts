@@ -270,6 +270,23 @@ router.get('/timezone', authenticate, (_req: AuthRequest, res: Response) => {
   res.json({ timezone: tz, abbreviation: abbr, utc_offset: utcOffset, timezones: timezoneList });
 });
 
+// GET /settings/webhook_default_campaign — Default campaign for webhook leads
+router.get('/webhook_default_campaign', authenticate, (_req: AuthRequest, res: Response) => {
+  const db = getDb();
+  const row = db.prepare("SELECT value FROM app_settings WHERE key = 'webhook_default_campaign'").get() as { value: string } | undefined;
+  res.json({ value: row ? JSON.parse(row.value) : null });
+});
+
+// PUT /settings/webhook_default_campaign — Set default campaign for webhook leads
+router.put('/webhook_default_campaign', authenticate, (req: AuthRequest, res: Response) => {
+  const { value } = req.body;
+  const db = getDb();
+  db.prepare(
+    "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('webhook_default_campaign', ?)"
+  ).run(JSON.stringify(value || ''));
+  res.json({ success: true });
+});
+
 function getTimezoneOffsetMs(zone: string, date: Date): number {
   const utcStr = date.toLocaleString('en-US', { timeZone: 'UTC' });
   const zoneStr = date.toLocaleString('en-US', { timeZone: zone });

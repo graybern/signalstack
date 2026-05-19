@@ -235,9 +235,8 @@ router.post('/single', authenticate, requireMember, (req: AuthRequest, res: Resp
   });
 });
 
-// ── POST /webhook — External webhook ──────────────────────────
+// ── POST /webhook — External webhook (rewired to campaign orchestrator) ──
 router.post('/webhook', async (req, res: Response) => {
-  // API key auth (not JWT)
   const apiKey = req.headers['x-api-key'] as string;
   if (!apiKey) return res.status(401).json({ error: 'Missing x-api-key header' });
 
@@ -248,40 +247,73 @@ router.post('/webhook', async (req, res: Response) => {
   }
 
   const body = req.body;
-  const leads: InboundLeadInput[] = Array.isArray(body) ? body : [body];
+  // Support both { leads: [...], campaign_id? } and bare array formats
+  const rawLeads: InboundLeadInput[] = Array.isArray(body) ? body : (Array.isArray(body.leads) ? body.leads : [body]);
+  const requestCampaignId = body.campaign_id as string | undefined;
 
-  const validLeads = leads.filter(l => l.company_name);
+  const validLeads = rawLeads.filter(l => l.company_name);
   if (validLeads.length === 0) return res.status(400).json({ error: 'No valid leads (company_name required)' });
 
-  const importId = uuid();
-  const runId = uuid();
-
-  // Create pipeline run (no user for webhook)
-  db.prepare(
-    "INSERT INTO pipeline_runs (id, status, started_at, created_at) VALUES (?, 'running', datetime('now'), datetime('now'))"
-  ).run(runId);
-
-  // Create import record
-  db.prepare(
-    "INSERT INTO inbound_imports (id, source_type, row_count) VALUES (?, 'inbound_webhook', ?)"
-  ).run(importId, validLeads.length);
-
-  // Create shell leads
-  for (const lead of validLeads) {
-    if (lead.domain) {
-      lead.domain = lead.domain.replace(/^https?:\/\//, '').replace(/\/.*$/, '').toLowerCase();
+  // Resolve campaign: request override > default setting
+  let campaignId = requestCampaignId;
+  if (!campaignId) {
+    const setting = db.prepare("SELECT value FROM app_settings WHERE key = 'webhook_default_campaign'").get() as { value: string } | undefined;
+    if (setting) {
+      try { campaignId = JSON.parse(setting.value); } catch { campaignId = setting.value; }
     }
-    createShellLead(lead, importId, runId, 'inbound_webhook');
   }
 
-  // Fire-and-forget
-  processInboundImport(importId).catch(err => {
+  if (!campaignId) {
+    return res.status(400).json({ error: 'No campaign_id provided and no default campaign configured. Set a default campaign in Connect > Webhook settings.' });
+  }
+
+  const campaign = db.prepare("SELECT id, name FROM campaigns WHERE id = ? AND status = 'active'").get(campaignId) as any;
+  if (!campaign) return res.status(400).json({ error: 'Campaign not found or not active' });
+
+  // Check for active run conflict
+  const activeRun = db.prepare(
+    "SELECT id FROM pipeline_runs WHERE campaign_id = ? AND status IN ('pending','running') LIMIT 1"
+  ).get(campaignId) as any;
+  if (activeRun) return res.status(409).json({ error: 'A run is already in progress for this campaign' });
+
+  // Create leads associated with the campaign
+  const leadIds: string[] = [];
+  for (const lead of validLeads) {
+    const domain = lead.domain?.replace(/^https?:\/\//, '').replace(/\/.*$/, '').toLowerCase() || null;
+
+    // Upsert: skip if domain already exists in campaign
+    if (domain) {
+      const existing = db.prepare('SELECT id FROM leads WHERE campaign_id = ? AND domain = ?').get(campaignId, domain) as any;
+      if (existing) { leadIds.push(existing.id); continue; }
+    }
+
+    const leadId = uuid();
+    db.prepare(
+      `INSERT INTO leads (id, campaign_id, company_name, domain, segment, fit_score, pipeline_stage, lead_status, source_type, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, 0, 'discovered', 'pending', 'webhook_research', datetime('now'), datetime('now'))`
+    ).run(leadId, campaignId, lead.company_name, domain, lead.segment?.toUpperCase() || 'MM');
+    leadIds.push(leadId);
+  }
+
+  // Run through campaign orchestrator
+  const { runCampaign } = await import('../agent/campaignOrchestrator.js');
+  const steps = ['enrich', 'score', 'brief', 'audit'];
+
+  const runPromise = runCampaign(campaignId, null, steps, leadIds, 'webhook_research');
+  runPromise.catch(err => {
     console.error('[inbound] Webhook processing error:', err);
   });
 
+  await new Promise(resolve => setTimeout(resolve, 50));
+  const newRun = db.prepare(
+    "SELECT id FROM pipeline_runs WHERE campaign_id = ? ORDER BY created_at DESC LIMIT 1"
+  ).get(campaignId) as any;
+
   res.json({
-    import_id: importId,
-    lead_count: validLeads.length,
+    run_id: newRun?.id || null,
+    lead_count: leadIds.length,
+    campaign_id: campaignId,
+    campaign_name: campaign.name,
     status: 'processing',
   });
 });

@@ -1,17 +1,9 @@
 /**
- * Inbound Lead Orchestrator
- *
- * Processes imported leads (CSV, manual, webhook) through the same
- * enrichment → scoring → brief pipeline as outbound research.
- *
- * Flow:
- * 1. Load shell leads from DB (status = 'imported')
- * 2. Convert to ResearchCandidate format
- * 3. Enrich with all enabled data sources
- * 4. Score each candidate against ICP
- * 5. Generate brief + personas
- * 6. Check signal convergence with active campaigns
- * 7. Update lead records with results
+ * @deprecated — This orchestrator is superseded by the campaign orchestrator (campaignOrchestrator.ts).
+ * All new research flows (quick research, batch research, webhook research) now route through
+ * runCampaign() which provides activity logging, abort support, SSE progress events, and funnel
+ * config integration. This file is kept for backward compatibility with any in-flight imports
+ * created before the migration but should not be called by new code.
  */
 
 import { v4 as uuidv4 } from 'uuid';

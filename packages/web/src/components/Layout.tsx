@@ -5,7 +5,6 @@ import {
   Target,
   History,
   Download,
-  Upload,
   Users,
   Settings,
   LogOut,
@@ -13,6 +12,7 @@ import {
   ClipboardList,
   Search,
   Building2,
+  Link2,
 } from 'lucide-react';
 import { permissions } from '../utils/permissions';
 
@@ -40,7 +40,7 @@ export function Layout() {
         { to: '/campaigns', icon: Target, label: 'Campaigns' },
         { to: '/leads', icon: Users, label: 'Leads' },
         { to: '/runs', icon: History, label: 'Run History' },
-        ...(permissions.canRunResearch(role) ? [{ to: '/research', icon: Search, label: 'Quick Research' }] : []),
+        ...(permissions.canRunResearch(role) ? [{ to: '/research', icon: Search, label: 'Research' }] : []),
         ...(permissions.canViewActivity(role) ? [{ to: '/activity', icon: ClipboardList, label: 'Activity Log' }] : []),
         ...(permissions.canViewCustomers(role) ? [{ to: '/customers', icon: Building2, label: 'Win Book' }] : []),
       ],
@@ -48,8 +48,8 @@ export function Layout() {
     ...(permissions.canViewConnect(role) ? [{
       label: 'Connect',
       items: [
-        { to: '/import', icon: Download, label: 'Import' },
-        ...(permissions.canExport(role) ? [{ to: '/export', icon: Upload, label: 'Export' }] : []),
+        { to: '/connect', icon: Link2, label: 'Connect' },
+        ...(permissions.canExport(role) ? [{ to: '/export', icon: Download, label: 'Export' }] : []),
       ],
     }] : []),
   ];

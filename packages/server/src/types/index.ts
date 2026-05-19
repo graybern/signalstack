@@ -42,7 +42,7 @@ export interface PipelineRun {
   created_at: string;
 }
 
-export type SourceType = 'outbound_research' | 'outbound_campaign' | 'inbound_csv' | 'inbound_manual' | 'inbound_webhook';
+export type SourceType = 'outbound_research' | 'outbound_campaign' | 'inbound_csv' | 'inbound_manual' | 'inbound_webhook' | 'quick_research' | 'batch_research' | 'webhook_research';
 export type LeadStatus = 'imported' | 'enriching' | 'scored' | 'qualified' | 'disqualified' | 'contacted' | 'won' | 'lost' | 'meeting_booked' | 'closed_won' | 'closed_lost' | 'customer' | 'stalled' | 'nurture';
 
 export interface Lead {

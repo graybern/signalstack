@@ -131,7 +131,8 @@ export default function App() {
             <Route path="activity" element={<ActivityLog />} />
             <Route path="customers" element={<Customers />} />
             {/* Connect */}
-            <Route path="import" element={<Inbound />} />
+            <Route path="connect" element={<Inbound />} />
+            <Route path="import" element={<Navigate to="/connect" replace />} />
             <Route path="export" element={<ExportPage />} />
             {/* Settings (from user dropdown) */}
             <Route path="settings/org" element={<Settings tab="org" />} />

@@ -32,7 +32,12 @@ function getCampaignBaseUrl(campaignId: string): string {
   return (row?.notification_base_url || '').replace(/\/$/, '');
 }
 
-function campaignLink(baseUrl: string, campaignId: string): string {
+function runLink(baseUrl: string, runId: string): string {
+  if (!baseUrl) return '';
+  return `${baseUrl}/runs/${runId}`;
+}
+
+function campaignRunsLink(baseUrl: string, campaignId: string): string {
   if (!baseUrl) return '';
   return `${baseUrl}/campaigns/${campaignId}?tab=runs`;
 }
@@ -187,10 +192,11 @@ function buildGenericTest(campaignName: string, campaignId: string, link: string
 
 // ── Slack incoming webhook payloads (attachments format) ─────────
 
-function slackAttachment(color: string, pretext: string, fields: { title: string; value: string; short: boolean }[], link: string, ts?: number): any {
+function slackAttachment(color: string, pretext: string, fields: { title: string; value: string; short: boolean }[], link: string, linkLabel?: string, ts?: number): any {
   const attachment: any = { color, pretext, fields, footer: 'SignalStack', ts: ts || Math.floor(Date.now() / 1000) };
   if (link) {
-    attachment.fields = [...fields, { title: '', value: `<${link}|View in Dashboard>`, short: false }];
+    const label = linkLabel || 'View in Dashboard';
+    attachment.fields = [...fields, { title: '', value: `<${link}|${label}>`, short: false }];
   }
   return { attachments: [attachment] };
 }
@@ -213,7 +219,7 @@ function buildSlackCompleted(campaignName: string, campaignId: string, runId: st
     { title: 'Avg Score', value: scoreToStars(avgScore), short: true },
     { title: 'Segments', value: segmentSummary || 'None', short: true },
     { title: 'Top Leads', value: topLeadValue || 'None', short: false },
-  ], link);
+  ], link, 'View Leads');
 }
 
 function buildSlackFailed(campaignName: string, error: string, link: string, runType?: string): any {
@@ -221,7 +227,7 @@ function buildSlackFailed(campaignName: string, error: string, link: string, run
   return slackAttachment('#E01E5A', `:x: *Campaign Failed${rerun}: ${campaignName}*`, [
     { title: 'Error', value: error || 'Pipeline run failed. Check the dashboard for details.', short: false },
     { title: 'Time', value: new Date().toLocaleString(), short: true },
-  ], link);
+  ], link, 'View Run');
 }
 
 function buildSlackCancelled(campaignName: string, link: string, runType?: string): any {
@@ -229,7 +235,7 @@ function buildSlackCancelled(campaignName: string, link: string, runType?: strin
   return slackAttachment('#FF9900', `:no_entry_sign: *Campaign Cancelled${rerun}: ${campaignName}*`, [
     { title: 'Status', value: 'Manually cancelled', short: true },
     { title: 'Time', value: new Date().toLocaleString(), short: true },
-  ], link);
+  ], link, 'View Run');
 }
 
 function buildSlackMissed(campaignName: string, missedCount: number, missedTimes: string[], link: string): any {
@@ -238,14 +244,14 @@ function buildSlackMissed(campaignName: string, missedCount: number, missedTimes
     { title: 'Missed Runs', value: String(missedCount), short: true },
     { title: 'Most Recent', value: mostRecent, short: true },
     { title: 'Reason', value: 'Server was not running at scheduled time', short: false },
-  ], link);
+  ], link, 'View Run History');
 }
 
 function buildSlackTest(campaignName: string, campaignId: string, link: string, runId?: string): any {
   if (runId) return buildSlackCompleted(campaignName, campaignId, runId, link);
   return slackAttachment('#4A90D9', `:bell: *Webhook Connected: ${campaignName}*`, [
     { title: 'Status', value: 'Notifications will appear here when campaign runs complete.', short: false },
-  ], link);
+  ], link, 'View Campaign');
 }
 
 // ── Structured JSON webhook payloads ─────────────────────────────
@@ -412,37 +418,39 @@ async function deliver(dest: NotificationDestination, payload: any): Promise<{ o
 
 type EventType = 'completed' | 'failed' | 'cancelled' | 'missed';
 
-function buildPayload(dest: NotificationDestination, eventType: EventType, data: any, link: string): any {
+function buildPayload(dest: NotificationDestination, eventType: EventType, data: any, baseUrl: string): any {
   if (dest.type === 'rss') return null;
   const { campaign_name, campaign_id, run_id, run_type } = data;
   const format = dest.config.format || 'json';
+  const rLink = run_id ? runLink(baseUrl, run_id) : '';
+  const cLink = campaignRunsLink(baseUrl, campaign_id);
 
   if (format === 'slack') {
-    if (eventType === 'completed') return buildSlackCompleted(campaign_name, campaign_id, run_id, link, run_type);
-    if (eventType === 'failed') return buildSlackFailed(campaign_name, data.error, link, run_type);
-    if (eventType === 'missed') return buildSlackMissed(campaign_name, data.missed_count, data.missed_times, link);
-    return buildSlackCancelled(campaign_name, link, run_type);
+    if (eventType === 'completed') return buildSlackCompleted(campaign_name, campaign_id, run_id, rLink, run_type);
+    if (eventType === 'failed') return buildSlackFailed(campaign_name, data.error, rLink, run_type);
+    if (eventType === 'missed') return buildSlackMissed(campaign_name, data.missed_count, data.missed_times, cLink);
+    return buildSlackCancelled(campaign_name, rLink, run_type);
   }
 
   if (format === 'generic') {
-    if (eventType === 'completed') return buildGenericCompleted(campaign_name, campaign_id, run_id, link, run_type);
-    if (eventType === 'failed') return buildGenericFailed(campaign_name, data.error, link, run_type);
-    if (eventType === 'missed') return buildGenericMissed(campaign_name, data.missed_count, data.missed_times, link);
-    return buildGenericCancelled(campaign_name, link, run_type);
+    if (eventType === 'completed') return buildGenericCompleted(campaign_name, campaign_id, run_id, rLink, run_type);
+    if (eventType === 'failed') return buildGenericFailed(campaign_name, data.error, rLink, run_type);
+    if (eventType === 'missed') return buildGenericMissed(campaign_name, data.missed_count, data.missed_times, cLink);
+    return buildGenericCancelled(campaign_name, rLink, run_type);
   }
 
   if (format === 'teams') {
-    if (eventType === 'completed') return buildTeamsCompleted(campaign_name, run_id, link, run_type);
-    if (eventType === 'failed') return buildTeamsFailed(campaign_name, data.error, link, run_type);
-    if (eventType === 'missed') return buildTeamsMissed(campaign_name, data.missed_count, data.missed_times, link);
-    return buildTeamsCancelled(campaign_name, link, run_type);
+    if (eventType === 'completed') return buildTeamsCompleted(campaign_name, run_id, rLink, run_type);
+    if (eventType === 'failed') return buildTeamsFailed(campaign_name, data.error, rLink, run_type);
+    if (eventType === 'missed') return buildTeamsMissed(campaign_name, data.missed_count, data.missed_times, cLink);
+    return buildTeamsCancelled(campaign_name, rLink, run_type);
   }
 
   // json format
-  if (eventType === 'completed') return buildWebhookCompleted(campaign_name, campaign_id, run_id, data.lead_count, data.estimated_cost, link, run_type);
-  if (eventType === 'failed') return buildWebhookFailed(campaign_name, campaign_id, run_id, data.error, link, run_type);
-  if (eventType === 'missed') return buildWebhookMissed(campaign_name, campaign_id, data.missed_count, data.missed_times, link);
-  return buildWebhookCancelled(campaign_name, campaign_id, run_id, link, run_type);
+  if (eventType === 'completed') return buildWebhookCompleted(campaign_name, campaign_id, run_id, data.lead_count, data.estimated_cost, rLink, run_type);
+  if (eventType === 'failed') return buildWebhookFailed(campaign_name, campaign_id, run_id, data.error, rLink, run_type);
+  if (eventType === 'missed') return buildWebhookMissed(campaign_name, campaign_id, data.missed_count, data.missed_times, cLink);
+  return buildWebhookCancelled(campaign_name, campaign_id, run_id, rLink, run_type);
 }
 
 async function fanOut(campaignId: string, eventType: EventType, data: any) {
@@ -450,11 +458,10 @@ async function fanOut(campaignId: string, eventType: EventType, data: any) {
   if (destinations.length === 0) return;
 
   const baseUrl = getCampaignBaseUrl(campaignId);
-  const link = campaignLink(baseUrl, campaignId);
 
   const results = await Promise.allSettled(
     destinations.map(dest => {
-      const payload = buildPayload(dest, eventType, data, link);
+      const payload = buildPayload(dest, eventType, data, baseUrl);
       return deliver(dest, payload);
     })
   );
@@ -500,22 +507,23 @@ export async function sendTestNotification(campaignId: string, destinationId: st
   if (dest.type === 'rss') return { ok: true };
 
   const baseUrl = getCampaignBaseUrl(campaignId);
-  const link = campaignLink(baseUrl, campaignId);
 
   const lastRun = db.prepare(
     "SELECT id FROM pipeline_runs WHERE campaign_id = ? AND status = 'completed' ORDER BY completed_at DESC LIMIT 1"
   ).get(campaignId) as any;
 
+  const testLink = lastRun?.id ? runLink(baseUrl, lastRun.id) : campaignRunsLink(baseUrl, campaignId);
+
   const format = dest.type === 'webhook' ? (dest.config.format || 'json') : 'json';
   let payload: any;
   if (format === 'slack') {
-    payload = buildSlackTest(campaign.name, campaignId, link, lastRun?.id);
+    payload = buildSlackTest(campaign.name, campaignId, testLink, lastRun?.id);
   } else if (format === 'generic') {
-    payload = buildGenericTest(campaign.name, campaignId, link, lastRun?.id);
+    payload = buildGenericTest(campaign.name, campaignId, testLink, lastRun?.id);
   } else if (format === 'teams') {
-    payload = buildTeamsTest(campaign.name, link, lastRun?.id);
+    payload = buildTeamsTest(campaign.name, testLink, lastRun?.id);
   } else {
-    payload = buildWebhookTest(campaign.name, campaignId, link, lastRun?.id);
+    payload = buildWebhookTest(campaign.name, campaignId, testLink, lastRun?.id);
   }
 
   return deliver(dest, payload);

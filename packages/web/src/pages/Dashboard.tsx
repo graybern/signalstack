@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api/client';
-import { timeAgo as timeAgoUtil, formatDate, formatDateShort } from '../utils/dates';
+import { timeAgo as timeAgoUtil, formatDate, formatDateShort, formatDateTimeWithWeekday } from '../utils/dates';
 import { useEventStream } from '../hooks/useEventStream';
 import { useAuthContext } from '../App';
 import { permissions } from '../utils/permissions';
@@ -109,7 +109,7 @@ interface UpcomingRun {
   campaign_id: string;
   campaign_name: string;
   schedule_cron: string;
-  next_run?: string;
+  next_run_at: string | null;
 }
 
 // ── Constants ──────────────────────────────────────────────────
@@ -178,7 +178,6 @@ export function Dashboard() {
   const [sourceData, setSourceData] = useState<SourceData | null>(null);
   const [verticals, setVerticals] = useState<VerticalData[]>([]);
   const [upcomingRuns, setUpcomingRuns] = useState<UpcomingRun[]>([]);
-  const [serverTzAbbr, setServerTzAbbr] = useState('');
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [recError, setRecError] = useState<string | null>(null);
@@ -200,10 +199,9 @@ export function Dashboard() {
       api('/analytics/recommendations?status=pending'),
       api('/analytics/sources').catch(() => null),
       api('/analytics/verticals').catch(() => ({ verticals: [] })),
-      api('/campaigns?schedule_enabled=1').catch(() => []),
-      api('/settings/timezone').catch(() => ({ abbreviation: '' })),
+      api('/runs/upcoming').catch(() => []),
     ])
-      .then(([ov, rn, tr, sg, fb, rc, src, vt, scheduledCampaigns, tz]) => {
+      .then(([ov, rn, tr, sg, fb, rc, src, vt, upcoming]) => {
         setOverview(ov);
         setRuns(Array.isArray(rn) ? rn : (rn?.runs || []));
         setTrends(tr.leads_by_day || []);
@@ -212,16 +210,7 @@ export function Dashboard() {
         setRecommendations(Array.isArray(rc) ? rc : []);
         setSourceData(src);
         setVerticals(vt?.verticals || []);
-        setServerTzAbbr((tz as any)?.abbreviation || '');
-        const upcoming = (Array.isArray(scheduledCampaigns) ? scheduledCampaigns : [])
-          .filter((c: any) => c.schedule_enabled && c.schedule_cron)
-          .map((c: any) => ({
-            campaign_id: c.id,
-            campaign_name: c.name,
-            schedule_cron: c.schedule_cron,
-          }))
-          .slice(0, 3);
-        setUpcomingRuns(upcoming);
+        setUpcomingRuns((Array.isArray(upcoming) ? upcoming : []).slice(0, 3));
       })
       .catch(err => setError(err.message))
       .finally(() => setLoading(false));
@@ -379,8 +368,7 @@ export function Dashboard() {
                 <Link key={ur.campaign_id} to={`/campaigns/${ur.campaign_id}`} className="block px-3 py-2.5 rounded-lg border border-gray-100 hover:border-brand-200 hover:bg-brand-50/30 transition-colors">
                   <p className="text-sm font-medium text-gray-900 mb-1">{ur.campaign_name}</p>
                   <p className="text-xs text-gray-500">
-                    {describeCron(ur.schedule_cron)}
-                    {serverTzAbbr && <span className="text-gray-400"> {serverTzAbbr}</span>}
+                    {ur.next_run_at ? `Next: ${formatDateTimeWithWeekday(ur.next_run_at)}` : describeCron(ur.schedule_cron)}
                   </p>
                 </Link>
               ))}

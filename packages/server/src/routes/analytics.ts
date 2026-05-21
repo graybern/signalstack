@@ -140,8 +140,8 @@ router.get('/feedback', authenticate, (_req: AuthRequest, res: Response) => {
          ELSE '0-39'
        END as range,
        COUNT(*) as total,
-       SUM(CASE WHEN current_feedback IN ('good_fit_response','good_fit_booked') THEN 1 ELSE 0 END) as positive,
-       SUM(CASE WHEN current_feedback = 'bad_fit' THEN 1 ELSE 0 END) as negative
+       SUM(CASE WHEN current_feedback IN ('good_fit_response','good_fit_booked','closed_won') THEN 1 ELSE 0 END) as positive,
+       SUM(CASE WHEN current_feedback IN ('bad_fit','closed_lost') THEN 1 ELSE 0 END) as negative
      FROM leads WHERE current_feedback IS NOT NULL
      GROUP BY range ORDER BY range DESC`
   ).all();

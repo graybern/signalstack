@@ -680,7 +680,9 @@ function initSchema(db: Database.Database) {
         progress_json TEXT,
         run_type      TEXT DEFAULT 'pipeline',
         campaign_id   TEXT,
-        steps_run     TEXT
+        steps_run     TEXT,
+        target_lead_ids TEXT,
+        batch_context TEXT
       );
       INSERT OR IGNORE INTO pipeline_runs_new(${colList})
         SELECT ${colList} FROM pipeline_runs;

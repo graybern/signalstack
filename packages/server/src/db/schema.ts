@@ -621,8 +621,9 @@ function initSchema(db: Database.Database) {
   const runsTableInfo = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='pipeline_runs'").get() as { sql: string } | undefined;
   if (runsTableInfo && !runsTableInfo.sql.includes('cancelled')) {
     db.pragma('foreign_keys = OFF');
+    db.exec(`DROP TABLE IF EXISTS pipeline_runs_new`);
     db.exec(`
-      CREATE TABLE IF NOT EXISTS pipeline_runs_new (
+      CREATE TABLE pipeline_runs_new (
         id            TEXT PRIMARY KEY,
         triggered_by  TEXT REFERENCES users(id),
         status        TEXT DEFAULT 'pending' CHECK(status IN ('pending','running','completed','failed','cancelled')),
@@ -663,8 +664,9 @@ function initSchema(db: Database.Database) {
     const cols = db.prepare("PRAGMA table_info(pipeline_runs)").all() as { name: string }[];
     const colNames = cols.map(c => c.name);
     const colList = colNames.join(', ');
+    db.exec(`DROP TABLE IF EXISTS pipeline_runs_new`);
     db.exec(`
-      CREATE TABLE IF NOT EXISTS pipeline_runs_new (
+      CREATE TABLE pipeline_runs_new (
         id            TEXT PRIMARY KEY,
         triggered_by  TEXT REFERENCES users(id),
         status        TEXT DEFAULT 'pending' CHECK(status IN ('pending','running','completed','failed','cancelled','missed')),

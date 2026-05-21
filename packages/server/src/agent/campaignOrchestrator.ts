@@ -928,6 +928,7 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
               }
             } catch (scoreErr) {
               const errMsg = scoreErr instanceof Error ? scoreErr.message : String(scoreErr);
+              console.error(`[scorer] ${candidate.company_name}: ${errMsg}`);
               logger.error('score', `Scoring failed for ${candidate.company_name} — will retry in recovery pass`, errMsg);
               scoredCandidates.push({
                 candidate,
@@ -1020,6 +1021,7 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
               }
             } catch (briefErr) {
               const errMsg = briefErr instanceof Error ? briefErr.message : String(briefErr);
+              console.error(`[brief] ${candidate.company_name}: ${errMsg}`);
               logger.error('brief', `Brief failed for ${candidate.company_name} — will retry in recovery pass`, errMsg);
               failedLeads.push({ company: candidate.company_name, stage: 'brief', error: errMsg });
               if (targetLeadIds?.length) {
@@ -1089,10 +1091,14 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
                   briefResults.push({ candidate, score, brief });
                   logger.finding('audit', candidate.company_name, `Brief recovered — ${brief.personas?.length || 0} personas`, {});
                 } catch (briefRecErr) {
-                  logger.error('audit', `Brief recovery also failed for ${candidate.company_name}`, briefRecErr instanceof Error ? briefRecErr.message : String(briefRecErr));
+                  const errMsg = briefRecErr instanceof Error ? briefRecErr.message : String(briefRecErr);
+                  console.error(`[recovery-brief] ${candidate.company_name}: ${errMsg}`);
+                  logger.error('audit', `Brief recovery also failed for ${candidate.company_name}`, errMsg);
                 }
               } catch (scoreRecErr) {
-                logger.error('audit', `Score recovery failed for ${candidate.company_name} — completing with partial data`, scoreRecErr instanceof Error ? scoreRecErr.message : String(scoreRecErr));
+                const errMsg = scoreRecErr instanceof Error ? scoreRecErr.message : String(scoreRecErr);
+                console.error(`[recovery-score] ${candidate.company_name}: ${errMsg}`);
+                logger.error('audit', `Score recovery failed for ${candidate.company_name} — completing with partial data`, errMsg);
               }
             }
 
@@ -1119,7 +1125,9 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
                 }
                 recovered++;
               } catch (briefRecErr) {
-                logger.error('audit', `Brief recovery failed for ${failed.company} — completing with partial data`, briefRecErr instanceof Error ? briefRecErr.message : String(briefRecErr));
+                const errMsg = briefRecErr instanceof Error ? briefRecErr.message : String(briefRecErr);
+                console.error(`[recovery-brief] ${failed.company}: ${errMsg}`);
+                logger.error('audit', `Brief recovery failed for ${failed.company} — completing with partial data`, errMsg);
               }
             }
 

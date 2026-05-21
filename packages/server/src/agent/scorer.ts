@@ -67,7 +67,9 @@ export async function scoreCandidate(
     .join('; ');
 
   const companyName = icpConfig.company_context?.company_name || 'the';
-  const userMessage = `Score the following prospect company against ${companyName}'s ICP.
+  let userMessage: string;
+  try {
+  userMessage = `Score the following prospect company against ${companyName}'s ICP.
 
 ## Company Information
 - **Company:** ${candidate.company_name}
@@ -98,9 +100,13 @@ ${candidate.notes}
 - **Target Verticals:** ${verticals.join(', ')}
 - **Tech Signals:** ${techSignals.join(', ')}
 - **Competitors to Displace:** ${competitors.join(', ')}
-- **Segment Config:** VPN users range ${icpConfig.segments[candidate.segment].vpn_users_min}–${icpConfig.segments[candidate.segment].vpn_users_max}
+- **Segment Config:** VPN users range ${icpConfig.segments[candidate.segment]?.vpn_users_min ?? 'N/A'}–${icpConfig.segments[candidate.segment]?.vpn_users_max ?? 'N/A'}
 ${valueProps.length > 0 ? `- **Value Propositions:** ${valueProps.join(', ')}\n` : ''}${differentiators.length > 0 ? `- **Key Differentiators:** ${differentiators.join(', ')}\n` : ''}${campaignSignals.length > 0 ? `- **Campaign Target Signals:** ${campaignSignals.join(', ')}\n` : ''}${icpConfig.campaign_value_prop_angle ? `- **Campaign Value Prop Angle:** ${icpConfig.campaign_value_prop_angle}\n` : ''}${buyerPersonaSummary ? `- **Target Buyer Roles:** ${buyerPersonaSummary}\n` : ''}
 Score this company using the rubric. Apply the Evidence Density Modifier: ${signalCount} signals from ${sourceCount} sources should directly influence where you place scores within each tier. Cite specific signal counts in each category's evidence array.${promptInstructions ? `\n\n## Additional Instructions\n${promptInstructions}` : ''}${feedbackContext ? `\n\n## Historical Campaign Patterns (from ${feedbackContext.feedbackCount} reviewed leads)\n${feedbackContext.scoring_adjustments}\n\n### Known Bad-Fit Patterns\n${feedbackContext.known_bad_patterns}` : ''}`;
+  } catch (buildErr) {
+    console.error(`[scorer] Failed to build scoring prompt for ${candidate.company_name}:`, buildErr);
+    throw buildErr;
+  }
 
   let rawText: string;
   let thinkingText = '';

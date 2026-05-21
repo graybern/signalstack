@@ -238,16 +238,24 @@ function executeQualifyStep(
     }
 
     qualified.push(c);
-    if (qualified.length >= limit) break;
   }
 
-  logger.phaseComplete('qualify', `Qualification complete — ${qualified.length} qualified, ${disqualified} disqualified`, {
+  // Rank all qualified candidates by signal count, then take top N
+  qualified.sort((a, b) => b.signals.length - a.signals.length);
+  const selected = qualified.slice(0, limit);
+
+  if (qualified.length > limit) {
+    logger.thinking('qualify', `Ranked ${qualified.length} qualified candidates by signal count, keeping top ${limit}`);
+  }
+
+  logger.phaseComplete('qualify', `Qualification complete — ${qualified.length} qualified, ${disqualified} disqualified, ${selected.length} selected`, {
     qualified: qualified.length,
     disqualified,
+    selected: selected.length,
     limit,
   });
 
-  return qualified;
+  return selected;
 }
 
 export async function runCampaign(campaignId: string, triggeredBy: string | null, requestedSteps?: string[], targetLeadIds?: string[], runType?: string): Promise<string> {
@@ -736,9 +744,10 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
             if (signal?.aborted) break;
           }
 
-          // Apply candidate limit
+          // Rank by signal count and apply candidate limit
           if (step.candidate_limit && candidates.length > step.candidate_limit) {
-            logger.thinking('discover', `Limiting to ${step.candidate_limit} of ${candidates.length} discovered candidates`);
+            candidates.sort((a, b) => b.signals.length - a.signals.length);
+            logger.thinking('discover', `Ranked ${candidates.length} candidates by signal count, keeping top ${step.candidate_limit}`);
             candidates = candidates.slice(0, step.candidate_limit);
           }
           logger.phaseComplete('discover', `Discovery complete — ${candidates.length} candidates${attempt > 1 ? ` (${attempt} attempts)` : ''}`, {
@@ -815,7 +824,8 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
 
         case 'enrich': {
           if (step.candidate_limit && candidates.length > step.candidate_limit) {
-            logger.thinking('enrich', `Limiting enrichment to top ${step.candidate_limit} of ${candidates.length} candidates`);
+            candidates.sort((a, b) => b.signals.length - a.signals.length);
+            logger.thinking('enrich', `Ranked ${candidates.length} candidates by signal count, enriching top ${step.candidate_limit}`);
             candidates = candidates.slice(0, step.candidate_limit);
           }
           emitProgress('enrich');

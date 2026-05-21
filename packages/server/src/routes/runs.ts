@@ -74,7 +74,7 @@ router.get('/', authenticate, (req: AuthRequest, res: Response) => {
 router.get('/upcoming', authenticate, (_req: AuthRequest, res: Response) => {
   const db = getDb();
   const campaigns = db.prepare(
-    `SELECT id, name, schedule_cron, schedule_enabled
+    `SELECT id, name, schedule_cron, schedule_enabled, schedule_timezone
      FROM campaigns
      WHERE schedule_enabled = 1 AND status = 'active'
      ORDER BY name`
@@ -97,9 +97,10 @@ router.get('/upcoming', authenticate, (_req: AuthRequest, res: Response) => {
     let is_overdue = false;
 
     try {
-      const expr = CronExpressionParser.parse(c.schedule_cron);
+      const cronOpts = c.schedule_timezone ? { currentDate: new Date(), tz: c.schedule_timezone } : {};
+      const expr = CronExpressionParser.parse(c.schedule_cron, cronOpts);
       next_run_at = expr.next().toISOString();
-      const prevExpr = CronExpressionParser.parse(c.schedule_cron);
+      const prevExpr = CronExpressionParser.parse(c.schedule_cron, cronOpts);
       last_expected_at = prevExpr.prev().toISOString();
 
       const lastRunTime = lastRun?.completed_at || lastRun?.created_at;

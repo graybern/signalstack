@@ -53,14 +53,24 @@ function initSchema(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_invites_email ON invites(email);
 
     CREATE TABLE IF NOT EXISTS pipeline_runs (
-      id            TEXT PRIMARY KEY,
-      triggered_by  TEXT REFERENCES users(id),
-      status        TEXT DEFAULT 'pending' CHECK(status IN ('pending','running','completed','failed')),
-      started_at    TEXT,
-      completed_at  TEXT,
-      lead_count    INTEGER DEFAULT 0,
-      error_message TEXT,
-      created_at    TEXT DEFAULT (datetime('now'))
+      id              TEXT PRIMARY KEY,
+      triggered_by    TEXT REFERENCES users(id),
+      status          TEXT DEFAULT 'pending' CHECK(status IN ('pending','running','completed','failed','cancelled','missed')),
+      started_at      TEXT,
+      completed_at    TEXT,
+      lead_count      INTEGER DEFAULT 0,
+      error_message   TEXT,
+      created_at      TEXT DEFAULT (datetime('now')),
+      input_tokens    INTEGER DEFAULT 0,
+      output_tokens   INTEGER DEFAULT 0,
+      estimated_cost  REAL DEFAULT 0,
+      model_used      TEXT,
+      progress_json   TEXT,
+      run_type        TEXT DEFAULT 'pipeline',
+      campaign_id     TEXT,
+      steps_run       TEXT,
+      target_lead_ids TEXT,
+      batch_context   TEXT
     );
 
     CREATE TABLE IF NOT EXISTS leads (

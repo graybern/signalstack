@@ -48,6 +48,7 @@ router.get('/', authenticate, (req: AuthRequest, res: Response) => {
   const {
     run_id, segment, campaign_id, source_type, lead_status, feedback,
     needs_reoutreach, min_score, max_score, min_signals, date_from, date_to,
+    search,
     page = '1', limit = '50', sort = 'fit_score', order = 'desc',
   } = req.query;
   const db = getDb();
@@ -68,6 +69,11 @@ router.get('/', authenticate, (req: AuthRequest, res: Response) => {
   if (min_signals) { conditions.push('l.signal_count >= ?'); params.push(parseInt(min_signals as string)); }
   if (date_from) { conditions.push('l.created_at >= ?'); params.push(date_from); }
   if (date_to) { conditions.push('l.created_at <= ?'); params.push(date_to + ' 23:59:59'); }
+  if (search) {
+    const term = `%${search}%`;
+    conditions.push('(l.company_name LIKE ? OR l.domain LIKE ?)');
+    params.push(term, term);
+  }
 
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   const allowedSorts = ['fit_score', 'company_name', 'segment', 'created_at', 'lead_status', 'convergence_score', 'current_feedback', 'next_outreach_date'];

@@ -49,7 +49,7 @@ function isFuzzyDuplicate(name1: string, name2: string): boolean {
 }
 
 function parseCampaignRow(row: any): CampaignParsed {
-  return {
+  const parsed: CampaignParsed = {
     ...row,
     example_companies: JSON.parse(row.example_companies || '[]'),
     target_signals: JSON.parse(row.target_signals || '[]'),
@@ -66,6 +66,12 @@ function parseCampaignRow(row: any): CampaignParsed {
     rss_enabled: row.rss_enabled || 0,
     funnel_config: row.funnel_config ? JSON.parse(row.funnel_config) : null,
   };
+
+  if (parsed.funnel_config?.steps && !parsed.funnel_config.steps.some((s: any) => s.id === 'audit')) {
+    parsed.funnel_config.steps.push({ id: 'audit', enabled: true, audit_quality_threshold: 60 });
+  }
+
+  return parsed;
 }
 
 /**

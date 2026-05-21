@@ -240,6 +240,14 @@ export function FunnelConfigurator({
   onRunStep?: (stepId: string) => void;
   readOnly?: boolean;
 }) {
+  const missingAudit = value.steps && !value.steps.some(s => s.id === 'audit');
+  if (missingAudit) {
+    value = { ...value, steps: [...value.steps, { id: 'audit' as const, enabled: true, audit_quality_threshold: 60 }] };
+  }
+  useEffect(() => {
+    if (missingAudit) onChange(value);
+  }, [missingAudit]);
+
   const [expandedStep, setExpandedStep] = useState<string | null>(null);
   const [searchProviderStatus, setSearchProviderStatus] = useState<{
     serper: 'configured' | 'unconfigured';

@@ -250,6 +250,19 @@ export function RunHistory() {
     }
   };
 
+  const [cancellingRunId, setCancellingRunId] = useState<string | null>(null);
+  const handleCancelRun = async (runId: string) => {
+    setCancellingRunId(runId);
+    try {
+      await api.post(`/runs/${runId}/cancel`);
+      loadRuns();
+    } catch (err: any) {
+      console.error('Cancel failed:', err);
+    } finally {
+      setCancellingRunId(null);
+    }
+  };
+
   const activeRuns = runs.filter(r => r.status === 'running' || r.status === 'pending');
   const finishedRuns = runs.filter(r => r.status !== 'running' && r.status !== 'pending');
 
@@ -453,7 +466,7 @@ export function RunHistory() {
           <div className="space-y-2">
             {activeRuns.map(run => (
               <div key={run.id}>
-                <ActiveRunCard run={run} liveProgress={liveProgress[run.id]} onViewActivity={() => setActivityRunId(activityRunId === run.id ? null : run.id)} />
+                <ActiveRunCard run={run} liveProgress={liveProgress[run.id]} onViewActivity={() => setActivityRunId(activityRunId === run.id ? null : run.id)} onCancel={() => handleCancelRun(run.id)} isCancelling={cancellingRunId === run.id} />
                 {activityRunId === run.id && (
                   <div className="mt-2">
                     <ActivityPanel runId={run.id} onClose={() => setActivityRunId(null)} />
@@ -603,7 +616,7 @@ const PHASE_LABELS: Record<string, string> = {
   processing: 'Processing',
 };
 
-function ActiveRunCard({ run, liveProgress, onViewActivity }: { run: Run; liveProgress?: ProgressData; onViewActivity?: () => void }) {
+function ActiveRunCard({ run, liveProgress, onViewActivity, onCancel, isCancelling }: { run: Run; liveProgress?: ProgressData; onViewActivity?: () => void; onCancel?: () => void; isCancelling?: boolean }) {
   const fallbackProgress = run.progress_json ? JSON.parse(run.progress_json) : null;
   const progress = liveProgress || fallbackProgress;
 
@@ -663,6 +676,11 @@ function ActiveRunCard({ run, liveProgress, onViewActivity }: { run: Run; livePr
           {onViewActivity && (
             <button onClick={onViewActivity} className="flex items-center gap-1 text-xs text-amber-700 hover:text-amber-800 mt-1">
               <Eye className="w-3 h-3" /> View Activity
+            </button>
+          )}
+          {onCancel && (
+            <button onClick={onCancel} disabled={isCancelling} className="flex items-center gap-1 text-xs text-red-600 hover:text-red-700 disabled:opacity-50 mt-1">
+              <X className="w-3 h-3" /> {isCancelling ? 'Cancelling...' : 'Cancel Run'}
             </button>
           )}
         </div>

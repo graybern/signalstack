@@ -144,6 +144,14 @@ export function Leads() {
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(search);
+      setPage(1);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [search]);
   const [segment, setSegment] = useState('');
   const [feedbackFilter, setFeedbackFilter] = useState('');
   const [campaignId, setCampaignId] = useState('');
@@ -236,7 +244,7 @@ export function Leads() {
     if (selectedLeads.size > 0) {
       setSelectedLeads(new Set());
     } else {
-      setSelectedLeads(new Set(filteredLeads.slice(0, MAX_RERUN_SELECTION).map(l => l.id)));
+      setSelectedLeads(new Set(leads.slice(0, MAX_RERUN_SELECTION).map(l => l.id)));
     }
   };
 
@@ -263,7 +271,7 @@ export function Leads() {
   };
 
   const handleBulkRerun = async () => {
-    const selected = filteredLeads.filter(l => selectedLeads.has(l.id));
+    const selected = leads.filter(l => selectedLeads.has(l.id));
     const byCampaign = new Map<string, string[]>();
     const orphans: string[] = [];
     for (const lead of selected) {
@@ -349,6 +357,7 @@ export function Leads() {
       if (minSignals) params.set('min_signals', minSignals);
       if (dateFrom) params.set('date_from', dateFrom);
       if (dateTo) params.set('date_to', dateTo);
+      if (debouncedSearch) params.set('search', debouncedSearch);
       const data = await api(`/leads?${params}`);
       setLeads((data as any).leads);
       setTotal((data as any).total);
@@ -357,7 +366,7 @@ export function Leads() {
     } finally {
       setLoading(false);
     }
-  }, [page, segment, feedbackFilter, campaignId, runId, sort, order, needsReoutreach, minScore, maxScore, minSignals, dateFrom, dateTo]);
+  }, [page, segment, feedbackFilter, campaignId, runId, sort, order, needsReoutreach, minScore, maxScore, minSignals, dateFrom, dateTo, debouncedSearch]);
 
   useEffect(() => { fetchLeads(); }, [fetchLeads]);
 
@@ -400,13 +409,6 @@ export function Leads() {
   };
 
   const totalPages = Math.ceil(total / PAGE_SIZE);
-
-  const filteredLeads = search
-    ? leads.filter(l =>
-        l.company_name.toLowerCase().includes(search.toLowerCase()) ||
-        l.domain?.toLowerCase().includes(search.toLowerCase())
-      )
-    : leads;
 
   const getFeedback = (lead: Lead) => {
     // Prefer denormalized current_feedback, fallback to feedback array
@@ -679,7 +681,7 @@ export function Leads() {
                 <th className="px-3 py-3 w-8">
                   <input
                     type="checkbox"
-                    checked={selectedLeads.size > 0 && (selectedLeads.size === filteredLeads.length || selectedLeads.size >= MAX_RERUN_SELECTION)}
+                    checked={selectedLeads.size > 0 && (selectedLeads.size === leads.length || selectedLeads.size >= MAX_RERUN_SELECTION)}
                     onChange={toggleSelectAll}
                     className="rounded border-gray-300 text-brand-600"
                   />
@@ -709,10 +711,10 @@ export function Leads() {
           <tbody className="divide-y divide-gray-100">
             {loading ? (
               <tr><td colSpan={showCheckboxes ? 9 : 8} className="px-4 py-12 text-center text-gray-500">Loading leads...</td></tr>
-            ) : filteredLeads.length === 0 ? (
+            ) : leads.length === 0 ? (
               <tr><td colSpan={showCheckboxes ? 9 : 8} className="px-4 py-12 text-center text-gray-500">{search ? 'No leads match your search' : 'No leads found'}</td></tr>
             ) : (
-              filteredLeads.map(lead => {
+              leads.map(lead => {
                 const feedback = getFeedback(lead);
                 const signalCount = lead.signal_count || 0;
                 return (

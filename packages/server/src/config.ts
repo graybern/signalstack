@@ -16,7 +16,7 @@ export const config = {
     ? process.env.CLOUD_ML_REGION
     : 'us-east5',
   vertexProjectId: process.env.ANTHROPIC_VERTEX_PROJECT_ID || '',
-  defaultModel: process.env.CLAUDE_MODEL || 'claude-opus-4-6@default',
+  defaultModel: process.env.CLAUDE_MODEL || 'claude-opus-4-6',
   dbPath: process.env.DB_PATH || path.resolve(__dirname, '../data/pipeline.db'),
   webDistPath: path.resolve(__dirname, '../../web/dist'),
   cronEnabled: process.env.CRON_ENABLED !== 'false',

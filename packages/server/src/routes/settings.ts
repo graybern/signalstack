@@ -28,7 +28,7 @@ function getDefault(field: VertexField): string {
   switch (field) {
     case 'project_id': return '';
     case 'region': return 'us-east5';
-    case 'default_model': return 'claude-opus-4-6@default';
+    case 'default_model': return 'claude-opus-4-6';
   }
 }
 

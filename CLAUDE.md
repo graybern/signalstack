@@ -59,7 +59,7 @@ All pipeline behavior is configured through the **Funnel** (FunnelConfigurator c
 
 ## Key Patterns
 
-- **Vertex AI SDK**: Model IDs use `@` separator — `claude-sonnet-4-6@default`, `claude-opus-4-6@default`, `claude-haiku-4-5@20251001`
+- **Vertex AI SDK**: Model IDs — `claude-sonnet-4-6`, `claude-opus-4-6` (4.6+ use dateless IDs), `claude-haiku-4-5@20251001` (older models use `@date`)
 - **SSE Events**: Real-time progress via EventBus → `campaign.started`, `campaign.progress`, `campaign.completed`, `campaign.failed`, `campaign.cancelled`
 - **Run Cancellation**: AbortController in runRegistry.ts, signal checked between steps + wired to stream.abort() mid-flight
 - **Token Tracking**: MultiModelTokenTracker aggregates costs across models; child trackers fire parent callbacks

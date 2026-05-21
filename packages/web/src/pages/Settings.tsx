@@ -2098,8 +2098,8 @@ const VERTEX_REGIONS = [
 ];
 
 const VERTEX_MODELS = [
-  { value: 'claude-sonnet-4-6@default', label: 'Claude Sonnet 4.6 (fast, cost-effective)' },
-  { value: 'claude-opus-4-6@default', label: 'Claude Opus 4.6 (highest quality)' },
+  { value: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6 (fast, cost-effective)' },
+  { value: 'claude-opus-4-6', label: 'Claude Opus 4.6 (highest quality)' },
   { value: 'claude-haiku-4-5@20251001', label: 'Claude Haiku 4.5 (fastest, cheapest)' },
 ];
 
@@ -2135,7 +2135,7 @@ function VertexAISettings() {
       setVertexForm({
         project_id: data.vertex.project_id?.value || '',
         region: data.vertex.region?.value || 'us-east5',
-        default_model: data.vertex.default_model?.value || 'claude-sonnet-4-6@default',
+        default_model: data.vertex.default_model?.value || 'claude-sonnet-4-6',
       });
     } catch {
       try {
@@ -2144,7 +2144,7 @@ function VertexAISettings() {
         setVertexForm({
           project_id: data.project_id?.value || '',
           region: data.region?.value || 'us-east5',
-          default_model: data.default_model?.value || 'claude-sonnet-4-6@default',
+          default_model: data.default_model?.value || 'claude-sonnet-4-6',
         });
       } catch { /* endpoint may not exist */ }
     } finally { setLoading(false); }
@@ -2163,7 +2163,7 @@ function VertexAISettings() {
       if (provider === 'vertex') {
         Object.assign(body, vertexForm);
       }
-      body.default_model = vertexForm.default_model || 'claude-opus-4-6@default';
+      body.default_model = vertexForm.default_model || 'claude-opus-4-6';
       await api('/settings/ai', { method: 'PUT', body: JSON.stringify(body) });
       setMessage({ type: 'success', text: `AI provider updated to ${provider === 'vertex' ? 'Vertex AI' : 'Anthropic API'}` });
       await loadConfig();
@@ -2338,7 +2338,7 @@ function VertexAISettings() {
             )}
           </div>
           <select
-            value={vertexForm.default_model || 'claude-sonnet-4-6@default'}
+            value={vertexForm.default_model || 'claude-sonnet-4-6'}
             onChange={e => setVertexForm({ ...vertexForm, default_model: e.target.value })}
             className="w-full px-3 py-2 text-sm border border-gray-200 rounded bg-white"
           >

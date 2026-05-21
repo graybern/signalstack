@@ -79,7 +79,7 @@ function parseCampaignRow(row: any): CampaignParsed {
  * Used when campaign.funnel_config is null (backward compat).
  */
 function buildLegacyFunnel(pipelineConfig: Record<string, any>): FunnelConfig {
-  const model = pipelineConfig.model || 'claude-opus-4-6@default';
+  const model = pipelineConfig.model || 'claude-opus-4-6';
   return {
     version: 1,
     steps: [

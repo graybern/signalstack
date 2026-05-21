@@ -2022,8 +2022,8 @@ function ConfigureTab({
                   { id: 'discover', enabled: true, model: 'claude-haiku-4-5@20251001', max_tokens: 16384, candidate_limit: 50, source_strategy: 'search_augmented' as const, search_max_queries: 8, search_max_results_per_query: 5 },
                   { id: 'qualify', enabled: true, candidate_limit: 20, qualification_criteria: [], disqualification_criteria: [] },
                   { id: 'enrich', enabled: true, candidate_limit: 15 },
-                  { id: 'score', enabled: true, model: 'claude-sonnet-4-6@default', max_tokens: 2048, candidate_limit: 10 },
-                  { id: 'brief', enabled: true, model: 'claude-opus-4-6@default', max_tokens: 16384, candidate_limit: 10 },
+                  { id: 'score', enabled: true, model: 'claude-sonnet-4-6', max_tokens: 2048, candidate_limit: 10 },
+                  { id: 'brief', enabled: true, model: 'claude-opus-4-6', max_tokens: 16384, candidate_limit: 10 },
                   { id: 'audit', enabled: true, audit_quality_threshold: 60 },
                 ],
               }}

@@ -41,18 +41,18 @@ export function getAIConfig(): AIConfig {
 
 export function resolveModel(modelId: string, provider: AIProvider): string {
   if (provider === 'anthropic') {
-    // vertex format: claude-sonnet-4-6@default → anthropic format: claude-sonnet-4-6-latest
     if (modelId.includes('@')) {
       return modelId.replace(/@.*$/, '-latest');
     }
     return modelId;
   }
-  // Vertex: if someone stored an Anthropic-style model ID, convert it
-  if (!modelId.includes('@') && !modelId.includes('-latest')) {
-    return modelId + '@default';
+  // Vertex AI: @default is not a valid version tag — strip it
+  // (4.6+ models use dateless IDs; older models use @date like @20251001)
+  if (modelId.endsWith('@default')) {
+    return modelId.slice(0, -'@default'.length);
   }
   if (modelId.endsWith('-latest')) {
-    return modelId.replace(/-latest$/, '@default');
+    return modelId.slice(0, -'-latest'.length);
   }
   return modelId;
 }

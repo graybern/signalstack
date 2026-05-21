@@ -5,14 +5,18 @@
  */
 
 // Pricing per 1M tokens (as of 2025 — update as needed)
-// Pricing per 1M tokens — Vertex AI model name format uses @ separator
 const MODEL_PRICING: Record<string, { input: number; output: number }> = {
-  'claude-sonnet-4-6@default': { input: 3.0, output: 15.0 },
-  'claude-opus-4-6@default': { input: 15.0, output: 75.0 },
-  'claude-haiku-4-5@20251001': { input: 0.25, output: 1.25 },
-  // Fallback for unknown models
+  'claude-sonnet-4-6': { input: 3.0, output: 15.0 },
+  'claude-opus-4-6': { input: 5.0, output: 25.0 },
+  'claude-opus-4-7': { input: 5.0, output: 25.0 },
+  'claude-haiku-4-5': { input: 1.0, output: 5.0 },
   default: { input: 3.0, output: 15.0 },
 };
+
+function lookupPricing(model: string): { input: number; output: number } {
+  const base = model.replace(/@.*$/, '');
+  return MODEL_PRICING[base] || MODEL_PRICING[model] || MODEL_PRICING.default;
+}
 
 export type TokenUsageCallback = (summary: ReturnType<TokenTracker['getSummary']>) => void;
 
@@ -53,7 +57,7 @@ export class TokenTracker {
   }
 
   getEstimatedCost(): number {
-    const pricing = MODEL_PRICING[this.model] || MODEL_PRICING.default;
+    const pricing = lookupPricing(this.model);
     const inputCost = (this.inputTokens / 1_000_000) * pricing.input;
     const outputCost = (this.outputTokens / 1_000_000) * pricing.output;
     return Math.round((inputCost + outputCost) * 10000) / 10000; // 4 decimal places

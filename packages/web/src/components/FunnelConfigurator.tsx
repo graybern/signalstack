@@ -105,8 +105,8 @@ export interface OrgICP {
 // ── Constants ────────────────────────────────────────────────────
 
 const MODELS = [
-  { id: 'claude-haiku-4-5@20251001', label: 'Haiku 4.5', desc: 'Fastest, lowest cost', cost: '$0.25 / $1.25', tier: 'economy' as const },
-  { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6', desc: 'Balanced speed and quality', cost: '$3 / $15', tier: 'standard' as const },
+  { id: 'claude-haiku-4-5@20251001', label: 'Haiku 4.5', desc: 'Fastest, lowest cost', cost: '$1 / $5', tier: 'economy' as const },
+  { id: 'claude-sonnet-4-5@20250929', label: 'Sonnet 4.5', desc: 'Fast, cost-effective', cost: '$3 / $15', tier: 'standard' as const },
   { id: 'claude-opus-4-6', label: 'Opus 4.6', desc: 'Most capable, highest quality', cost: '$5 / $25', tier: 'premium' as const },
 ];
 
@@ -1101,7 +1101,7 @@ function ScoreConfig({ step, updateStep, orgICP }: {
   return (
     <>
       <div className="grid grid-cols-3 gap-3">
-        <ModelSelect value={step.model} onChange={v => updateStep(step.id, { model: v })} recommended="claude-sonnet-4-6" />
+        <ModelSelect value={step.model} onChange={v => updateStep(step.id, { model: v })} recommended="claude-opus-4-6" />
         <NumberInput label="Max output tokens" value={step.max_tokens} onChange={v => updateStep(step.id, { max_tokens: v })} placeholder="2048" />
         <NumberInput label="Top companies to keep" value={step.candidate_limit} onChange={v => updateStep(step.id, { candidate_limit: v })} placeholder="10" />
       </div>

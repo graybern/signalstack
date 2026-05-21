@@ -44,7 +44,7 @@ export async function streamAICall(params: StreamParams): Promise<StreamResult> 
       maxTokens = params.thinking_budget + params.max_tokens;
     }
     createParams.thinking = {
-      type: 'enabled',
+      type: 'adaptive',
       budget_tokens: params.thinking_budget,
     };
   }

@@ -6,6 +6,7 @@
 
 // Pricing per 1M tokens (as of 2025 — update as needed)
 const MODEL_PRICING: Record<string, { input: number; output: number }> = {
+  'claude-sonnet-4-5': { input: 3.0, output: 15.0 },
   'claude-sonnet-4-6': { input: 3.0, output: 15.0 },
   'claude-opus-4-6': { input: 5.0, output: 25.0 },
   'claude-opus-4-7': { input: 5.0, output: 25.0 },

@@ -3,7 +3,7 @@ import { v4 as uuid } from 'uuid';
 import { getDb } from '../db/schema.js';
 import { authenticate, requireOperator, requireMember, AuthRequest } from '../auth/middleware.js';
 import { runCampaign } from '../agent/campaignOrchestrator.js';
-import { getSetting, getDefaultPipelineConfig, getDefaultPromptConfig, getDefaultExcludedDomainPatterns } from './icp.js';
+import { getSetting, getDefaultPipelineConfig, getDefaultPromptConfig, getDefaultExcludedDomainPatterns, getDefaultFunnelConfig } from './icp.js';
 import { registerCampaignCron, unregisterCampaignCron } from '../scheduler/campaignScheduler.js';
 import { logActivity, computeChanges } from '../services/activityLog.js';
 import { sendTestNotification } from '../services/notificationDispatcher.js';
@@ -132,9 +132,11 @@ router.post('/', authenticate, requireOperator, (req: AuthRequest, res: Response
     body.schedule_enabled ? 1 : 0,
     body.exclusion_config ? JSON.stringify(body.exclusion_config) : null,
     body.rss_enabled ? 1 : 0,
-    body.funnel_config ? JSON.stringify(body.funnel_config) : null,
+    body.funnel_config ? JSON.stringify(body.funnel_config) : JSON.stringify(getDefaultFunnelConfig()),
     req.user!.id,
   );
+
+  db.pragma('wal_checkpoint(TRUNCATE)');
 
   const created = db.prepare('SELECT * FROM campaigns WHERE id = ?').get(id) as any;
 
@@ -188,6 +190,8 @@ router.put('/:id', authenticate, requireOperator, (req: AuthRequest, res: Respon
     body.funnel_config ? JSON.stringify(body.funnel_config) : null,
     req.params.id,
   );
+
+  db.pragma('wal_checkpoint(TRUNCATE)');
 
   const updated = db.prepare('SELECT * FROM campaigns WHERE id = ?').get(req.params.id) as any;
 
@@ -307,6 +311,8 @@ router.put('/:id/config', authenticate, requireOperator, (req: AuthRequest, res:
     body.notification_base_url || null,
     req.params.id,
   );
+
+  db.pragma('wal_checkpoint(TRUNCATE)');
 
   const updated = db.prepare('SELECT * FROM campaigns WHERE id = ?').get(req.params.id) as any;
 

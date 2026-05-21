@@ -375,6 +375,22 @@ function initSchema(db: Database.Database) {
   if (!campColsP2.find(c => c.name === 'funnel_config')) {
     db.exec("ALTER TABLE campaigns ADD COLUMN funnel_config TEXT");
   }
+  // Backfill campaigns missing funnel_config with defaults
+  const nullFunnelCampaigns = db.prepare("SELECT id FROM campaigns WHERE funnel_config IS NULL").all();
+  if (nullFunnelCampaigns.length > 0) {
+    const defaultConfig = JSON.stringify({
+      version: 1,
+      steps: [
+        { id: 'discover', enabled: true, model: 'claude-haiku-4-5@20251001', max_tokens: 16384, candidate_limit: 50, source_strategy: 'search_augmented', search_max_queries: 8, search_max_results_per_query: 5 },
+        { id: 'qualify', enabled: true, candidate_limit: 20, qualification_criteria: [], disqualification_criteria: [] },
+        { id: 'enrich', enabled: true, candidate_limit: 15 },
+        { id: 'score', enabled: true, model: 'claude-sonnet-4-6@default', max_tokens: 2048, candidate_limit: 10 },
+        { id: 'brief', enabled: true, model: 'claude-opus-4-6@default', max_tokens: 16384, candidate_limit: 10 },
+        { id: 'audit', enabled: true, audit_quality_threshold: 60 },
+      ],
+    });
+    db.prepare("UPDATE campaigns SET funnel_config = ? WHERE funnel_config IS NULL").run(defaultConfig);
+  }
   if (!campColsP2.find(c => c.name === 'slack_webhook_url')) {
     db.exec("ALTER TABLE campaigns ADD COLUMN slack_webhook_url TEXT");
   }

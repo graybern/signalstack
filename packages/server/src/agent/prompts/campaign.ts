@@ -88,11 +88,13 @@ Search across these categories for companies matching the pattern.
 ` : '';
 
   // Tech signals from ICP config
-  const techSignalsSection = (icpConfig.tech_signals || []).length > 0
+  const productsToReplace = icpConfig.products_to_replace || [];
+  const platformInitiatives = icpConfig.platform_initiatives || [];
+  const generalTechSignals = icpConfig.tech_signals || [];
+  const hasTechSignals = productsToReplace.length > 0 || platformInitiatives.length > 0 || generalTechSignals.length > 0;
+  const techSignalsSection = hasTechSignals
     ? `## Tech Signals to Look For
-These technology signals indicate a company may be a good fit:
-${icpConfig.tech_signals.map(s => `- ${s}`).join('\n')}
-` : '';
+${productsToReplace.length > 0 ? `**Products to Replace** (displacement opportunities):\n${productsToReplace.map(s => `- ${s}`).join('\n')}\n` : ''}${platformInitiatives.length > 0 ? `**Platform Initiatives** (buying readiness signals):\n${platformInitiatives.map(s => `- ${s}`).join('\n')}\n` : ''}${generalTechSignals.length > 0 ? `**General Tech Signals**:\n${generalTechSignals.map(s => `- ${s}`).join('\n')}\n` : ''}` : '';
 
   // Competitors from ICP config
   const competitorsSection = (icpConfig.competitors || []).length > 0

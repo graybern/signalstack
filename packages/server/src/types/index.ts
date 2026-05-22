@@ -562,6 +562,8 @@ export interface ExtendedICPConfig extends ICPConfigParsed {
     departments: string[];
     notes: string;
   }>;
+  products_to_replace?: string[];
+  platform_initiatives?: string[];
   excluded_domain_patterns?: string[];
   prompt_config?: {
     research_preamble: string;

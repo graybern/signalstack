@@ -47,7 +47,7 @@ router.put('/', authenticate, requireOperator, (req: AuthRequest, res: Response)
   );
 
   // Also save extended ICP fields to app_settings
-  const extendedFields = ['company_context', 'geographies', 'segment_details', 'disqualifiers', 'signal_weights', 'buyer_personas', 'excluded_domain_patterns'];
+  const extendedFields = ['company_context', 'geographies', 'segment_details', 'disqualifiers', 'signal_weights', 'buyer_personas', 'excluded_domain_patterns', 'products_to_replace', 'platform_initiatives'];
   for (const key of extendedFields) {
     if (body[key] !== undefined) {
       saveSetting(`icp.${key}`, body[key], req.user!.id);
@@ -85,6 +85,8 @@ router.get('/full', authenticate, (_req: AuthRequest, res: Response) => {
     signal_weights: getSetting('icp.signal_weights', getDefaultSignalWeights()),
     buyer_personas: getSetting('icp.buyer_personas', getDefaultBuyerPersonas()),
     excluded_domain_patterns: getSetting('icp.excluded_domain_patterns', getDefaultExcludedDomainPatterns()),
+    products_to_replace: getSetting('icp.products_to_replace', []),
+    platform_initiatives: getSetting('icp.platform_initiatives', []),
   };
 
   res.json({ ...base, ...extended });

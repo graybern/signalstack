@@ -250,6 +250,8 @@ function ICPDefaultsSection() {
           signal_weights: config.signal_weights,
           buyer_personas: config.buyer_personas,
           excluded_domain_patterns: config.excluded_domain_patterns,
+          products_to_replace: config.products_to_replace,
+          platform_initiatives: config.platform_initiatives,
         }),
       });
       setMessage({ type: 'success', text: 'ICP defaults saved. Campaigns will inherit these unless they override.' });
@@ -269,7 +271,20 @@ function ICPDefaultsSection() {
   const disqualifiers: any[] = config.disqualifiers || [];
   const excludedDomainPatterns: string[] = config.excluded_domain_patterns || [];
   const signalWeights: any[] = config.signal_weights || [];
-  const personas = config.buyer_personas || {};
+  const DEFAULT_PERSONA_KEYS = ['technical_champion', 'hands_on_keyboard', 'economic_buyer', 'executive_sponsor'];
+  const DEFAULT_PERSONA_LABELS: Record<string, string> = {
+    technical_champion: 'Technical Champion (drives evaluation)',
+    hands_on_keyboard: 'Hands-on Keyboard (deploys & operates)',
+    economic_buyer: 'Economic Buyer (signs the PO)',
+    executive_sponsor: 'Executive Sponsor (blesses initiative)',
+  };
+  const savedPersonas = config.buyer_personas || {};
+  const personas: Record<string, any> = { ...savedPersonas };
+  for (const key of DEFAULT_PERSONA_KEYS) {
+    if (!personas[key]) {
+      personas[key] = { label: DEFAULT_PERSONA_LABELS[key], titles: [], departments: [], notes: '' };
+    }
+  }
 
   const SectionHeader = ({ id, title, subtitle }: { id: string; title: string; subtitle?: string }) => (
     <button onClick={() => toggleSection(id)} className="w-full flex items-center justify-between px-6 py-4 text-left hover:bg-gray-50 transition-colors">
@@ -416,7 +431,24 @@ function ICPDefaultsSection() {
                 placeholder="Add vertical..." colorClass="bg-brand-50 text-brand-700" />
             </div>
             <div>
+              <label className="text-xs font-medium text-gray-600 block mb-2">Products to Replace</label>
+              <p className="text-[11px] text-gray-400 mb-1.5">Specific product names indicating displacement opportunity</p>
+              <TagInput items={config.products_to_replace || []}
+                onAdd={v => setConfig({ ...config, products_to_replace: [...(config.products_to_replace || []), v] })}
+                onRemove={i => setConfig({ ...config, products_to_replace: (config.products_to_replace || []).filter((_: any, j: number) => j !== i) })}
+                placeholder="e.g. Cisco AnyConnect..." colorClass="bg-red-50 text-red-600" />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-gray-600 block mb-2">Platform Initiatives</label>
+              <p className="text-[11px] text-gray-400 mb-1.5">Technology trends and initiatives signaling buying readiness</p>
+              <TagInput items={config.platform_initiatives || []}
+                onAdd={v => setConfig({ ...config, platform_initiatives: [...(config.platform_initiatives || []), v] })}
+                onRemove={i => setConfig({ ...config, platform_initiatives: (config.platform_initiatives || []).filter((_: any, j: number) => j !== i) })}
+                placeholder="e.g. Kubernetes, ZTNA..." colorClass="bg-blue-50 text-blue-600" />
+            </div>
+            <div>
               <label className="text-xs font-medium text-gray-600 block mb-2">Tech Signals to Detect</label>
+              <p className="text-[11px] text-gray-400 mb-1.5">General technology signals that indicate fit</p>
               <TagInput items={config.tech_signals || []}
                 onAdd={v => setConfig({ ...config, tech_signals: [...(config.tech_signals || []), v] })}
                 onRemove={i => setConfig({ ...config, tech_signals: config.tech_signals.filter((_: any, j: number) => j !== i) })}
@@ -429,6 +461,50 @@ function ICPDefaultsSection() {
                 onRemove={i => setConfig({ ...config, competitors: config.competitors.filter((_: any, j: number) => j !== i) })}
                 placeholder="Add competitor..." colorClass="bg-red-50 text-red-700" />
             </div>
+          </div>
+        )}
+      </div>
+
+      {/* ── Success Stories ── */}
+      <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+        <SectionHeader id="success_stories" title="Success Stories" subtitle="Reference customers by vertical — used in discovery and scoring prompts" />
+        {expandedSections.has('success_stories') && (
+          <div className="px-6 pb-6 border-t border-gray-100 pt-4 space-y-3">
+            {Object.entries(config.success_stories || {}).map(([vertical, companies]: [string, any]) => (
+              <div key={vertical} className="flex items-start gap-3 p-3 bg-gray-50 rounded-lg">
+                <div className="shrink-0 w-32">
+                  <span className="text-xs font-medium text-gray-700">{vertical}</span>
+                </div>
+                <div className="flex-1">
+                  <TagInput
+                    items={companies || []}
+                    onAdd={v => setConfig({ ...config, success_stories: { ...config.success_stories, [vertical]: [...(companies || []), v] } })}
+                    onRemove={i => setConfig({ ...config, success_stories: { ...config.success_stories, [vertical]: (companies || []).filter((_: any, j: number) => j !== i) } })}
+                    placeholder="Add company..."
+                    colorClass="bg-emerald-50 text-emerald-700"
+                  />
+                </div>
+                <button
+                  onClick={() => {
+                    const next = { ...(config.success_stories || {}) };
+                    delete next[vertical];
+                    setConfig({ ...config, success_stories: next });
+                  }}
+                  className="p-1 text-gray-300 hover:text-red-500 shrink-0 mt-0.5"
+                ><Trash2 className="w-3.5 h-3.5" /></button>
+              </div>
+            ))}
+            <button
+              onClick={() => {
+                const vertical = prompt('Vertical name (e.g. "Gaming", "FinTech"):');
+                if (!vertical?.trim()) return;
+                if ((config.success_stories || {})[vertical.trim()]) { alert('This vertical already exists.'); return; }
+                setConfig({ ...config, success_stories: { ...(config.success_stories || {}), [vertical.trim()]: [] } });
+              }}
+              className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-emerald-600 border border-dashed border-emerald-300 rounded-lg hover:bg-emerald-50"
+            >
+              <Plus className="w-3 h-3" /> Add Vertical
+            </button>
           </div>
         )}
       </div>
@@ -615,11 +691,29 @@ function ICPDefaultsSection() {
                   executive_sponsor: { label: 'Optional', color: 'bg-gray-100 text-gray-600' },
                 };
                 const rule = ruleMap[key];
+                const isDefault = DEFAULT_PERSONA_KEYS.includes(key);
                 return (
-                  <div key={key} className={`border rounded-lg p-4 space-y-3 ${colorMap[key] || 'border-gray-200'}`}>
+                  <div key={key} className={`border rounded-lg p-4 space-y-3 ${colorMap[key] || 'border-violet-200 bg-violet-50/30'}`}>
                     <div className="flex items-start justify-between gap-2">
                       <p className="text-sm font-bold text-gray-900">{p.label || key}</p>
-                      {rule && <span className={`px-1.5 py-0.5 text-[10px] font-medium rounded-full shrink-0 ${rule.color}`}>{rule.label}</span>}
+                      <div className="flex items-center gap-1 shrink-0">
+                        {rule ? (
+                          <span className={`px-1.5 py-0.5 text-[10px] font-medium rounded-full ${rule.color}`}>{rule.label}</span>
+                        ) : (
+                          <span className="px-1.5 py-0.5 text-[10px] font-medium rounded-full bg-violet-100 text-violet-600">Custom</span>
+                        )}
+                        {!isDefault && (
+                          <button
+                            onClick={() => {
+                              const next = { ...personas };
+                              delete next[key];
+                              setConfig({ ...config, buyer_personas: next });
+                            }}
+                            className="p-0.5 text-gray-300 hover:text-red-500"
+                            title="Remove category"
+                          ><Trash2 className="w-3 h-3" /></button>
+                        )}
+                      </div>
                     </div>
                     <div>
                       <label className="text-xs text-gray-500 mb-1 block">Target Titles</label>
@@ -643,6 +737,22 @@ function ICPDefaultsSection() {
                   </div>
                 );
               })}
+            </div>
+
+            {/* Add custom persona category */}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => {
+                  const label = prompt('New persona category label (e.g. "Partner Advocate"):');
+                  if (!label?.trim()) return;
+                  const id = label.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+                  if (personas[id]) { alert('A category with this ID already exists.'); return; }
+                  setConfig({ ...config, buyer_personas: { ...personas, [id]: { label: label.trim(), priority: Object.keys(personas).length + 1, titles: [], departments: [], notes: '' } } });
+                }}
+                className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-violet-600 border border-dashed border-violet-300 rounded-lg hover:bg-violet-50"
+              >
+                <Plus className="w-3 h-3" /> Add Persona Category
+              </button>
             </div>
           </div>
         )}

@@ -52,6 +52,8 @@ export function loadExtendedIcpConfig(
     signal_weights: getSetting('icp.signal_weights', getDefaultSignalWeights()),
     buyer_personas: getSetting('icp.buyer_personas', getDefaultBuyerPersonas()),
     excluded_domain_patterns: getSetting('icp.excluded_domain_patterns', getDefaultExcludedDomainPatterns()),
+    products_to_replace: getSetting('icp.products_to_replace', []),
+    platform_initiatives: getSetting('icp.platform_initiatives', []),
     prompt_config: promptConfig,
   };
 

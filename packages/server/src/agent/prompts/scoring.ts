@@ -29,6 +29,8 @@ export function getScoringPrompt(icpConfig: ExtendedICPConfig, scoringWeights?: 
   const competitors = icpConfig.competitors || [];
   const verticals = icpConfig.verticals || [];
   const techSignals = icpConfig.tech_signals || [];
+  const productsToReplace = icpConfig.products_to_replace || [];
+  const platformInitiatives = icpConfig.platform_initiatives || [];
   const disqualifiers = icpConfig.disqualifiers || [];
   const signalWeights = icpConfig.signal_weights || [];
   const valueProps = icpConfig.company_context?.value_props || [];
@@ -110,6 +112,7 @@ Evidence to consider: remote work policies, BYOC/BYOD programs, contractor workf
 - 0: Recently purchased a competitor or locked into a long contract
 
 Evidence to consider: tech stack signals, G2/TrustRadius reviews, job postings mentioning specific tools, LinkedIn signals. **Important**: Don't require the specific product to be named to score above 50%. Compound evidence from industry, tech stack, and workforce distribution that strongly implies usage should score ${Math.round(w.displacement_wedge * 0.6)}–${Math.round(w.displacement_wedge * 0.75)}.
+${productsToReplace.length > 0 ? `\nProducts to replace (displacement targets): ${productsToReplace.join(', ')}` : ''}${platformInitiatives.length > 0 ? `\nPlatform initiatives (buying readiness signals): ${platformInitiatives.join(', ')}` : ''}
 ${valueProps.length > 0 || differentiators.length > 0 ? `\n${companyName} key advantages to evaluate against prospect needs:${valueProps.length > 0 ? `\n- Value props: ${valueProps.join(', ')}` : ''}${differentiators.length > 0 ? `\n- Differentiators: ${differentiators.join(', ')}` : ''}` : ''}
 
 ### 5. Vertical / Playbook Match (0–${w.vertical_playbook} points)

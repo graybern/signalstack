@@ -198,7 +198,7 @@ ${candidate.key_people?.length ? `## Key People Found\nReal people identified at
         max_tokens: maxTok + 10000,
         system: systemPrompt,
         messages: [{ role: 'user', content: userMessage }],
-        thinking: { type: 'adaptive', budget_tokens: 10000 },
+        thinking: { type: 'adaptive' },
       } as any);
       return stream.finalMessage();
     });

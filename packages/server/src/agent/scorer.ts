@@ -134,7 +134,7 @@ Score this company using the rubric. Apply the Evidence Density Modifier: ${sign
         max_tokens: maxTok + 8000,
         system: systemPrompt,
         messages: [{ role: 'user', content: userMessage }],
-        thinking: { type: 'adaptive', budget_tokens: 8000 },
+        thinking: { type: 'adaptive' },
       } as any),
     );
     if (tracker) tracker.addUsage(response);

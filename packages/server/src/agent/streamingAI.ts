@@ -43,10 +43,7 @@ export async function streamAICall(params: StreamParams): Promise<StreamResult> 
     if (maxTokens <= params.thinking_budget) {
       maxTokens = params.thinking_budget + params.max_tokens;
     }
-    createParams.thinking = {
-      type: 'adaptive',
-      budget_tokens: params.thinking_budget,
-    };
+    createParams.thinking = { type: 'adaptive' };
   }
 
   createParams.max_tokens = maxTokens;

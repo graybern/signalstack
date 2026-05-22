@@ -193,7 +193,7 @@ export function CampaignDetail() {
 
   const [showRunMenu, setShowRunMenu] = useState(false);
   const runMenuRef = useRef<HTMLDivElement>(null);
-  const [orgICP, setOrgICP] = useState<{ verticals: string[]; tech_signals: string[]; competitors: string[]; company_context?: any; disqualifiers?: any[]; signal_weights?: any[]; buyer_personas?: any; geographies?: any; segment_details?: any } | undefined>(undefined);
+  const [orgICP, setOrgICP] = useState<{ verticals: string[]; tech_signals: string[]; competitors: string[]; products_to_replace?: string[]; platform_initiatives?: string[]; success_stories?: Record<string, string[]>; company_context?: any; disqualifiers?: any[]; signal_weights?: any[]; buyer_personas?: any; geographies?: any; segment_details?: any } | undefined>(undefined);
 
   // Close run dropdown on click-away
   useEffect(() => {
@@ -215,6 +215,9 @@ export function CampaignDetail() {
           verticals: data.verticals || [],
           tech_signals: data.tech_signals || [],
           competitors: data.competitors || [],
+          products_to_replace: data.products_to_replace || [],
+          platform_initiatives: data.platform_initiatives || [],
+          success_stories: data.success_stories || {},
           company_context: data.company_context,
           disqualifiers: data.disqualifiers,
           signal_weights: data.signal_weights,

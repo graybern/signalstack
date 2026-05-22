@@ -95,6 +95,9 @@ export interface OrgICP {
   verticals: string[];
   tech_signals: string[];
   competitors: string[];
+  products_to_replace?: string[];
+  platform_initiatives?: string[];
+  success_stories?: Record<string, string[]>;
   company_context?: any;
   disqualifiers?: any[];
   signal_weights?: any[];
@@ -441,7 +444,7 @@ export function FunnelConfigurator({
                     <ScoreConfig step={step} updateStep={updateStep} orgICP={orgICP} />
                   )}
                   {step.id === 'brief' && (
-                    <BriefConfig step={step} updateStep={updateStep} globalPrompts={globalPrompts} />
+                    <BriefConfig step={step} updateStep={updateStep} globalPrompts={globalPrompts} orgICP={orgICP} />
                   )}
                   {step.id === 'audit' && (
                     <AuditConfig step={step} updateStep={updateStep} />
@@ -747,6 +750,10 @@ function DiscoverConfig({ step, updateStep, globalPrompts, orgICP, searchProvide
         onChange={vals => updateStep(step.id, { verticals_override: vals.length ? vals : undefined })}
         placeholder="e.g. Gaming, Developer Tools, FinTech"
       />
+
+      {/* Read-only org ICP fields */}
+      <OrgReadOnlyField label="Products to replace" values={orgICP?.products_to_replace || []} colorClass="bg-red-50 text-red-600" />
+      <OrgReadOnlyField label="Platform initiatives" values={orgICP?.platform_initiatives || []} colorClass="bg-blue-50 text-blue-600" />
 
       {/* Technology categories */}
       <div>
@@ -1208,6 +1215,8 @@ function ScoreConfig({ step, updateStep, orgICP }: {
         onChange={vals => updateStep(step.id, { icp_competitors_override: vals.length ? vals : undefined })}
         placeholder="e.g. Zscaler, Cloudflare Access"
       />
+      <OrgReadOnlyField label="Products to replace" values={orgICP?.products_to_replace || []} colorClass="bg-red-50 text-red-600" />
+      <OrgReadOnlyField label="Platform initiatives" values={orgICP?.platform_initiatives || []} colorClass="bg-blue-50 text-blue-600" />
 
       <PromptField
         step={step}
@@ -1220,10 +1229,11 @@ function ScoreConfig({ step, updateStep, orgICP }: {
   );
 }
 
-function BriefConfig({ step, updateStep, globalPrompts }: {
+function BriefConfig({ step, updateStep, globalPrompts, orgICP }: {
   step: FunnelStepConfig;
   updateStep: (id: string, u: Partial<FunnelStepConfig>) => void;
   globalPrompts?: GlobalPromptDefaults;
+  orgICP?: OrgICP;
 }) {
   const currentTone = step.outreach_tone || '';
   const personaTypes = step.persona_types || [];
@@ -1296,12 +1306,67 @@ function BriefConfig({ step, updateStep, globalPrompts }: {
       {/* Max personas per lead */}
       <NumberInput label="Max personas per lead" value={step.max_personas} onChange={v => updateStep(step.id, { max_personas: v })} placeholder="4" />
 
-      {/* Org settings cross-reference */}
-      <p className="text-[11px] text-gray-400 flex items-center gap-1">
-        <Info className="w-3 h-3 shrink-0" />
-        Title patterns and departments are configured in{' '}
-        <a href="/settings?tab=org" className="text-brand-600 hover:underline">ICP Settings &gt; Buyer Personas</a>
-      </p>
+      {/* Org ICP context summary */}
+      {orgICP && (
+        <details className="bg-gray-50 border border-gray-200 rounded-lg">
+          <summary className="px-3 py-2 text-[11px] font-medium text-gray-500 cursor-pointer select-none hover:text-gray-700 flex items-center gap-1.5">
+            <Info className="w-3 h-3 text-gray-400" />
+            Org ICP Context — <a href="/settings?tab=org" className="text-brand-600 hover:underline" onClick={e => e.stopPropagation()}>Edit in Settings</a>
+          </summary>
+          <div className="px-3 pb-3 pt-1 space-y-2 border-t border-gray-200">
+            {orgICP.buyer_personas && Object.keys(orgICP.buyer_personas).length > 0 && (
+              <div>
+                <span className="text-[10px] font-semibold text-gray-500 uppercase">Buyer Personas</span>
+                <div className="flex flex-wrap gap-1 mt-0.5">
+                  {Object.entries(orgICP.buyer_personas).map(([key, p]: [string, any]) => (
+                    <span key={key} className="text-[10px] px-1.5 py-0.5 bg-white border border-gray-200 text-gray-600 rounded">
+                      {p.label || key} ({(p.titles || []).length} titles)
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+            {(orgICP.products_to_replace || []).length > 0 && (
+              <div>
+                <span className="text-[10px] font-semibold text-gray-500 uppercase">Products to Replace</span>
+                <div className="flex flex-wrap gap-1 mt-0.5">
+                  {(orgICP.products_to_replace || []).map(v => (
+                    <span key={v} className="text-[10px] px-1.5 py-0.5 bg-red-50 text-red-600 rounded">{v}</span>
+                  ))}
+                </div>
+              </div>
+            )}
+            {(orgICP.platform_initiatives || []).length > 0 && (
+              <div>
+                <span className="text-[10px] font-semibold text-gray-500 uppercase">Platform Initiatives</span>
+                <div className="flex flex-wrap gap-1 mt-0.5">
+                  {(orgICP.platform_initiatives || []).map(v => (
+                    <span key={v} className="text-[10px] px-1.5 py-0.5 bg-blue-50 text-blue-600 rounded">{v}</span>
+                  ))}
+                </div>
+              </div>
+            )}
+            {orgICP.success_stories && Object.keys(orgICP.success_stories).length > 0 && (
+              <div>
+                <span className="text-[10px] font-semibold text-gray-500 uppercase">Success Stories</span>
+                <div className="flex flex-wrap gap-1 mt-0.5">
+                  {Object.entries(orgICP.success_stories).map(([vertical, companies]) => (
+                    <span key={vertical} className="text-[10px] px-1.5 py-0.5 bg-emerald-50 text-emerald-600 rounded">
+                      {vertical}: {(companies as string[]).length} {(companies as string[]).length === 1 ? 'company' : 'companies'}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+            {(!orgICP.buyer_personas || Object.keys(orgICP.buyer_personas).length === 0) &&
+             (orgICP.products_to_replace || []).length === 0 &&
+             (orgICP.platform_initiatives || []).length === 0 &&
+             (!orgICP.success_stories || Object.keys(orgICP.success_stories).length === 0) && (
+              <p className="text-[10px] text-gray-400">No org ICP context configured yet.</p>
+            )}
+          </div>
+        </details>
+      )}
 
       {/* Brief depth */}
       <div>
@@ -1638,6 +1703,23 @@ function InheritableField({ label, orgValues, overrideValues, useOrg, onToggle, 
           placeholder={placeholder}
         />
       )}
+    </div>
+  );
+}
+
+function OrgReadOnlyField({ label, values, colorClass }: { label: string; values: string[]; colorClass: string }) {
+  if (values.length === 0) return null;
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-1">
+        <label className="text-xs font-medium text-gray-700">{label}</label>
+        <span className="text-[10px] text-gray-400">From org ICP</span>
+      </div>
+      <div className="flex flex-wrap gap-1.5 px-2.5 py-2 bg-gray-50 border border-gray-100 rounded-lg min-h-[36px]">
+        {values.map(v => (
+          <span key={v} className={`text-xs px-2 py-0.5 rounded-md ${colorClass}`}>{v}</span>
+        ))}
+      </div>
     </div>
   );
 }

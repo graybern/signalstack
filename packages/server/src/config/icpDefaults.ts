@@ -96,26 +96,33 @@ export function getDefaultTechStackCategories() {
 
 export function getDefaultBuyerPersonas() {
   return {
-    champion: {
-      label: 'Champion (drives evaluation)',
+    technical_champion: {
+      label: 'Technical Champion (drives evaluation)',
       priority: 1,
-      titles: [] as string[],
-      departments: [] as string[],
-      notes: '',
+      titles: ['Director of IT', 'Sr. IT Manager', 'Director of Infrastructure', 'Security Manager'] as string[],
+      departments: ['IT', 'Infrastructure', 'Security', 'Platform Engineering'] as string[],
+      notes: 'Day-to-day evaluator who owns the problem. Should receive the most detailed, personalized outreach.',
+    },
+    hands_on_keyboard: {
+      label: 'Hands-on Keyboard (deploys & operates)',
+      priority: 2,
+      titles: ['DevOps Engineer', 'Platform Engineer', 'SRE', 'Infrastructure Engineer'] as string[],
+      departments: ['Engineering', 'DevOps', 'Platform', 'SRE'] as string[],
+      notes: 'Only include when evidence of hands-on technical culture exists. Gets the most technically specific outreach.',
     },
     economic_buyer: {
       label: 'Economic Buyer (signs the PO)',
-      priority: 2,
-      titles: [] as string[],
-      departments: [] as string[],
-      notes: '',
+      priority: 3,
+      titles: ['VP of IT', 'VP of Engineering', 'CISO'] as string[],
+      departments: ['IT', 'Engineering', 'Security'] as string[],
+      notes: 'Controls the budget. For SMB may be the same person as technical champion.',
     },
     executive_sponsor: {
       label: 'Executive Sponsor (blesses initiative)',
-      priority: 3,
-      titles: [] as string[],
-      departments: [] as string[],
-      notes: '',
+      priority: 4,
+      titles: ['CTO', 'CIO'] as string[],
+      departments: ['Executive'] as string[],
+      notes: 'Only include with specific signal justification (conference talk, public statement, org restructure).',
     },
   };
 }

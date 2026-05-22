@@ -63,7 +63,8 @@ interface FunnelStepConfig {
   use_org_icp?: boolean;
   confidence_filter?: 'all' | 'medium_high' | 'high_only';
   // Brief levers
-  persona_types?: ('champion' | 'economic_buyer' | 'executive_sponsor')[];
+  persona_types?: ('technical_champion' | 'hands_on_keyboard' | 'economic_buyer' | 'executive_sponsor' | 'champion')[];
+  max_personas?: number;
   brief_depth?: 'quick' | 'standard' | 'comprehensive';
   tech_stack_categories?: { id: string; label: string; examples: string[] }[];
   // Enrich levers
@@ -122,7 +123,7 @@ const DEFAULT_TECH_CATEGORIES: { id: string; label: string; examples: string[] }
 ];
 
 const TONES = [
-  { id: 'consultative', label: 'Consultative', desc: 'Advisory, insight-led' },
+  { id: 'consultative', label: 'Consultative', desc: 'Industry advisor, pattern-led' },
   { id: 'direct', label: 'Direct', desc: 'Clear, to-the-point' },
   { id: 'technical', label: 'Technical', desc: 'Engineering-focused' },
   { id: 'executive', label: 'Executive', desc: 'Business outcome-led' },
@@ -1252,13 +1253,14 @@ function BriefConfig({ step, updateStep, globalPrompts }: {
       <div>
         <label className="text-xs font-medium text-gray-700 mb-1.5 block">Persona types to generate</label>
         <p className="text-[11px] text-gray-400 mb-1.5">Select which roles the AI should find and write outreach for. Leave all checked for the default.</p>
-        <div className="flex gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           {([
-            { id: 'champion' as const, label: 'Champion', desc: 'Day-to-day user/evaluator' },
+            { id: 'technical_champion' as const, label: 'Technical Champion', desc: 'Day-to-day evaluator' },
+            { id: 'hands_on_keyboard' as const, label: 'Hands-on Keyboard', desc: 'DevOps/Platform engineer' },
             { id: 'economic_buyer' as const, label: 'Economic Buyer', desc: 'Controls the budget' },
             { id: 'executive_sponsor' as const, label: 'Executive Sponsor', desc: 'Signs off on purchase' },
           ]).map(pt => {
-            const isChecked = personaTypes.length === 0 || personaTypes.includes(pt.id);
+            const isChecked = personaTypes.length === 0 || personaTypes.includes(pt.id) || (pt.id === 'technical_champion' && personaTypes.includes('champion' as any));
             return (
               <label key={pt.id} className={`flex-1 flex items-start gap-2 px-3 py-2 rounded-lg border cursor-pointer transition-colors ${
                 isChecked ? 'border-rose-200 bg-rose-50/50' : 'border-gray-200 bg-white'
@@ -1268,14 +1270,14 @@ function BriefConfig({ step, updateStep, globalPrompts }: {
                   checked={isChecked}
                   onChange={e => {
                     let types: typeof personaTypes;
+                    const allTypes = ['technical_champion', 'hands_on_keyboard', 'economic_buyer', 'executive_sponsor'] as const;
                     if (personaTypes.length === 0) {
-                      // Currently "all" — deselecting one means selecting the other two
-                      types = (['champion', 'economic_buyer', 'executive_sponsor'] as const).filter(t => t !== pt.id);
+                      types = allTypes.filter(t => t !== pt.id) as any;
                     } else if (e.target.checked) {
-                      types = [...personaTypes, pt.id];
-                      if (types.length === 3) types = []; // All selected = default
+                      types = [...personaTypes.filter(t => t !== 'champion'), pt.id] as any;
+                      if (types.length === 4) types = [];
                     } else {
-                      types = personaTypes.filter(t => t !== pt.id);
+                      types = personaTypes.filter(t => t !== pt.id && t !== 'champion') as any;
                     }
                     updateStep(step.id, { persona_types: types.length ? types : undefined });
                   }}
@@ -1290,6 +1292,16 @@ function BriefConfig({ step, updateStep, globalPrompts }: {
           })}
         </div>
       </div>
+
+      {/* Max personas per lead */}
+      <NumberInput label="Max personas per lead" value={step.max_personas} onChange={v => updateStep(step.id, { max_personas: v })} placeholder="4" />
+
+      {/* Org settings cross-reference */}
+      <p className="text-[11px] text-gray-400 flex items-center gap-1">
+        <Info className="w-3 h-3 shrink-0" />
+        Title patterns and departments are configured in{' '}
+        <a href="/settings?tab=org" className="text-brand-600 hover:underline">ICP Settings &gt; Buyer Personas</a>
+      </p>
 
       {/* Brief depth */}
       <div>

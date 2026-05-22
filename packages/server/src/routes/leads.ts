@@ -85,7 +85,7 @@ router.get('/', authenticate, (req: AuthRequest, res: Response) => {
   const leads = db.prepare(
     `SELECT l.*,
       c.name as campaign_name,
-      (SELECT json_group_array(json_object('id',p.id,'role_type',p.role_type,'name',p.name,'title',p.title,'linkedin_url',p.linkedin_url))
+      (SELECT json_group_array(json_object('id',p.id,'role_type',p.role_type,'confidence',p.confidence,'name',p.name,'title',p.title,'linkedin_url',p.linkedin_url))
        FROM personas p WHERE p.lead_id = l.id) as personas_json,
       (SELECT json_group_array(json_object('id',f.id,'verdict',f.verdict,'reason',f.reason,'user_id',f.user_id,'retry_date',f.retry_date,'feedback_source',f.feedback_source,'created_at',f.created_at))
        FROM lead_feedback f WHERE f.lead_id = l.id ORDER BY f.created_at DESC) as feedback_json
@@ -246,7 +246,7 @@ router.get('/latest', authenticate, (req: AuthRequest, res: Response) => {
 
   const leads = db.prepare(
     `SELECT l.*,
-      (SELECT json_group_array(json_object('id',p.id,'role_type',p.role_type,'name',p.name,'title',p.title,'linkedin_url',p.linkedin_url,'department',p.department,'tenure',p.tenure,'outreach_angle',p.outreach_angle,'talking_points',p.talking_points,'outreach_message',p.outreach_message,'social_signals',p.social_signals,'buying_signals',p.buying_signals))
+      (SELECT json_group_array(json_object('id',p.id,'role_type',p.role_type,'confidence',p.confidence,'name',p.name,'title',p.title,'linkedin_url',p.linkedin_url,'department',p.department,'tenure',p.tenure,'outreach_angle',p.outreach_angle,'talking_points',p.talking_points,'outreach_message',p.outreach_message,'social_signals',p.social_signals,'buying_signals',p.buying_signals))
        FROM personas p WHERE p.lead_id = l.id) as personas_json,
       (SELECT json_group_array(json_object('id',f.id,'verdict',f.verdict,'reason',f.reason,'user_id',f.user_id,'retry_date',f.retry_date,'created_at',f.created_at))
        FROM lead_feedback f WHERE f.lead_id = l.id ORDER BY f.created_at DESC) as feedback_json
@@ -267,7 +267,7 @@ router.get('/:id', authenticate, (req: AuthRequest, res: Response) => {
   const db = getDb();
   const lead = db.prepare(
     `SELECT l.*,
-      (SELECT json_group_array(json_object('id',p.id,'role_type',p.role_type,'name',p.name,'title',p.title,'linkedin_url',p.linkedin_url,'department',p.department,'tenure',p.tenure,'outreach_angle',p.outreach_angle,'talking_points',p.talking_points,'outreach_message',p.outreach_message,'social_signals',p.social_signals,'buying_signals',p.buying_signals))
+      (SELECT json_group_array(json_object('id',p.id,'role_type',p.role_type,'confidence',p.confidence,'name',p.name,'title',p.title,'linkedin_url',p.linkedin_url,'department',p.department,'tenure',p.tenure,'outreach_angle',p.outreach_angle,'talking_points',p.talking_points,'outreach_message',p.outreach_message,'social_signals',p.social_signals,'buying_signals',p.buying_signals))
        FROM personas p WHERE p.lead_id = l.id) as personas_json,
       (SELECT json_group_array(json_object(
          'id',f.id,'verdict',f.verdict,'reason',f.reason,'user_id',f.user_id,

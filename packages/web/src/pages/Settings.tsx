@@ -35,6 +35,7 @@ import {
   FileJson,
   Loader2,
   EyeOff,
+  Info,
 } from 'lucide-react';
 
 // ── Types ──────────────────────────────────────────────────────
@@ -565,20 +566,61 @@ function ICPDefaultsSection() {
       <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
         <SectionHeader id="personas" title="Buyer Personas" subtitle="Target personas for outreach briefs — titles, departments, and guidance" />
         {expandedSections.has('personas') && (
-          <div className="px-6 pb-6 border-t border-gray-100 pt-4">
-            <div className="grid grid-cols-3 gap-4">
+          <div className="px-6 pb-6 border-t border-gray-100 pt-4 space-y-4">
+            {/* How Persona Targeting Works — collapsible */}
+            <details className="bg-gray-50 border border-gray-200 rounded-lg">
+              <summary className="px-4 py-2.5 text-xs font-medium text-gray-600 cursor-pointer select-none hover:text-gray-800 flex items-center gap-1.5">
+                <Info className="w-3.5 h-3.5 text-gray-400" />
+                How Persona Targeting Works
+              </summary>
+              <div className="px-4 pb-3 pt-1 text-[11px] text-gray-500 space-y-2 border-t border-gray-200">
+                <div>
+                  <span className="font-semibold text-gray-600">Persona Pyramid:</span> Each brief generates 2–4 personas in priority order.
+                  Technical Champion is always required. Economic Buyer is required for MM/ENT segments.
+                  Hands-on Keyboard and Executive Sponsor are optional — only included when evidence supports them.
+                </div>
+                <div>
+                  <span className="font-semibold text-gray-600">Title Matching:</span> The AI uses the title patterns configured below to identify the right people.
+                  After generation, personas are cross-referenced against enrichment data (key_people) to verify names and LinkedIn profiles.
+                </div>
+                <div>
+                  <span className="font-semibold text-gray-600">Confidence Tiers:</span>{' '}
+                  <span className="inline-flex items-center gap-0.5"><span className="w-1.5 h-1.5 rounded-full bg-green-500 inline-block" /> High</span> = verified against primary source,{' '}
+                  <span className="inline-flex items-center gap-0.5"><span className="w-1.5 h-1.5 rounded-full bg-amber-500 inline-block" /> Medium</span> = inferred from multiple signals,{' '}
+                  <span className="inline-flex items-center gap-0.5"><span className="w-1.5 h-1.5 rounded-full bg-gray-400 inline-block" /> Low</span> = industry pattern assumption.
+                </div>
+                <div>
+                  <span className="font-semibold text-gray-600">Campaign Overrides:</span> Individual campaigns can override which persona types to generate and set a max count via the Funnel &gt; Brief step settings.
+                </div>
+              </div>
+            </details>
+
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               {Object.entries(personas).map(([key, p]: [string, any]) => {
                 const updatePersona = (field: string, value: any) => {
                   setConfig({ ...config, buyer_personas: { ...personas, [key]: { ...p, [field]: value } } });
                 };
                 const colorMap: Record<string, string> = {
+                  technical_champion: 'border-brand-200 bg-brand-50/30',
                   champion: 'border-brand-200 bg-brand-50/30',
+                  hands_on_keyboard: 'border-cyan-200 bg-cyan-50/30',
                   economic_buyer: 'border-amber-200 bg-amber-50/30',
                   executive_sponsor: 'border-gray-200 bg-gray-50/30',
                 };
+                const ruleMap: Record<string, { label: string; color: string }> = {
+                  technical_champion: { label: 'Required', color: 'bg-green-100 text-green-700' },
+                  champion: { label: 'Required', color: 'bg-green-100 text-green-700' },
+                  hands_on_keyboard: { label: 'Evidence-gated', color: 'bg-cyan-100 text-cyan-700' },
+                  economic_buyer: { label: 'Required (ENT/MM)', color: 'bg-amber-100 text-amber-700' },
+                  executive_sponsor: { label: 'Optional', color: 'bg-gray-100 text-gray-600' },
+                };
+                const rule = ruleMap[key];
                 return (
                   <div key={key} className={`border rounded-lg p-4 space-y-3 ${colorMap[key] || 'border-gray-200'}`}>
-                    <p className="text-sm font-bold text-gray-900">{p.label || key}</p>
+                    <div className="flex items-start justify-between gap-2">
+                      <p className="text-sm font-bold text-gray-900">{p.label || key}</p>
+                      {rule && <span className={`px-1.5 py-0.5 text-[10px] font-medium rounded-full shrink-0 ${rule.color}`}>{rule.label}</span>}
+                    </div>
                     <div>
                       <label className="text-xs text-gray-500 mb-1 block">Target Titles</label>
                       <TagInput items={p.titles || []}

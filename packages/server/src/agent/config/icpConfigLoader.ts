@@ -55,6 +55,20 @@ export function loadExtendedIcpConfig(
     prompt_config: promptConfig,
   };
 
+  // Migrate legacy buyer_personas: champion → technical_champion, inject hands_on_keyboard
+  if (extended.buyer_personas) {
+    if ((extended.buyer_personas as any).champion && !extended.buyer_personas.technical_champion) {
+      extended.buyer_personas.technical_champion = {
+        ...(extended.buyer_personas as any).champion,
+        label: ((extended.buyer_personas as any).champion.label || '').replace('Champion', 'Technical Champion') || 'Technical Champion (drives evaluation)',
+      };
+      delete (extended.buyer_personas as any).champion;
+    }
+    if (!extended.buyer_personas.hands_on_keyboard) {
+      extended.buyer_personas.hands_on_keyboard = getDefaultBuyerPersonas().hands_on_keyboard;
+    }
+  }
+
   if (icpOverrides) {
     if (icpOverrides.disqualifiers) extended.disqualifiers = icpOverrides.disqualifiers;
     if (icpOverrides.signal_weights) extended.signal_weights = icpOverrides.signal_weights;

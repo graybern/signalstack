@@ -87,20 +87,32 @@ function checkPersonas(brief: BriefResult, candidate: ResearchCandidate): { scor
     return { score: 0, issues };
   }
 
-  const hasChampion = personas.some((p: PersonaBrief) => p.role_type === 'champion');
+  const hasChampion = personas.some((p: PersonaBrief) => p.role_type === 'technical_champion' || p.role_type === 'champion');
   if (!hasChampion) {
-    issues.push({ check: 'personas', severity: 'error', message: 'Missing required champion persona' });
+    issues.push({ check: 'personas', severity: 'error', message: 'Missing required technical_champion persona' });
     score -= 8;
   }
 
-  if (personas.length > 3) {
-    issues.push({ check: 'personas', severity: 'warning', message: `Too many personas (${personas.length}) — Persona Pyramid allows max 3` });
+  if (personas.length > 4) {
+    issues.push({ check: 'personas', severity: 'warning', message: `Too many personas (${personas.length}) — Persona Pyramid allows max 4` });
     score -= 4;
   }
 
   const sponsorCount = personas.filter((p: PersonaBrief) => p.role_type === 'executive_sponsor').length;
   if (sponsorCount > 1) {
     issues.push({ check: 'personas', severity: 'warning', message: `Multiple executive sponsors (${sponsorCount}) — max 1 allowed` });
+    score -= 3;
+  }
+
+  const hokCount = personas.filter((p: PersonaBrief) => p.role_type === 'hands_on_keyboard').length;
+  if (hokCount > 1) {
+    issues.push({ check: 'personas', severity: 'warning', message: `Multiple hands_on_keyboard personas (${hokCount}) — max 1 allowed` });
+    score -= 3;
+  }
+
+  const allLowConfidence = personas.every((p: PersonaBrief) => (p as any).confidence === 'low');
+  if (allLowConfidence && personas.length > 0) {
+    issues.push({ check: 'personas', severity: 'warning', message: 'All personas are low-confidence — expected at least one medium or high' });
     score -= 3;
   }
 

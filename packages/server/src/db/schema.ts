@@ -102,7 +102,8 @@ function initSchema(db: Database.Database) {
     CREATE TABLE IF NOT EXISTS personas (
       id               TEXT PRIMARY KEY,
       lead_id          TEXT REFERENCES leads(id) ON DELETE CASCADE,
-      role_type        TEXT NOT NULL CHECK(role_type IN ('champion','economic_buyer','executive_sponsor')),
+      role_type        TEXT NOT NULL CHECK(role_type IN ('technical_champion','hands_on_keyboard','economic_buyer','executive_sponsor','champion')),
+      confidence       TEXT DEFAULT 'medium' CHECK(confidence IN ('high','medium','low')),
       name             TEXT,
       title            TEXT,
       linkedin_url     TEXT,
@@ -879,6 +880,41 @@ function initSchema(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_insights_campaign ON campaign_insights(campaign_id);
     CREATE INDEX IF NOT EXISTS idx_insights_status ON campaign_insights(campaign_id, status);
   `);
+
+  // Migrate personas table: expand role_type CHECK + add confidence column
+  const personaTableInfo = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='personas'").get() as { sql: string } | undefined;
+  if (personaTableInfo && !personaTableInfo.sql.includes('technical_champion')) {
+    db.pragma('foreign_keys = OFF');
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS personas_new (
+        id               TEXT PRIMARY KEY,
+        lead_id          TEXT REFERENCES leads(id) ON DELETE CASCADE,
+        role_type        TEXT NOT NULL CHECK(role_type IN ('technical_champion','hands_on_keyboard','economic_buyer','executive_sponsor','champion')),
+        confidence       TEXT DEFAULT 'medium' CHECK(confidence IN ('high','medium','low')),
+        name             TEXT,
+        title            TEXT,
+        linkedin_url     TEXT,
+        department       TEXT,
+        tenure           TEXT,
+        outreach_angle   TEXT,
+        talking_points   TEXT,
+        outreach_message TEXT,
+        social_signals   TEXT,
+        buying_signals   TEXT,
+        created_at       TEXT DEFAULT (datetime('now'))
+      );
+      INSERT OR IGNORE INTO personas_new (id, lead_id, role_type, name, title, linkedin_url, department, tenure, outreach_angle, talking_points, outreach_message, social_signals, buying_signals, created_at)
+        SELECT id, lead_id, role_type, name, title, linkedin_url, department, tenure, outreach_angle, talking_points, outreach_message, social_signals, buying_signals, created_at FROM personas;
+      DROP TABLE personas;
+      ALTER TABLE personas_new RENAME TO personas;
+    `);
+    db.exec("UPDATE personas SET role_type = 'technical_champion' WHERE role_type = 'champion'");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_personas_lead_id ON personas(lead_id)");
+    db.pragma('foreign_keys = ON');
+  } else if (personaTableInfo && !personaTableInfo.sql.includes('confidence')) {
+    // Table already has new role types but missing confidence column
+    try { db.exec("ALTER TABLE personas ADD COLUMN confidence TEXT DEFAULT 'medium' CHECK(confidence IN ('high','medium','low'))"); } catch (_) {}
+  }
 
   seedIcpDefaults(db);
 }

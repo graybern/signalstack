@@ -1265,12 +1265,13 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
     }
 
     // ── Insert personas and ledger entries for briefed leads ──
+    const deleteExistingPersonas = db.prepare('DELETE FROM personas WHERE lead_id = ?');
     const insertPersona = db.prepare(
       `INSERT INTO personas (
-        id, lead_id, role_type, name, title, linkedin_url, department,
+        id, lead_id, role_type, confidence, name, title, linkedin_url, department,
         tenure, outreach_angle, talking_points, outreach_message,
         social_signals, buying_signals, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
     );
 
     const findLedgerEntry = db.prepare(
@@ -1288,10 +1289,12 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
       for (const { candidate, score, brief } of briefResults) {
         const leadId = getLeadId(candidate.company_name);
 
+        deleteExistingPersonas.run(leadId);
         for (const persona of brief.personas) {
           insertPersona.run(
             uuidv4(), leadId,
-            persona.role_type, persona.name, persona.title,
+            persona.role_type, persona.confidence || 'medium',
+            persona.name, persona.title,
             persona.linkedin_url, persona.department, persona.tenure,
             persona.outreach_angle, persona.talking_points,
             persona.outreach_message, persona.social_signals,
@@ -1760,12 +1763,13 @@ export async function rerunBriefForLead(leadId: string): Promise<{ success: bool
   // Replace personas
   db.prepare('DELETE FROM personas WHERE lead_id = ?').run(leadId);
   const insertPersona = db.prepare(
-    `INSERT INTO personas (id, lead_id, role_type, name, title, linkedin_url, department, tenure, outreach_angle, talking_points, outreach_message, social_signals, buying_signals, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))`
+    `INSERT INTO personas (id, lead_id, role_type, confidence, name, title, linkedin_url, department, tenure, outreach_angle, talking_points, outreach_message, social_signals, buying_signals, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))`
   );
   for (const persona of brief.personas) {
     insertPersona.run(
       uuidv4(), leadId,
-      persona.role_type, persona.name, persona.title,
+      persona.role_type, persona.confidence || 'medium',
+      persona.name, persona.title,
       persona.linkedin_url, persona.department, persona.tenure,
       persona.outreach_angle, persona.talking_points,
       persona.outreach_message, persona.social_signals,

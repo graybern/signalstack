@@ -10,6 +10,8 @@ import type {
   CompetitiveDisplacement,
   SourceCitation,
   FunnelStepConfig,
+  PersonaRoleType,
+  EvidenceConfidence,
 } from '../types/index.js';
 import type { ResearchCandidate } from './researcher.js';
 import type { ScoringResult } from './scorer.js';
@@ -18,7 +20,8 @@ import type { StreamContext } from './scorer.js';
 import type { FeedbackContext } from './feedbackContext.js';
 
 export interface PersonaBrief {
-  role_type: 'champion' | 'economic_buyer' | 'executive_sponsor';
+  role_type: PersonaRoleType | 'champion';
+  confidence: EvidenceConfidence;
   name: string | null;
   title: string | null;
   linkedin_url: string | null;
@@ -69,9 +72,12 @@ function normalizeCompetitive(cd: any): CompetitiveDisplacement {
     likely_current: (cd.likely_current || []).slice(0, 2).map((item: any) => {
       if (typeof item === 'string') return item;
       if (item && typeof item === 'object' && item.product) {
+        const conf = item.confidence;
+        const normalizedConf = conf === 'confirmed' ? 'high' : conf === 'inferred' ? 'medium' :
+          (['high', 'medium', 'low'].includes(conf) ? conf : 'medium');
         return {
           product: String(item.product),
-          confidence: item.confidence === 'confirmed' ? 'confirmed' as const : 'inferred' as const,
+          confidence: normalizedConf as 'high' | 'medium' | 'low' | 'confirmed' | 'inferred',
           evidence: String(item.evidence || ''),
           source: item.source || undefined,
         };
@@ -126,7 +132,7 @@ export async function generateBrief(
 
   const enrichmentSourceCount = candidate.enrichment_source_count ?? 0;
   const signalCount = candidate.signals.length;
-  const systemPrompt = getBriefPrompt(icpConfig, enrichmentSourceCount, signalCount, stepConfig?.tech_stack_categories);
+  const systemPrompt = getBriefPrompt(icpConfig, enrichmentSourceCount, signalCount, stepConfig?.tech_stack_categories, outreachTone);
   const valueProps = icpConfig.company_context?.value_props || [];
   const differentiators = icpConfig.company_context?.differentiators || [];
 
@@ -171,7 +177,7 @@ ${candidate.notes}
 ## ICP Context
 ${icpConfig.verticals?.length ? `- **Target Verticals:** ${icpConfig.verticals.join(', ')}\n` : ''}${icpConfig.competitors?.length ? `- **Competitors:** ${icpConfig.competitors.join(', ')}\n` : ''}${icpConfig.tech_signals?.length ? `- **Tech Signals:** ${icpConfig.tech_signals.join(', ')}\n` : ''}${valueProps.length > 0 ? `- **Value Propositions:** ${valueProps.join(', ')}\n` : ''}${differentiators.length > 0 ? `- **Key Differentiators:** ${differentiators.join(', ')}\n` : ''}${icpConfig.campaign_target_signals?.length ? `- **Campaign Target Signals:** ${icpConfig.campaign_target_signals.join(', ')}\n` : ''}${icpConfig.campaign_value_prop_angle ? `- **Value Prop Angle:** ${icpConfig.campaign_value_prop_angle}\n` : ''}${Object.keys(icpConfig.success_stories || {}).length > 0 ? `- **Success Stories:** ${Object.entries(icpConfig.success_stories).map(([v, c]) => `${v}: ${(c as string[]).join(', ')}`).join('; ')}\n` : ''}
 
-${candidate.key_people?.length ? `## Key People Found\nReal people identified at this company (use these for personas — do NOT fabricate additional names):\n${candidate.key_people.map(p => `- **${p.name}** — ${p.title}${p.linkedin_url ? ` (${p.linkedin_url})` : ''}`).join('\n')}\n\n` : ''}Generate the full lead brief as a JSON object.${outreachTone ? `\n\n## Outreach Tone\nWrite all outreach messaging in a ${outreachTone} tone.` : ''}${stepConfig?.persona_types?.length ? `\n\n## Persona Types\nOnly generate personas for these roles: ${stepConfig.persona_types.join(', ')}. Do not include other role types.` : ''}${stepConfig?.brief_depth === 'quick' ? `\n\n## Brief Depth: Quick\nGenerate a snapshot: company overview, 2 pain hypotheses, 1 persona. Skip extended analysis.` : stepConfig?.brief_depth === 'comprehensive' ? `\n\n## Brief Depth: Comprehensive\nGenerate an exhaustive brief with extended analysis, multiple outreach variants per persona, detailed competitive positioning, and thorough why-now analysis.` : ''}${promptInstructions ? `\n\n## Additional Instructions\n${promptInstructions}` : ''}${feedbackContext ? `\n\n## Campaign Learning (from ${feedbackContext.feedbackCount} reviewed leads)\n### Persona Effectiveness\n${feedbackContext.effective_personas}\n\n### Messaging That Works\n${feedbackContext.messaging_guidance}\n\n### Competitive Intelligence from Closed Deals\n${feedbackContext.competitive_intel}` : ''}`;
+${candidate.key_people?.length ? `## Key People Found\nReal people identified at this company (use these for personas — do NOT fabricate additional names):\n${candidate.key_people.map(p => `- **${p.name}** — ${p.title}${p.linkedin_url ? ` (${p.linkedin_url})` : ''}`).join('\n')}\n\n` : ''}Generate the full lead brief as a JSON object.${stepConfig?.persona_types?.length ? `\n\n## Persona Types\nOnly generate personas for these roles: ${stepConfig.persona_types.map(t => t === 'champion' ? 'technical_champion' : t).join(', ')}. Do not include other role types.` : ''}${stepConfig?.brief_depth === 'quick' ? `\n\n## Brief Depth: Quick\nGenerate a snapshot: company overview, 2 pain hypotheses, 1 persona. Skip extended analysis.` : stepConfig?.brief_depth === 'comprehensive' ? `\n\n## Brief Depth: Comprehensive\nGenerate an exhaustive brief with extended analysis, multiple outreach variants per persona, detailed competitive positioning, and thorough why-now analysis.` : ''}${promptInstructions ? `\n\n## Additional Instructions\n${promptInstructions}` : ''}${feedbackContext ? `\n\n## Campaign Learning (from ${feedbackContext.feedbackCount} reviewed leads)\n### Persona Effectiveness\n${feedbackContext.effective_personas}\n\n### Messaging That Works\n${feedbackContext.messaging_guidance}\n\n### Competitive Intelligence from Closed Deals\n${feedbackContext.competitive_intel}` : ''}`;
 
   let rawText: string;
   let thinkingText = '';
@@ -214,6 +220,7 @@ ${candidate.key_people?.length ? `## Key People Found\nReal people identified at
     // Normalize personas
     let personas: PersonaBrief[] = (result.personas || []).map((p: Record<string, unknown>) => ({
       role_type: validateRoleType(p.role_type),
+      confidence: validateConfidence(p.confidence),
       name: p.name ?? null,
       title: p.title ?? null,
       linkedin_url: p.linkedin_url ?? null,
@@ -230,30 +237,60 @@ ${candidate.key_people?.length ? `## Key People Found\nReal people identified at
         : JSON.stringify(p.buying_signals ?? null),
     }));
 
-    // Filter to requested persona types
-    if (stepConfig?.persona_types?.length) {
-      personas = personas.filter(p => stepConfig.persona_types!.includes(p.role_type));
+    // Cross-reference personas against enrichment key_people data
+    if (candidate.key_people?.length) {
+      for (const persona of personas) {
+        if (persona.name) {
+          const match = candidate.key_people.find(kp =>
+            kp.name.toLowerCase() === persona.name!.toLowerCase()
+          );
+          if (match) {
+            persona.confidence = 'high';
+            if (match.linkedin_url && !persona.linkedin_url) {
+              persona.linkedin_url = match.linkedin_url;
+            }
+          } else {
+            if (persona.confidence === 'high') persona.confidence = 'medium';
+          }
+        } else {
+          if (persona.confidence === 'high') persona.confidence = 'medium';
+        }
+      }
     }
 
-    // Persona Pyramid enforcement: cap at 3, ensure proper role distribution
+    // Filter to requested persona types (normalize legacy 'champion')
+    if (stepConfig?.persona_types?.length) {
+      const normalizedTypes: string[] = stepConfig.persona_types.map(t => t === 'champion' ? 'technical_champion' : t);
+      personas = personas.filter(p => normalizedTypes.includes(p.role_type));
+    }
+
+    // Persona Pyramid enforcement: cap at max_personas, ensure proper role distribution
+    const maxPersonas = stepConfig?.max_personas || 4;
     if (personas.length > 0) {
-      const hasChampion = personas.some(p => p.role_type === 'champion');
+      const hasChampion = personas.some(p => p.role_type === 'technical_champion');
       if (!hasChampion) {
-        personas[0].role_type = 'champion';
+        personas[0].role_type = 'technical_champion';
       }
-      if (personas.length > 3) {
+      if (personas.length > maxPersonas) {
         const kept: PersonaBrief[] = [];
-        const byRole = { champion: [] as PersonaBrief[], economic_buyer: [] as PersonaBrief[], executive_sponsor: [] as PersonaBrief[] };
-        for (const p of personas) byRole[p.role_type].push(p);
-        if (byRole.champion.length > 0) kept.push(byRole.champion[0]);
-        if (byRole.economic_buyer.length > 0) kept.push(byRole.economic_buyer[0]);
-        if (byRole.executive_sponsor.length > 0 && kept.length < 3) kept.push(byRole.executive_sponsor[0]);
-        personas = kept.length > 0 ? kept : personas.slice(0, 3);
+        const byRole: Record<string, PersonaBrief[]> = {
+          technical_champion: [], hands_on_keyboard: [],
+          economic_buyer: [], executive_sponsor: [],
+        };
+        for (const p of personas) {
+          const key = p.role_type as string;
+          if (byRole[key]) byRole[key].push(p);
+        }
+        if (byRole.technical_champion.length > 0) kept.push(byRole.technical_champion[0]);
+        if (byRole.economic_buyer.length > 0 && kept.length < maxPersonas) kept.push(byRole.economic_buyer[0]);
+        if (byRole.hands_on_keyboard.length > 0 && kept.length < maxPersonas) kept.push(byRole.hands_on_keyboard[0]);
+        if (byRole.executive_sponsor.length > 0 && kept.length < maxPersonas) kept.push(byRole.executive_sponsor[0]);
+        personas = kept.length > 0 ? kept : personas.slice(0, maxPersonas);
       }
     }
 
     if (personas.length === 0) {
-      personas.push(buildFallbackChampion(candidate.company_name, candidate.segment));
+      personas.push(buildFallbackTechnicalChampion(candidate.company_name, candidate.segment, icpConfig));
     }
 
     return {
@@ -274,7 +311,8 @@ ${candidate.key_people?.length ? `## Key People Found\nReal people identified at
       source_citations: (result.source_citations || []).map((s: any, i: number) => ({
         ...s,
         id: s.id ?? i + 1,
-        confidence: s.confidence || 'inferred',
+        confidence: s.confidence === 'confirmed' ? 'high' : s.confidence === 'inferred' ? 'medium' :
+          (['high', 'medium', 'low'].includes(s.confidence) ? s.confidence : 'medium'),
       })),
       why_now: result.why_now || [],
       brief_markdown: result.brief_markdown || '',
@@ -287,7 +325,7 @@ ${candidate.key_people?.length ? `## Key People Found\nReal people identified at
     return {
       company_snapshot: rawText.substring(0, 500),
       pain_hypotheses: [],
-      personas: [buildFallbackChampion(candidate.company_name, candidate.segment, icpConfig)],
+      personas: [buildFallbackTechnicalChampion(candidate.company_name, candidate.segment, icpConfig)],
       tech_stack: { vpn_product: null, pam_product: null, recent_purchases: [], cloud_infra: [], dev_tools: [], notes: 'Brief generation failed — JSON parse error' },
       competitive_displacement: { likely_current: [], evidence_sources: [], twingate_wedge: [], proof_points_to_use: [] },
       outreach_strategy: '',
@@ -298,15 +336,16 @@ ${candidate.key_people?.length ? `## Key People Found\nReal people identified at
   }
 }
 
-function buildFallbackChampion(companyName: string, segment?: string, icpConfig?: ExtendedICPConfig): PersonaBrief {
-  const championPersona = icpConfig?.buyer_personas?.champion;
+function buildFallbackTechnicalChampion(companyName: string, segment?: string, icpConfig?: ExtendedICPConfig): PersonaBrief {
+  const championPersona = icpConfig?.buyer_personas?.technical_champion || icpConfig?.buyer_personas?.champion;
   const fallbackTitle = championPersona?.titles?.[0] || (
     segment === 'ENT' ? 'Director of IT' :
     segment === 'MM' ? 'Senior IT Manager' : 'IT Manager'
   );
   const productName = icpConfig?.company_context?.product_name || 'our solution';
   return {
-    role_type: 'champion',
+    role_type: 'technical_champion',
+    confidence: 'low',
     name: null,
     title: fallbackTitle,
     linkedin_url: null,
@@ -324,15 +363,22 @@ function buildFallbackChampion(companyName: string, segment?: string, icpConfig?
   };
 }
 
-function validateRoleType(
-  value: unknown
-): 'champion' | 'economic_buyer' | 'executive_sponsor' {
+function validateRoleType(value: unknown): PersonaRoleType {
+  if (value === 'champion') return 'technical_champion';
   if (
-    value === 'champion' ||
+    value === 'technical_champion' ||
+    value === 'hands_on_keyboard' ||
     value === 'economic_buyer' ||
     value === 'executive_sponsor'
   ) {
     return value;
   }
-  return 'champion';
+  return 'technical_champion';
+}
+
+function validateConfidence(value: unknown): EvidenceConfidence {
+  if (value === 'high' || value === 'medium' || value === 'low') return value;
+  if (value === 'confirmed') return 'high';
+  if (value === 'inferred') return 'medium';
+  return 'medium';
 }

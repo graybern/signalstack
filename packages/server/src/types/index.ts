@@ -42,6 +42,9 @@ export interface PipelineRun {
   created_at: string;
 }
 
+export type EvidenceConfidence = 'high' | 'medium' | 'low';
+export type PersonaRoleType = 'technical_champion' | 'hands_on_keyboard' | 'economic_buyer' | 'executive_sponsor';
+
 export type SourceType = 'outbound_research' | 'outbound_campaign' | 'inbound_csv' | 'inbound_manual' | 'inbound_webhook' | 'quick_research' | 'batch_research' | 'webhook_research';
 export type LeadStatus = 'imported' | 'enriching' | 'scored' | 'qualified' | 'disqualified' | 'contacted' | 'won' | 'lost' | 'meeting_booked' | 'closed_won' | 'closed_lost' | 'customer' | 'stalled' | 'nurture';
 
@@ -81,7 +84,8 @@ export interface Lead {
 export interface Persona {
   id: string;
   lead_id: string;
-  role_type: 'champion' | 'economic_buyer' | 'executive_sponsor';
+  role_type: PersonaRoleType | 'champion'; // 'champion' for backward compat with existing data
+  confidence: EvidenceConfidence;
   name: string | null;
   title: string | null;
   linkedin_url: string | null;
@@ -222,7 +226,7 @@ export interface ScoreBreakdown {
 export interface PainHypothesis {
   claim: string;
   why_it_matters: string;
-  evidence_strength?: 'confirmed' | 'inferred';
+  evidence_strength?: EvidenceConfidence | 'confirmed' | 'inferred'; // legacy compat
 }
 
 export interface TechStackItem {
@@ -250,7 +254,7 @@ export interface TechStackIntel {
 
 export interface CompetitiveProduct {
   product: string;
-  confidence: 'confirmed' | 'inferred';
+  confidence: EvidenceConfidence | 'confirmed' | 'inferred'; // legacy compat
   evidence: string;
   source?: string;
 }
@@ -268,7 +272,7 @@ export interface SourceCitation {
   type: string;
   url: string;
   label: string;
-  confidence?: 'confirmed' | 'inferred';
+  confidence?: EvidenceConfidence | 'confirmed' | 'inferred'; // legacy compat
 }
 
 export interface LeadBriefFull extends Lead {
@@ -401,7 +405,8 @@ export interface FunnelStepConfig {
   confidence_filter?: 'all' | 'medium_high' | 'high_only';
 
   // ── Brief levers ──
-  persona_types?: ('champion' | 'economic_buyer' | 'executive_sponsor')[];
+  persona_types?: (PersonaRoleType | 'champion')[];
+  max_personas?: number;
   brief_depth?: 'quick' | 'standard' | 'comprehensive';
   tech_stack_categories?: TechStackCategory[];
 

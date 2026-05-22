@@ -186,8 +186,12 @@ export function LeadDetail() {
                   <span className="flex items-center gap-2 mt-0.5">
                     <span className="text-gray-400">{source.type}</span>
                     {source.confidence && (
-                      <span className={`px-1 py-0.5 rounded text-[10px] font-medium ${source.confidence === 'confirmed' ? 'bg-green-900 text-green-300' : 'bg-amber-900 text-amber-300'}`}>
-                        {source.confidence}
+                      <span className={`px-1 py-0.5 rounded text-[10px] font-medium ${
+                        source.confidence === 'high' || source.confidence === 'confirmed' ? 'bg-green-900 text-green-300' :
+                        source.confidence === 'medium' || source.confidence === 'inferred' ? 'bg-amber-900 text-amber-300' :
+                        'bg-gray-700 text-gray-300'
+                      }`}>
+                        {source.confidence === 'confirmed' ? 'high' : source.confidence === 'inferred' ? 'medium' : source.confidence}
                       </span>
                     )}
                   </span>
@@ -439,69 +443,118 @@ export function LeadDetail() {
             </Section>
           )}
 
-          {/* Target Personas */}
-          {lead.personas?.length > 0 && (
-            <Section title="Target Personas" icon={<Users className="w-4 h-4" />}>
-              <div className="space-y-3">
-                {lead.personas.map((p: any, i: number) => (
-                  <div key={p.id} className="border border-gray-200 rounded-lg">
-                    <button
-                      onClick={() => setExpandedPersona(expandedPersona === i ? -1 : i)}
-                      className="w-full flex items-center justify-between p-4 text-left"
-                    >
-                      <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-full bg-brand-100 flex items-center justify-center text-brand-700 text-sm font-bold">
-                          {(p.name || '?')[0]}
-                        </div>
-                        <div>
-                          <p className="font-medium text-gray-900">{p.name || 'Unknown'}</p>
-                          <p className="text-xs text-gray-500">{p.title} &middot; <span className="capitalize">{p.role_type?.replace('_', ' ')}</span></p>
-                        </div>
+          {/* Target Personas — grouped by category */}
+          {lead.personas?.length > 0 && (() => {
+            const ROLE_ORDER = ['technical_champion', 'hands_on_keyboard', 'economic_buyer', 'executive_sponsor'] as const;
+            const ROLE_LABELS: Record<string, string> = {
+              technical_champion: 'Technical Champion',
+              hands_on_keyboard: 'Hands-on Keyboard',
+              economic_buyer: 'Economic Buyer',
+              executive_sponsor: 'Executive Sponsor',
+              champion: 'Technical Champion',
+            };
+            const ROLE_COLORS: Record<string, string> = {
+              technical_champion: 'border-l-rose-400',
+              hands_on_keyboard: 'border-l-blue-400',
+              economic_buyer: 'border-l-amber-400',
+              executive_sponsor: 'border-l-gray-400',
+              champion: 'border-l-rose-400',
+            };
+            // Deduplicate personas by (name + title + role_type)
+            const deduped = lead.personas.filter((p: any, i: number, arr: any[]) =>
+              arr.findIndex((q: any) => q.name === p.name && q.title === p.title && q.role_type === p.role_type) === i
+            );
+            // Group by role_type
+            const grouped = ROLE_ORDER.map(role => ({
+              role,
+              label: ROLE_LABELS[role],
+              personas: deduped.filter((p: any) => p.role_type === role || (role === 'technical_champion' && p.role_type === 'champion')),
+            })).filter(g => g.personas.length > 0);
+
+            return (
+              <Section title="Target Personas" icon={<Users className="w-4 h-4" />}>
+                <div className="space-y-4">
+                  {grouped.map(group => (
+                    <div key={group.role}>
+                      <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-2">{group.label}</p>
+                      <div className="space-y-2">
+                        {group.personas.map((p: any, i: number) => {
+                          const globalIdx = deduped.indexOf(p);
+                          return (
+                            <div key={p.id} className={`border border-gray-200 rounded-lg border-l-4 ${ROLE_COLORS[p.role_type] || 'border-l-gray-300'}`}>
+                              <button
+                                onClick={() => setExpandedPersona(expandedPersona === globalIdx ? -1 : globalIdx)}
+                                className="w-full flex items-center justify-between p-4 text-left"
+                              >
+                                <div className="flex items-center gap-3">
+                                  <div className="w-8 h-8 rounded-full bg-brand-100 flex items-center justify-center text-brand-700 text-sm font-bold">
+                                    {(p.name || '?')[0]}
+                                  </div>
+                                  <div>
+                                    <div className="flex items-center gap-2">
+                                      <p className="font-medium text-gray-900">{p.name || 'Unknown'}</p>
+                                      {p.confidence && (
+                                        <span className={`px-1.5 py-0.5 text-[10px] font-medium rounded ${
+                                          p.confidence === 'high' ? 'bg-green-50 text-green-700 border border-green-200' :
+                                          p.confidence === 'medium' ? 'bg-amber-50 text-amber-700 border border-amber-200' :
+                                          'bg-gray-50 text-gray-500 border border-gray-200'
+                                        }`}>
+                                          {p.confidence}
+                                        </span>
+                                      )}
+                                    </div>
+                                    <p className="text-xs text-gray-500">{p.title}</p>
+                                  </div>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  {p.linkedin_url && (
+                                    <a href={p.linkedin_url} target="_blank" rel="noopener" onClick={e => e.stopPropagation()} className="text-blue-600 hover:text-blue-800">
+                                      <Linkedin className="w-4 h-4" />
+                                    </a>
+                                  )}
+                                  {expandedPersona === globalIdx ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
+                                </div>
+                              </button>
+                              {expandedPersona === globalIdx && (
+                                <div className="px-4 pb-4 space-y-3 border-t border-gray-100 pt-3">
+                                  {p.outreach_angle && (
+                                    <div>
+                                      <p className="text-xs font-medium text-gray-500 uppercase mb-1">Outreach Angle</p>
+                                      <p className="text-sm text-gray-700">{p.outreach_angle}</p>
+                                    </div>
+                                  )}
+                                  {(p.talking_points_parsed || []).length > 0 && (
+                                    <div>
+                                      <p className="text-xs font-medium text-gray-500 uppercase mb-1">Talking Points</p>
+                                      <ul className="space-y-1">
+                                        {(p.talking_points_parsed || []).map((tp: string, j: number) => (
+                                          <li key={j} className="text-sm text-gray-700 flex items-start gap-2">
+                                            <MessageSquare className="w-3 h-3 mt-1 text-brand-400 flex-shrink-0" />{tp}
+                                          </li>
+                                        ))}
+                                      </ul>
+                                    </div>
+                                  )}
+                                  {p.outreach_message && (
+                                    <div>
+                                      <p className="text-xs font-medium text-gray-500 uppercase mb-1">Draft Outreach Message</p>
+                                      <blockquote className="text-sm text-gray-700 bg-gray-50 p-3 rounded-lg border-l-2 border-brand-300 italic">
+                                        {p.outreach_message}
+                                      </blockquote>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
-                      <div className="flex items-center gap-2">
-                        {p.linkedin_url && (
-                          <a href={p.linkedin_url} target="_blank" rel="noopener" onClick={e => e.stopPropagation()} className="text-blue-600 hover:text-blue-800">
-                            <Linkedin className="w-4 h-4" />
-                          </a>
-                        )}
-                        {expandedPersona === i ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
-                      </div>
-                    </button>
-                    {expandedPersona === i && (
-                      <div className="px-4 pb-4 space-y-3 border-t border-gray-100 pt-3">
-                        {p.outreach_angle && (
-                          <div>
-                            <p className="text-xs font-medium text-gray-500 uppercase mb-1">Outreach Angle</p>
-                            <p className="text-sm text-gray-700">{p.outreach_angle}</p>
-                          </div>
-                        )}
-                        {(p.talking_points_parsed || []).length > 0 && (
-                          <div>
-                            <p className="text-xs font-medium text-gray-500 uppercase mb-1">Talking Points</p>
-                            <ul className="space-y-1">
-                              {(p.talking_points_parsed || []).map((tp: string, j: number) => (
-                                <li key={j} className="text-sm text-gray-700 flex items-start gap-2">
-                                  <MessageSquare className="w-3 h-3 mt-1 text-brand-400 flex-shrink-0" />{tp}
-                                </li>
-                              ))}
-                            </ul>
-                          </div>
-                        )}
-                        {p.outreach_message && (
-                          <div>
-                            <p className="text-xs font-medium text-gray-500 uppercase mb-1">Draft Outreach Message</p>
-                            <blockquote className="text-sm text-gray-700 bg-gray-50 p-3 rounded-lg border-l-2 border-brand-300 italic">
-                              {p.outreach_message}
-                            </blockquote>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </Section>
-          )}
+                    </div>
+                  ))}
+                </div>
+              </Section>
+            );
+          })()}
 
           {/* Competitive Displacement */}
           {competitive && (
@@ -525,8 +578,10 @@ export function LeadDetail() {
                           {renderWithCitations(label)}
                           {conf && (
                             <span className={`px-1 py-0.5 text-[10px] font-medium rounded border ${
-                              conf === 'confirmed' ? 'bg-green-50 text-green-700 border-green-200' : 'bg-amber-50 text-amber-700 border-amber-200'
-                            }`}>{conf}</span>
+                              conf === 'high' || conf === 'confirmed' ? 'bg-green-50 text-green-700 border-green-200' :
+                              conf === 'medium' || conf === 'inferred' ? 'bg-amber-50 text-amber-700 border-amber-200' :
+                              'bg-gray-50 text-gray-500 border-gray-200'
+                            }`}>{conf === 'confirmed' ? 'high' : conf === 'inferred' ? 'medium' : conf}</span>
                           )}
                           {isStructured && c.evidence && (
                             <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 px-3 py-2 bg-gray-900 text-white text-xs rounded-lg shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 whitespace-nowrap max-w-xs">
@@ -547,8 +602,10 @@ export function LeadDetail() {
                     {competitive.evidence_sources.map((e: any, i: number) => (
                       <div key={i} className="flex items-start gap-2 text-xs">
                         <span className={`px-1 py-0.5 rounded text-[10px] font-medium shrink-0 mt-0.5 ${
-                          e.confidence === 'confirmed' ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-700'
-                        }`}>{e.confidence || 'inferred'}</span>
+                          e.confidence === 'high' || e.confidence === 'confirmed' ? 'bg-green-50 text-green-700' :
+                          e.confidence === 'medium' || e.confidence === 'inferred' ? 'bg-amber-50 text-amber-700' :
+                          'bg-gray-50 text-gray-500'
+                        }`}>{e.confidence === 'confirmed' ? 'high' : e.confidence === 'inferred' ? 'medium' : e.confidence || 'medium'}</span>
                         <span className="text-gray-700">{e.signal}</span>
                         {e.url && <a href={e.url} target="_blank" rel="noopener" className="text-blue-600 hover:underline shrink-0">source</a>}
                       </div>
@@ -584,6 +641,12 @@ export function LeadDetail() {
           {/* Sources */}
           {sources.length > 0 && (
             <Section title={`Sources (${sources.length})`} icon={<ExternalLink className="w-4 h-4" />}>
+              <div className="flex items-center gap-3 mb-2 text-[10px] text-gray-400">
+                <span className="font-medium text-gray-500">Confidence:</span>
+                <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-green-500" title="Directly observed from primary source" />High</span>
+                <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-amber-500" title="Strong inference from multiple signals" />Medium</span>
+                <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-gray-400" title="Single weak signal or industry pattern" />Low</span>
+              </div>
               <div className="space-y-1">
                 {sources.map((s: any, i: number) => {
                   const citId = s.id ?? i + 1;
@@ -593,8 +656,12 @@ export function LeadDetail() {
                       <span className="truncate">{s.label || s.url}</span>
                       <span className="text-xs text-gray-400">({s.type})</span>
                       {s.confidence && (
-                        <span className={`px-1 py-0.5 text-[10px] font-medium rounded shrink-0 ${s.confidence === 'confirmed' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-amber-50 text-amber-700 border border-amber-200'}`}>
-                          {s.confidence}
+                        <span className={`px-1 py-0.5 text-[10px] font-medium rounded shrink-0 ${
+                          s.confidence === 'high' || s.confidence === 'confirmed' ? 'bg-green-50 text-green-700 border border-green-200' :
+                          s.confidence === 'medium' || s.confidence === 'inferred' ? 'bg-amber-50 text-amber-700 border border-amber-200' :
+                          'bg-gray-50 text-gray-500 border border-gray-200'
+                        }`}>
+                          {s.confidence === 'confirmed' ? 'high' : s.confidence === 'inferred' ? 'medium' : s.confidence}
                         </span>
                       )}
                     </a>

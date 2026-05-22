@@ -1,7 +1,7 @@
 import type { ExtendedICPConfig, TechStackCategory } from '../../types/index.js';
 import { getDefaultTechStackCategories } from '../../config/icpDefaults.js';
 
-export function getBriefPrompt(icpConfig: ExtendedICPConfig, enrichmentSourceCount?: number, signalCount?: number, techCategories?: TechStackCategory[]): string {
+export function getBriefPrompt(icpConfig: ExtendedICPConfig, enrichmentSourceCount?: number, signalCount?: number, techCategories?: TechStackCategory[], outreachTone?: string): string {
   const srcCount = enrichmentSourceCount ?? 0;
   const sigCount = signalCount ?? 0;
 
@@ -14,22 +14,22 @@ export function getBriefPrompt(icpConfig: ExtendedICPConfig, enrichmentSourceCou
   if (srcCount >= 3 && sigCount >= 5) {
     dataDepthGuidance = `\n## Data Depth: Rich
 This candidate has strong enrichment data (${srcCount} external sources, ${sigCount} buying signals). Go deep:
-- **Personas**: Find specific named individuals if mentioned in sources. Provide detailed LinkedIn-style profiles with tenure estimates, likely priorities based on role, and highly personalized outreach messages referencing specific company events.
-- **Pain Hypotheses**: Generate 4 hypotheses, each tied to a specific signal or source. Cross-reference multiple signals to build compound pain narratives.
-- **Tech Stack**: Be specific — cite exact products with evidence sources and confidence levels.
+- **Personas**: Find specific named individuals if mentioned in sources. Provide detailed profiles with tenure estimates and highly personalized outreach messages referencing specific company events. Set persona confidence to "high" when names come from enrichment sources.
+- **Pain Hypotheses**: Generate 4 hypotheses, each tied to a specific signal or source. Cross-reference multiple signals to build compound pain narratives. Set evidence_strength to "high" when directly supported by a source.
+- **Tech Stack**: Be specific — cite exact products with evidence sources. Use "high" confidence when directly observed, "medium" for strong indirect evidence.
 - **Competitive Displacement**: Build a detailed displacement narrative with specific proof points.\n`;
   } else if (srcCount >= 1 && sigCount >= 3) {
     dataDepthGuidance = `\n## Data Depth: Moderate
 This candidate has moderate enrichment data (${srcCount} external source(s), ${sigCount} buying signals). Standard depth:
-- **Personas**: Generate role-based personas with reasonable title assumptions. Personalize outreach to company context.
-- **Pain Hypotheses**: Generate 2-3 hypotheses. Be specific where signals support it, flag where you're inferring.
-- **Tech Stack**: Note what's confirmed vs. inferred.
+- **Personas**: Generate role-based personas with reasonable title assumptions. Personalize outreach to company context. Set persona confidence to "medium" for role-based assumptions.
+- **Pain Hypotheses**: Generate 2-3 hypotheses. Be specific where signals support it, flag where you're inferring. Use "high" for source-backed claims, "medium" for multi-signal inferences, "low" for industry-pattern assumptions.
+- **Tech Stack**: Note confidence levels: "high" for directly observed, "medium" for inferred, "low" for assumed.
 - **Gaps**: In the brief_markdown, include a "## Research Gaps" section listing what an AE should verify manually.\n`;
   } else {
     dataDepthGuidance = `\n## Data Depth: Thin
 This candidate has limited enrichment data (${srcCount} external source(s), ${sigCount} buying signals). Be conservative:
-- **Personas**: Generate generic role-based personas only. Do not fabricate specific names or detailed profiles.
-- **Pain Hypotheses**: Generate 2 hypotheses max. Clearly label each as "confirmed" or "inferred".
+- **Personas**: Generate generic role-based personas only. Do not fabricate specific names or detailed profiles. Set persona confidence to "low" for generic role assumptions.
+- **Pain Hypotheses**: Generate 2 hypotheses max. Set evidence_strength to "medium" or "low" — with this data depth, "high" is unlikely.
 - **Tech Stack**: Only include what's evidenced. Use "Unknown — needs discovery" for gaps rather than guessing.
 - **Gaps**: In the brief_markdown, include a prominent "## Research Gaps" section listing everything the AE needs to manually research before outreach. This is critical — the AE needs to know where the data is thin so they don't walk into a call unprepared.\n`;
   }
@@ -56,8 +56,27 @@ This candidate has limited enrichment data (${srcCount} external source(s), ${si
     }
   }
 
+  // Build consultative advisor section from ICP config (no hardcoded product language)
+  let toneSection = '';
+  if (outreachTone === 'consultative') {
+    const verticals = icpConfig.verticals || [];
+    const valueProps = icpConfig.company_context?.value_props || [];
+    const differentiators = icpConfig.company_context?.differentiators || [];
+    const industryFocus = icpConfig.company_context?.industry_focus || '';
+
+    toneSection = `\n## Outreach Tone: Consultative Advisor Mode
+All outreach messages, talking points, and outreach angles must follow these rules:
+1. **No name-dropping**: Do not mention specific customers, case studies, or competitors by name in outreach messages. Position insights as patterns observed across similar organizations.
+2. **Industry-pattern framing**: Lead with "We've seen organizations in [their vertical/industry] face [specific pattern]..." rather than product pitches. Reference the prospect's actual vertical, not generic B2B language.${verticals.length > 0 ? `\n   Known verticals to reference when relevant: ${verticals.join(', ')}` : ''}${industryFocus ? `\n   Industry focus: ${industryFocus}` : ''}
+3. **Value-led messaging**: Frame outreach around business and technical outcomes, not product features.${valueProps.length > 0 ? `\n   Value propositions to weave in naturally: ${valueProps.join('; ')}` : ''}${differentiators.length > 0 ? `\n   Key differentiators: ${differentiators.join('; ')}` : ''}
+4. **Discovery-first CTA**: End outreach with a question or insight-sharing offer, not a demo request. E.g., "Would it be useful to share how similar teams have approached this?" rather than "Can I show you a demo?"
+5. **Technical credibility**: Reference specific architectural patterns and technical concepts relevant to the prospect's stack, not marketing buzzwords.\n`;
+  } else if (outreachTone) {
+    toneSection = `\n## Outreach Tone\nWrite all outreach messaging in a ${outreachTone} tone.\n`;
+  }
+
   return `You are a senior B2B sales strategist for ${companyName}${productName !== companyName ? ` (${productName})` : ''}, ${oneLiner}. Your job is to generate a comprehensive lead brief that equips account executives with everything they need for effective outreach.
-${dataDepthGuidance}${personaGuidance}${productContextSection}
+${dataDepthGuidance}${personaGuidance}${productContextSection}${toneSection}
 ## Brief Structure
 
 Generate a full lead brief with the following sections:
@@ -72,31 +91,40 @@ A concise summary of the company including:
 Identify specific pain points this company likely experiences that ${companyName} can address. Each hypothesis should include:
 - A clear claim about the pain point — include inline source references using [N] format where N matches a source_citation id (e.g., "Recently migrated to AWS [3] suggesting cloud-first strategy")
 - Why it matters to this specific company (tied to their business context)
-- **Evidence strength**: "confirmed" (directly supported by a source/signal) or "inferred" (logical deduction from company profile)
+- **Evidence strength**: "high" (directly supported by a primary source), "medium" (inferred from multiple signals or secondary evidence), or "low" (industry-pattern assumption without direct evidence)
 
-### 3. Target Personas (STRICT: generate exactly 2-3)
+### 3. Target Personas (STRICT: generate 2-4, quality over quantity)
 Follow the Persona Pyramid exactly:
 
-**REQUIRED — always include both:**
-1. **Champion** (role_type: "champion") — EXACTLY 1. Day-to-day evaluator who feels the pain.
+**REQUIRED — always include:**
+1. **Technical Champion** (role_type: "technical_champion") — EXACTLY 1. Day-to-day evaluator who owns the problem and drives the evaluation.
    - Target titles: Director, Sr. Manager, Team Lead in IT/Infrastructure/Security/Platform Engineering
    - This persona must have the most detailed, personalized outreach message
+
 2. **Economic Buyer** (role_type: "economic_buyer") — EXACTLY 1 for ENT/MM segments.
    - Target titles: VP of IT, VP of Engineering, CISO
-   - For SMB: may be the same person as champion — if so, generate just 1 champion
+   - For SMB: may be the same person as technical_champion — if so, generate just 1 technical_champion
 
-**OPTIONAL — only with strong evidence:**
-3. **Executive Sponsor** (role_type: "executive_sponsor") — AT MOST 1.
+**OPTIONAL — only with evidence:**
+3. **Hands-on Keyboard** (role_type: "hands_on_keyboard") — AT MOST 1. The engineer who will actually deploy, configure, and operate the solution day-to-day.
+   - Target titles: DevOps Engineer/Manager, Platform Engineer, SRE, Infrastructure Engineer, Cloud Engineer
+   - ONLY include when there is evidence of a hands-on technical culture (DevOps job postings, open-source contributions, IaC usage, engineering blog, or technical team structure visible in sources)
+   - This persona gets the most technically specific outreach
+
+4. **Executive Sponsor** (role_type: "executive_sponsor") — AT MOST 1. Blesses the initiative at the org level.
    - Target titles: CTO, CIO
-   - ONLY include if there is a specific signal (conference talk, public statement, org restructure) justifying their inclusion
+   - ONLY include if there is a specific signal (conference talk, public statement, org restructure, or named in sources) justifying their inclusion
 
 **HARD RULES:**
-- Generate 2-3 personas total. Never 4+.
-- Do NOT fill slots with C-suite. Ideal card: 1 Director champion + 1 VP economic buyer.
+- Generate 2-4 personas total. Never 5+.
+- Do NOT fill slots with C-suite. Ideal card: 1 Director technical_champion + 1 VP economic_buyer.
 - Do NOT include an executive_sponsor without citing a specific signal.
+- Do NOT include a hands_on_keyboard without evidence of technical culture.
+- Quality matters more than quantity — 2 well-researched personas beat 4 generic ones.
 
 For each persona, provide:
-- **role_type**: "champion", "economic_buyer", or "executive_sponsor"
+- **role_type**: "technical_champion", "hands_on_keyboard", "economic_buyer", or "executive_sponsor"
+- **confidence**: "high" (named individual verified from enrichment data or multiple sources), "medium" (role-based persona with title inferred from company profile), "low" (generic role-based persona with no company-specific evidence)
 - **name**: Real name from sources or key_people data (null if not found — never fabricate)
 - **title**: Job title at this company
 - **linkedin_url**: URL from sources or key_people data (null if not found — never fabricate)
@@ -123,7 +151,7 @@ Also include:
 
 ### 5. Competitive Displacement
 - **displacement_narrative**: 2-3 sentences connecting this specific company's current solution to why ${companyName} wins. Reference at least one concrete signal about THIS company. The AE will lead with this narrative — make it specific, not generic.
-- **likely_current**: MAX 2 products. Only include products where you have actual evidence. { "product": "name", "confidence": "confirmed|inferred", "evidence": "how you know", "source": "url or detection method" }
+- **likely_current**: MAX 2 products. Only include products where you have actual evidence. { "product": "name", "confidence": "high|medium|low", "evidence": "how you know", "source": "url or detection method" }
 - **evidence_sources**: MAX 3 entries. Only real evidence you found, not hypothetical.
 - **twingate_wedge**: MAX 3 specific advantages ${companyName} has over their SPECIFIC current solution. Each must reference THIS company's situation (e.g., "Their 3 offices across US/EU make ${companyName}'s mesh architecture faster than site-to-site VPN"). Generic advantages like "easier to deploy" will fail audit.
 - **proof_points_to_use**: MAX 2 customer stories relevant to this prospect's vertical/scale.
@@ -142,7 +170,7 @@ List all sources used in researching this brief. Each citation must have:
 - Type (e.g., "career_page", "press_release", "crunchbase", "linkedin", "g2_review", "github", "dns_fingerprint")
 - URL (if available)
 - Label describing what information came from this source
-- **confidence**: "confirmed" (you directly observed this data) or "inferred" (deduced from context)
+- **confidence**: "high" (you directly observed this data from a primary source), "medium" (inferred from secondary or indirect evidence), or "low" (assumed based on industry patterns)
 
 ### 8. Why Now
 List 2-4 specific reasons why now is the right time to engage this prospect. Each reason should cite a specific signal or data point using [N] inline references, not generic trends.
@@ -163,7 +191,8 @@ Return a JSON object with this exact structure:
   ],
   "personas": [
     {
-      "role_type": "champion|economic_buyer|executive_sponsor",
+      "role_type": "technical_champion|hands_on_keyboard|economic_buyer|executive_sponsor",
+      "confidence": "high|medium|low",
       "name": null,
       "title": "string",
       "linkedin_url": null,
@@ -186,14 +215,14 @@ Return a JSON object with this exact structure:
   },
   "competitive_displacement": {
     "displacement_narrative": "string (2-3 sentences, personalized to this company)",
-    "likely_current": [{ "product": "string", "confidence": "confirmed|inferred", "evidence": "string", "source": "string" }],
+    "likely_current": [{ "product": "string", "confidence": "high|medium|low", "evidence": "string", "source": "string" }],
     "evidence_sources": [{ "signal": "string", "url": "string", "confidence": "string" }],
     "twingate_wedge": ["string"],
     "proof_points_to_use": ["string"]
   },
   "outreach_strategy": "string",
   "source_citations": [
-    { "id": 1, "type": "string", "url": "string", "label": "string", "confidence": "confirmed|inferred" }
+    { "id": 1, "type": "string", "url": "string", "label": "string", "confidence": "high|medium|low" }
   ],
   "why_now": ["string"],
   "brief_markdown": "string"

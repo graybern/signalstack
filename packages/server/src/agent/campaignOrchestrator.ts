@@ -87,7 +87,7 @@ function buildLegacyFunnel(pipelineConfig: Record<string, any>): FunnelConfig {
       { id: 'qualify', enabled: false, candidate_limit: 999 },
       { id: 'enrich', enabled: true },
       { id: 'score', enabled: true, model, max_tokens: pipelineConfig.max_tokens_scoring || 2048 },
-      { id: 'brief', enabled: true, model, max_tokens: pipelineConfig.max_tokens_brief || 4096 },
+      { id: 'brief', enabled: true, model, max_tokens: pipelineConfig.max_tokens_brief || 16384 },
       { id: 'audit', enabled: true, audit_quality_threshold: 60 },
     ],
   };

@@ -202,7 +202,7 @@ function getDefaultPipelineConfig() {
     model: 'claude-opus-4-6',
     max_tokens_research: 16384,
     max_tokens_scoring: 2048,
-    max_tokens_brief: 4096,
+    max_tokens_brief: 16384,
     concurrent_api_calls: 5,
     schedule_cron: '0 14 * * 1',
     schedule_description: 'Mondays at 7am MST (14:00 UTC)',

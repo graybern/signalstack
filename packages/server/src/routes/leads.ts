@@ -267,6 +267,8 @@ router.get('/:id', authenticate, (req: AuthRequest, res: Response) => {
   const db = getDb();
   const lead = db.prepare(
     `SELECT l.*,
+      c.name as campaign_name,
+      c.funnel_config as campaign_funnel_config,
       (SELECT json_group_array(json_object('id',p.id,'role_type',p.role_type,'confidence',p.confidence,'name',p.name,'title',p.title,'linkedin_url',p.linkedin_url,'department',p.department,'tenure',p.tenure,'outreach_angle',p.outreach_angle,'talking_points',p.talking_points,'outreach_message',p.outreach_message,'social_signals',p.social_signals,'buying_signals',p.buying_signals))
        FROM personas p WHERE p.lead_id = l.id) as personas_json,
       (SELECT json_group_array(json_object(
@@ -280,7 +282,9 @@ router.get('/:id', authenticate, (req: AuthRequest, res: Response) => {
        FROM lead_feedback f
        LEFT JOIN feedback_outcome_details od ON od.feedback_id = f.id
        WHERE f.lead_id = l.id ORDER BY f.created_at DESC) as feedback_json
-     FROM leads l WHERE l.id = ?`
+     FROM leads l
+     LEFT JOIN campaigns c ON c.id = l.campaign_id
+     WHERE l.id = ?`
   ).get(req.params.id);
 
   if (!lead) return res.status(404).json({ error: 'Lead not found' });
@@ -297,6 +301,22 @@ router.get('/:id', authenticate, (req: AuthRequest, res: Response) => {
   }
 
   const parsed = parseLead(lead);
+
+  // Extract brief threshold from campaign funnel config
+  if ((lead as any).campaign_funnel_config) {
+    try {
+      const fc = JSON.parse((lead as any).campaign_funnel_config);
+      const scoreStep = fc.steps?.find((s: any) => s.id === 'score');
+      const briefStep = fc.steps?.find((s: any) => s.id === 'brief');
+      if (scoreStep?.min_score_threshold) {
+        (parsed as any).brief_threshold = scoreStep.min_score_threshold;
+      }
+      if (briefStep?.candidate_limit) {
+        (parsed as any).brief_candidate_limit = briefStep.candidate_limit;
+      }
+    } catch {}
+  }
+  delete (parsed as any).campaign_funnel_config;
 
   // Cross-campaign: find this company in other campaigns
   if (parsed.domain) {
@@ -335,7 +355,8 @@ router.post('/:id/rerun-brief', authenticate, requireMember, async (req: AuthReq
     if (!lead) return res.status(404).json({ error: 'Lead not found' });
     if (!lead.campaign_id) return res.status(400).json({ error: 'Lead has no campaign' });
 
-    const steps = ['enrich', 'score', 'brief', 'audit'];
+    const forceBrief = req.body?.force_brief === true;
+    const steps = forceBrief ? ['brief', 'audit'] : ['enrich', 'score', 'brief', 'audit'];
 
     const activeRun = db.prepare(
       "SELECT id FROM pipeline_runs WHERE campaign_id = ? AND status IN ('pending','running') LIMIT 1"

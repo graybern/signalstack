@@ -11,7 +11,7 @@ import {
   ArrowLeft, ExternalLink, Building2, Users, MapPin, Globe, Calendar,
   Briefcase, Linkedin, MessageSquare, Shield, Server, ChevronDown, ChevronUp,
   Signal, Trash2, AlertTriangle, Brain, FileText, Download, Layers,
-  ClipboardCheck, RefreshCw, Sparkles, Check, Circle, XCircle, ArrowRight,
+  ClipboardCheck, RefreshCw, Sparkles, Check, Circle, XCircle, ArrowRight, SlidersHorizontal,
 } from 'lucide-react';
 import FeedbackPanel from '../components/FeedbackPanel';
 
@@ -137,6 +137,24 @@ export function LeadDetail() {
       console.error('Rerun failed:', err);
       setRerunning(false);
       setRerunError(err?.message || 'Failed to start rerun');
+    }
+  };
+
+  const handleForceBrief = async () => {
+    setRerunning(true);
+    setRerunVisible(true);
+    setRerunStatus('Generating brief...');
+    setRerunError(null);
+    setRerunStage(null);
+    setCompletedStages(new Set());
+    setFailedStage(null);
+    setRerunRunId(null);
+    try {
+      await api(`/leads/${id}/rerun-brief`, { method: 'POST', body: JSON.stringify({ force_brief: true }) });
+    } catch (err: any) {
+      console.error('Force brief failed:', err);
+      setRerunning(false);
+      setRerunError(err?.message || 'Failed to generate brief');
     }
   };
 
@@ -409,6 +427,48 @@ export function LeadDetail() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* Main content */}
         <div className="lg:col-span-2 space-y-4">
+          {/* Brief skipped callout */}
+          {!lead.brief_markdown && lead.fit_score != null && lead.score_breakdown && (
+            <div className="bg-gray-50 rounded-xl border border-gray-200 p-5">
+              <div className="flex items-start gap-3">
+                <div className="w-8 h-8 rounded-lg bg-gray-200 flex items-center justify-center shrink-0 mt-0.5">
+                  <FileText className="w-4 h-4 text-gray-500" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-gray-800">No outreach brief generated</p>
+                  <p className="text-sm text-gray-500 mt-1">
+                    {lead.brief_threshold ? (
+                      <>This lead scored <span className="font-medium text-gray-700">{lead.fit_score}</span> — below the <span className="font-medium text-gray-700">{lead.brief_threshold}-point threshold</span> set for <span className="font-medium text-gray-700">{lead.campaign_name || 'this campaign'}</span>. Only leads meeting the threshold receive outreach briefs.</>
+                    ) : lead.brief_candidate_limit ? (
+                      <>This lead scored <span className="font-medium text-gray-700">{lead.fit_score}</span> and wasn't among the top {lead.brief_candidate_limit} candidates in <span className="font-medium text-gray-700">{lead.campaign_name || 'this campaign'}</span>. Briefs are generated for the highest-scoring leads first.</>
+                    ) : (
+                      <>This lead scored <span className="font-medium text-gray-700">{lead.fit_score}</span> and wasn't selected for outreach brief generation in <span className="font-medium text-gray-700">{lead.campaign_name || 'this campaign'}</span>.</>
+                    )}
+                  </p>
+                  <div className="flex items-center gap-3 mt-3">
+                    <button
+                      onClick={handleForceBrief}
+                      disabled={rerunning}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-brand-600 hover:bg-brand-700 rounded-lg transition-colors disabled:opacity-50"
+                    >
+                      <FileText className="w-3 h-3" />
+                      Generate brief anyway
+                    </button>
+                    {lead.campaign_id && (
+                      <Link
+                        to={`/campaigns/${lead.campaign_id}`}
+                        className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-500 hover:text-brand-600 transition-colors"
+                      >
+                        <SlidersHorizontal className="w-3 h-3" />
+                        Adjust threshold
+                      </Link>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Why Now */}
           {whyNow.length > 0 && (
             <Section title="Why Now" icon={<Briefcase className="w-4 h-4" />}>

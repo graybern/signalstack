@@ -34,7 +34,6 @@ export function LeadDetail() {
   const [deleting, setDeleting] = useState(false);
   const [showBriefMenu, setShowBriefMenu] = useState(false);
   const [expandedSignalCat, setExpandedSignalCat] = useState<string | null>(null);
-  const [showAllSignals, setShowAllSignals] = useState(false);
   const briefMenuRef = useRef<HTMLDivElement>(null);
 
   const handleDeleteLead = async () => {
@@ -726,28 +725,6 @@ export function LeadDetail() {
           )}
 
           {/* Score Breakdown */}
-          {scoreBreakdown && (
-            <div className="bg-white rounded-xl border border-gray-200 p-4">
-              <h3 className="font-medium text-gray-900 mb-3">Score Breakdown</h3>
-              <div className="space-y-2">
-                <ScoreBar label="Segment Fit" value={scoreBreakdown.segment_scale_fit?.points || 0} max={20} />
-                <ScoreBar label="Why Now" value={scoreBreakdown.why_now_triggers?.points || 0} max={15} />
-                <ScoreBar label="Remote Access Pain" value={scoreBreakdown.remote_access_pain?.points || 0} max={20} />
-                <ScoreBar label="Displacement Wedge" value={scoreBreakdown.displacement_wedge?.points || 0} max={20} />
-                <ScoreBar label="Vertical Fit" value={scoreBreakdown.vertical_playbook?.points || 0} max={15} />
-                <ScoreBar label="Buyer Access" value={scoreBreakdown.buyer_access_readiness?.points || 0} max={10} />
-                {(scoreBreakdown.penalties || []).map((p: any, i: number) => (
-                  <div key={i} className="text-xs text-red-600">Penalty: {p.points} — {p.reason}</div>
-                ))}
-                <div className="border-t pt-2 flex justify-between font-bold text-sm">
-                  <span>Total</span>
-                  <span>{scoreBreakdown.total || lead.fit_score}/100</span>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Signal Stack */}
           {scoreBreakdown && (() => {
             const CATEGORY_META: Record<string, { label: string; max: number }> = {
               segment_scale_fit: { label: 'Segment & Scale Fit', max: 20 },
@@ -757,40 +734,54 @@ export function LeadDetail() {
               vertical_playbook: { label: 'Vertical / Playbook', max: 15 },
               buyer_access_readiness: { label: 'Buyer Access & Readiness', max: 10 },
             };
-            const ranked = Object.entries(CATEGORY_META)
-              .map(([key, meta]) => {
-                const cat = (scoreBreakdown as any)[key];
-                if (!cat) return null;
-                const evidence: string[] = cat.evidence || [];
-                return { key, label: meta.label, points: cat.points || 0, max: meta.max, evidence };
-              })
-              .filter((c): c is NonNullable<typeof c> => c !== null && c.evidence.length > 0)
-              .sort((a, b) => b.points - a.points);
-
-            if (ranked.length === 0) return null;
-
-            const displayed = showAllSignals ? ranked : ranked.slice(0, 3);
+            const categories = Object.entries(CATEGORY_META).map(([key, meta]) => {
+              const cat = (scoreBreakdown as any)[key];
+              return {
+                key,
+                label: meta.label,
+                points: cat?.points || 0,
+                max: meta.max,
+                evidence: (cat?.evidence || []) as string[],
+              };
+            });
+            const total = scoreBreakdown.total || lead.fit_score || 0;
 
             return (
               <div className="bg-white rounded-xl border border-gray-200 p-4">
-                <h3 className="font-medium text-gray-900 mb-3 flex items-center gap-2">
-                  <Signal className="w-4 h-4" /> Signal Stack
-                </h3>
-                <div className="space-y-1.5">
-                  {displayed.map((cat) => {
-                    const pct = cat.points / cat.max;
-                    const dotColor = pct >= 0.7 ? 'bg-emerald-500' : pct >= 0.4 ? 'bg-amber-500' : 'bg-red-400';
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="font-medium text-gray-900 flex items-center gap-2">
+                    <Signal className="w-4 h-4" /> Score Breakdown
+                  </h3>
+                  <span className={`text-sm font-bold px-2 py-0.5 rounded-full ${
+                    total >= 75 ? 'bg-emerald-100 text-emerald-700' :
+                    total >= 60 ? 'bg-amber-100 text-amber-700' :
+                    'bg-red-100 text-red-700'
+                  }`}>
+                    {total}/100
+                  </span>
+                </div>
+                <div className="space-y-1">
+                  {categories.map((cat) => {
+                    const pct = cat.max > 0 ? cat.points / cat.max : 0;
+                    const barColor = pct >= 0.7 ? 'bg-emerald-500' : pct >= 0.4 ? 'bg-amber-500' : 'bg-red-400';
+                    const hasEvidence = cat.evidence.length > 0;
                     const isExpanded = expandedSignalCat === cat.key;
                     return (
                       <div key={cat.key}>
                         <button
-                          onClick={() => setExpandedSignalCat(isExpanded ? null : cat.key)}
-                          className="w-full flex items-center gap-2 py-1 hover:bg-gray-50 rounded -mx-1 px-1"
+                          onClick={() => hasEvidence && setExpandedSignalCat(isExpanded ? null : cat.key)}
+                          className={`w-full flex items-center gap-2 py-1.5 rounded -mx-1 px-1 ${hasEvidence ? 'hover:bg-gray-50 cursor-pointer' : 'cursor-default'}`}
                         >
-                          <span className={`w-2 h-2 rounded-full ${dotColor} shrink-0`} />
-                          <span className="text-xs font-medium text-gray-900 flex-1 text-left">{cat.label}</span>
-                          <span className="text-[11px] text-gray-400">{cat.points}/{cat.max}</span>
-                          <ChevronDown className={`w-3 h-3 text-gray-400 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                          <span className="w-28 text-xs font-medium text-gray-700 text-left truncate shrink-0">{cat.label}</span>
+                          <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
+                            <div className={`h-full ${barColor} rounded-full transition-all`} style={{ width: `${Math.round(pct * 100)}%` }} />
+                          </div>
+                          <span className="w-10 text-right text-[11px] text-gray-400 shrink-0">{cat.points}/{cat.max}</span>
+                          {hasEvidence ? (
+                            <ChevronDown className={`w-3 h-3 text-gray-400 transition-transform shrink-0 ${isExpanded ? 'rotate-180' : ''}`} />
+                          ) : (
+                            <span className="w-3 h-3 shrink-0" />
+                          )}
                         </button>
                         {isExpanded && (
                           <ul className="ml-4 mt-0.5 mb-1 space-y-0.5">
@@ -805,15 +796,14 @@ export function LeadDetail() {
                       </div>
                     );
                   })}
-                  {ranked.length > 3 && (
-                    <button
-                      onClick={() => setShowAllSignals(!showAllSignals)}
-                      className="text-xs text-brand-600 hover:underline mt-1"
-                    >
-                      {showAllSignals ? 'Show less' : `Show all ${ranked.length}`}
-                    </button>
-                  )}
                 </div>
+                {(scoreBreakdown.penalties || []).length > 0 && (
+                  <div className="border-t mt-2 pt-2 space-y-1">
+                    {(scoreBreakdown.penalties || []).map((p: any, i: number) => (
+                      <div key={i} className="text-xs text-red-600">Penalty: {p.points} &mdash; {p.reason}</div>
+                    ))}
+                  </div>
+                )}
               </div>
             );
           })()}
@@ -1015,19 +1005,6 @@ function Section({ title, icon, children }: { title: string; icon?: React.ReactN
     <div className="bg-white rounded-xl border border-gray-200 p-5">
       <h2 className="text-sm font-semibold text-gray-900 uppercase tracking-wide mb-3 flex items-center gap-2">{icon}{title}</h2>
       {children}
-    </div>
-  );
-}
-
-function ScoreBar({ label, value, max }: { label: string; value: number; max: number }) {
-  const pct = Math.round((value / max) * 100);
-  return (
-    <div className="flex items-center gap-2 text-xs">
-      <span className="w-28 text-gray-600 truncate">{label}</span>
-      <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
-        <div className="h-full bg-brand-500 rounded-full" style={{ width: `${pct}%` }} />
-      </div>
-      <span className="w-10 text-right text-gray-500">{value}/{max}</span>
     </div>
   );
 }

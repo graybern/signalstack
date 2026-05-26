@@ -163,10 +163,7 @@ router.put('/:id', authenticate, requireOperator, (req: AuthRequest, res: Respon
     `UPDATE campaigns SET
       name = ?, description = ?, pattern_thesis = ?, example_companies = ?,
       target_signals = ?, anti_patterns = ?, target_categories = ?, search_patterns = ?,
-      value_prop_angle = ?, target_count = ?,
-      icp_overrides = ?, pipeline_overrides = ?, prompt_overrides = ?, source_overrides = ?,
-      schedule_cron = ?, schedule_enabled = ?, exclusion_config = ?, rss_enabled = ?,
-      funnel_config = ?, updated_at = datetime('now')
+      value_prop_angle = ?, target_count = ?, updated_at = datetime('now')
      WHERE id = ?`
   ).run(
     body.name,
@@ -179,15 +176,6 @@ router.put('/:id', authenticate, requireOperator, (req: AuthRequest, res: Respon
     JSON.stringify(body.search_patterns || []),
     body.value_prop_angle || null,
     body.target_count || 12,
-    body.icp_overrides ? JSON.stringify(body.icp_overrides) : null,
-    body.pipeline_overrides ? JSON.stringify(body.pipeline_overrides) : null,
-    body.prompt_overrides ? JSON.stringify(body.prompt_overrides) : null,
-    body.source_overrides ? JSON.stringify(body.source_overrides) : null,
-    body.schedule_cron || null,
-    body.schedule_enabled ? 1 : 0,
-    body.exclusion_config ? JSON.stringify(body.exclusion_config) : null,
-    body.rss_enabled ? 1 : 0,
-    body.funnel_config ? JSON.stringify(body.funnel_config) : null,
     req.params.id,
   );
 

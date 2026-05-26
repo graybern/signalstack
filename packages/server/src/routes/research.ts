@@ -53,7 +53,7 @@ router.post('/', authenticate, requirePermission('research:execute'), async (req
   const { runCampaign } = await import('../agent/campaignOrchestrator.js');
   const steps = ['enrich', 'score', 'brief', 'audit'];
 
-  const runPromise = runCampaign(campaign_id, req.user!.id, steps, [lead.id], 'quick_research');
+  const runPromise = runCampaign(campaign_id, req.user!.id, steps, [lead.id], 'quick_research', { skipScoreThreshold: true });
   runPromise.catch(err => {
     console.error('[quick-research] Failed:', err);
   });
@@ -74,7 +74,7 @@ router.post('/', authenticate, requirePermission('research:execute'), async (req
 
 // Batch research — multiple domains at once
 router.post('/batch', authenticate, requirePermission('research:execute'), async (req: AuthRequest, res: Response) => {
-  const { domains, campaign_id, context, csv_context } = req.body;
+  const { domains, campaign_id, context, csv_context, force_brief } = req.body;
   if (!Array.isArray(domains) || domains.length === 0 || !campaign_id) {
     return res.status(400).json({ error: 'domains (array) and campaign_id are required' });
   }
@@ -164,7 +164,7 @@ router.post('/batch', authenticate, requirePermission('research:execute'), async
   const { runCampaign } = await import('../agent/campaignOrchestrator.js');
   const steps = ['enrich', 'score', 'brief', 'audit'];
 
-  const runPromise = runCampaign(campaign_id, req.user!.id, steps, leadIds, 'batch_research');
+  const runPromise = runCampaign(campaign_id, req.user!.id, steps, leadIds, 'batch_research', force_brief ? { skipScoreThreshold: true } : undefined);
   runPromise.catch(err => {
     console.error('[batch-research] Failed:', err);
   });

@@ -258,7 +258,7 @@ function executeQualifyStep(
   return selected;
 }
 
-export async function runCampaign(campaignId: string, triggeredBy: string | null, requestedSteps?: string[], targetLeadIds?: string[], runType?: string): Promise<string> {
+export async function runCampaign(campaignId: string, triggeredBy: string | null, requestedSteps?: string[], targetLeadIds?: string[], runType?: string, options?: { skipScoreThreshold?: boolean }): Promise<string> {
   const db = getDb();
   const runId = uuidv4();
 
@@ -966,12 +966,14 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
           const scoreThinkingMap = new Map(scoredCandidates.map(sc => [sc.candidate.company_name, { scorer: sc.score.reasoning || undefined }]));
           persistCandidates('scored', scoredCandidates.map(sc => sc.candidate), allScoreMap, undefined, scoreThinkingMap);
           // Apply filters to select candidates for brief step
-          if (step.min_score_threshold) {
+          if (step.min_score_threshold && !options?.skipScoreThreshold) {
             const before = scoredCandidates.length;
             scoredCandidates = scoredCandidates.filter(sc => sc.score.fit_score >= step.min_score_threshold!);
             if (before !== scoredCandidates.length) {
               logger.thinking('score', `Filtered ${before - scoredCandidates.length} candidates below score threshold ${step.min_score_threshold}`);
             }
+          } else if (step.min_score_threshold && options?.skipScoreThreshold) {
+            logger.thinking('score', `Score threshold ${step.min_score_threshold} bypassed — brief will be generated regardless`);
           }
           if (step.confidence_filter && step.confidence_filter !== 'all') {
             const before = scoredCandidates.length;

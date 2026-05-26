@@ -117,6 +117,7 @@ export function QuickResearch() {
   const [domain, setDomain] = useState('');
   const [campaignId, setCampaignId] = useState('');
   const [context, setContext] = useState('');
+  const [forceBrief, setForceBrief] = useState(false);
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -373,6 +374,7 @@ export function QuickResearch() {
       };
       if (context.trim()) body.context = context.trim();
       if (scopedCsvContext) body.csv_context = scopedCsvContext;
+      if (forceBrief) body.force_brief = true;
 
       const result = await api('/research/batch', {
         method: 'POST',
@@ -534,6 +536,10 @@ export function QuickResearch() {
                 rows={2}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent text-sm resize-y"
               />
+            </div>
+            <div className="flex items-start gap-2 text-xs text-gray-400">
+              <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+              <span>Briefs are always generated for single-domain research, even if the score is below the campaign's minimum threshold.</span>
             </div>
             {error && (
               <div className="flex items-center gap-2 text-sm text-red-600 bg-red-50 px-4 py-2 rounded-lg">
@@ -721,6 +727,18 @@ export function QuickResearch() {
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent text-sm resize-y"
               />
             </div>
+            <label className="flex items-start gap-2.5 cursor-pointer group">
+              <input
+                type="checkbox"
+                checked={forceBrief}
+                onChange={e => setForceBrief(e.target.checked)}
+                className="mt-0.5 w-4 h-4 rounded border-gray-300 text-brand-600 focus:ring-brand-500"
+              />
+              <div>
+                <span className="text-sm text-gray-700 group-hover:text-gray-900 transition-colors">Generate briefs for all leads</span>
+                <p className="text-xs text-gray-400 mt-0.5">Overrides the campaign's minimum score threshold — all leads will receive an outreach brief regardless of score.</p>
+              </div>
+            </label>
             {error && (
               <div className="flex items-center gap-2 text-sm text-red-600 bg-red-50 px-4 py-2 rounded-lg">
                 <XCircle className="w-4 h-4 shrink-0" />

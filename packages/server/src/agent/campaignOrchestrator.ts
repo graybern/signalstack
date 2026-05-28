@@ -304,8 +304,16 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
 
     // Progress tracking
     let stepNumber = 0;
-    // Estimate total steps: 1 per funnel phase + per-candidate work for score/brief
-    let totalSteps = activeSteps.length + targetCount * 2;
+    const candidateEstimate = targetLeadIds?.length || targetCount;
+    let totalSteps = 0;
+    for (const step of activeSteps) {
+      switch (step.id) {
+        case 'enrich': totalSteps += 1 + candidateEstimate; break;
+        case 'score':  totalSteps += candidateEstimate; break;
+        case 'brief':  totalSteps += Math.min(candidateEstimate, targetCount); break;
+        default:       totalSteps += 1; break;
+      }
+    }
 
     const emitProgress = (phase: string, currentCompany?: string) => {
       stepNumber++;

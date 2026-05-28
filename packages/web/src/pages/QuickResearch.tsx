@@ -5,6 +5,8 @@ import { formatDateTime, timeAgo } from '../utils/dates';
 import { useEventStream, SSEEvent } from '../hooks/useEventStream';
 import { ScoreBadge } from '../components/ScoreBadge';
 import { ActivityPanel } from '../components/ActivityPanel';
+import { useAuthContext } from '../App';
+import { permissions } from '../utils/permissions';
 import {
   Search, Loader2, CheckCircle, XCircle, ExternalLink,
   Globe, Target, ArrowRight, RefreshCw, Clock, Eye,
@@ -113,11 +115,13 @@ function parseCSVLine(line: string): string[] {
 }
 
 export function QuickResearch() {
+  const { user } = useAuthContext();
   const [mode, setMode] = useState<'single' | 'batch'>('single');
   const [domain, setDomain] = useState('');
   const [campaignId, setCampaignId] = useState('');
   const [context, setContext] = useState('');
   const [forceBrief, setForceBrief] = useState(false);
+  const [scoreOnly, setScoreOnly] = useState(false);
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -143,7 +147,8 @@ export function QuickResearch() {
   const [remainingPool, setRemainingPool] = useState<string[]>([]);
   const [remainingCsvContext, setRemainingCsvContext] = useState<CSVContext | null>(null);
 
-  const MAX_BATCH_SIZE = 50;
+  const canBulk = permissions.canBulkResearch(user?.role);
+  const MAX_BATCH_SIZE = scoreOnly && canBulk ? 10000 : 50;
 
   const { subscribe } = useEventStream({
     types: [
@@ -375,6 +380,7 @@ export function QuickResearch() {
       if (context.trim()) body.context = context.trim();
       if (scopedCsvContext) body.csv_context = scopedCsvContext;
       if (forceBrief) body.force_brief = true;
+      if (scoreOnly) body.score_only = true;
 
       const result = await api('/research/batch', {
         method: 'POST',
@@ -727,16 +733,41 @@ export function QuickResearch() {
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent text-sm resize-y"
               />
             </div>
-            <label className="flex items-start gap-2.5 cursor-pointer group">
+            <label className={`flex items-start gap-2.5 cursor-pointer group ${scoreOnly ? 'opacity-50' : ''}`}>
               <input
                 type="checkbox"
                 checked={forceBrief}
-                onChange={e => setForceBrief(e.target.checked)}
+                disabled={scoreOnly}
+                onChange={e => {
+                  setForceBrief(e.target.checked);
+                  if (e.target.checked) setScoreOnly(false);
+                }}
                 className="mt-0.5 w-4 h-4 rounded border-gray-300 text-brand-600 focus:ring-brand-500"
               />
               <div>
                 <span className="text-sm text-gray-700 group-hover:text-gray-900 transition-colors">Generate briefs for all leads</span>
                 <p className="text-xs text-gray-400 mt-0.5">Overrides the campaign's minimum score threshold — all leads will receive an outreach brief regardless of score.</p>
+              </div>
+            </label>
+            <label className={`flex items-start gap-2.5 cursor-pointer group ${forceBrief ? 'opacity-50' : ''}`}>
+              <input
+                type="checkbox"
+                checked={scoreOnly}
+                disabled={forceBrief}
+                onChange={e => {
+                  setScoreOnly(e.target.checked);
+                  if (e.target.checked) setForceBrief(false);
+                }}
+                className="mt-0.5 w-4 h-4 rounded border-gray-300 text-brand-600 focus:ring-brand-500"
+              />
+              <div>
+                <span className="text-sm text-gray-700 group-hover:text-gray-900 transition-colors">Score only (skip brief generation)</span>
+                <p className="text-xs text-gray-400 mt-0.5">
+                  Runs enrichment and scoring only — no Opus briefs.{' '}
+                  {canBulk
+                    ? 'Supports up to 10,000 domains per batch for large-scale triage.'
+                    : 'Saves token cost on brief generation.'}
+                </p>
               </div>
             </label>
             {error && (

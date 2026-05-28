@@ -33,4 +33,5 @@ export const permissions = {
   canEditCustomers: (role?: Role) => hasMinRole(role, 'operator'),
   canRunResearch: (role?: Role) => hasMinRole(role, 'member'),
   canViewActivity: (role?: Role) => hasMinRole(role, 'operator'),
+  canBulkResearch: (role?: Role) => hasMinRole(role, 'operator'),
 };

@@ -108,7 +108,12 @@ export async function checkDataSourceHealth(
  */
 export async function enrichCandidates(
   candidates: ResearchCandidate[],
-  options?: { concurrency?: number; sourceOverrides?: Record<string, boolean> | null; skipSources?: string[] }
+  options?: {
+    concurrency?: number;
+    sourceOverrides?: Record<string, boolean> | null;
+    skipSources?: string[];
+    onProgress?: (update: { candidate: string; domain: string; index: number; total: number; sourcesHit: number; sourceCount: number }) => void;
+  }
 ): Promise<{ candidates: ResearchCandidate[]; summary: EnrichmentSummary }> {
   const startTime = Date.now();
   let enabledSources = getEnabledSources();
@@ -163,9 +168,19 @@ export async function enrichCandidates(
       batch.map(candidate => enrichSingleCandidate(candidate, enabledSources, errors))
     );
 
-    for (const { candidate, wasEnriched } of results) {
+    for (const { candidate, wasEnriched, sourcesHit } of results) {
       enrichedCandidates.push(candidate);
       if (wasEnriched) enrichedCount++;
+      if (options?.onProgress) {
+        options.onProgress({
+          candidate: candidate.company_name,
+          domain: candidate.domain,
+          index: enrichedCandidates.length,
+          total: candidates.length,
+          sourcesHit: sourcesHit,
+          sourceCount: enabledSources.length,
+        });
+      }
     }
   }
 
@@ -192,7 +207,7 @@ async function enrichSingleCandidate(
   candidate: ResearchCandidate,
   sources: DataSourceConfig[],
   errors: EnrichmentSummary['errors']
-): Promise<{ candidate: ResearchCandidate; wasEnriched: boolean }> {
+): Promise<{ candidate: ResearchCandidate; wasEnriched: boolean; sourcesHit: number }> {
   const enrichments: Partial<CompanyEnrichment>[] = [];
   let discoveredLinkedinUrl = candidate.linkedin_company_url || '';
 
@@ -223,7 +238,7 @@ async function enrichSingleCandidate(
   }
 
   if (enrichments.length === 0) {
-    return { candidate: { ...candidate, enrichment_source_count: candidate.enrichment_source_count || 0 }, wasEnriched: false };
+    return { candidate: { ...candidate, enrichment_source_count: candidate.enrichment_source_count || 0 }, wasEnriched: false, sourcesHit: 0 };
   }
 
   // Merge enrichments into candidate
@@ -231,7 +246,7 @@ async function enrichSingleCandidate(
   const enrichedCandidate = applyCandidateEnrichment(candidate, merged);
   enrichedCandidate.enrichment_source_count = (candidate.enrichment_source_count || 0) + enrichments.length;
 
-  return { candidate: enrichedCandidate, wasEnriched: true };
+  return { candidate: enrichedCandidate, wasEnriched: true, sourcesHit: enrichments.length };
 }
 
 /**

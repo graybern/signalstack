@@ -109,7 +109,8 @@ function executeQualifyStep(
   candidates: ResearchCandidate[],
   campaign: CampaignParsed,
   icpConfig: ExtendedICPConfig,
-  logger: ActivityLogger
+  logger: ActivityLogger,
+  skipCandidateLimits?: boolean
 ): ResearchCandidate[] {
   logger.phaseStart('qualify', `Qualifying ${candidates.length} candidates (rules-based, no AI cost)...`);
 
@@ -117,7 +118,7 @@ function executeQualifyStep(
   const icpHardDqs = (icpConfig.disqualifiers || []).filter(d => d.severity === 'hard').map(d => d.signal);
   const disqualCriteria = [...(step.disqualification_criteria || []), ...(campaign.anti_patterns || []), ...icpHardDqs];
   const icpSoftDqs = (icpConfig.disqualifiers || []).filter(d => d.severity === 'soft');
-  const limit = step.candidate_limit || candidates.length;
+  const limit = skipCandidateLimits ? candidates.length : (step.candidate_limit || candidates.length);
 
   const excludedDomainPatterns = icpConfig.excluded_domain_patterns || ['.gov', '.mil', '.gov.uk', '.gov.au', '.gc.ca'];
 
@@ -258,7 +259,7 @@ function executeQualifyStep(
   return selected;
 }
 
-export async function runCampaign(campaignId: string, triggeredBy: string | null, requestedSteps?: string[], targetLeadIds?: string[], runType?: string, options?: { skipScoreThreshold?: boolean }): Promise<string> {
+export async function runCampaign(campaignId: string, triggeredBy: string | null, requestedSteps?: string[], targetLeadIds?: string[], runType?: string, options?: { skipScoreThreshold?: boolean; skipCandidateLimits?: boolean }): Promise<string> {
   const db = getDb();
   const runId = uuidv4();
 
@@ -744,8 +745,8 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
             if (signal?.aborted) break;
           }
 
-          // Rank by signal count and apply candidate limit
-          if (step.candidate_limit && candidates.length > step.candidate_limit) {
+          // Rank by signal count and apply candidate limit (bypassed for batch research)
+          if (step.candidate_limit && candidates.length > step.candidate_limit && !options?.skipCandidateLimits) {
             candidates.sort((a, b) => b.signals.length - a.signals.length);
             logger.thinking('discover', `Ranked ${candidates.length} candidates by signal count, keeping top ${step.candidate_limit}`);
             candidates = candidates.slice(0, step.candidate_limit);
@@ -817,13 +818,13 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
 
         case 'qualify': {
           emitProgress('qualify');
-          candidates = executeQualifyStep(step, candidates, campaign, icpConfig, logger);
+          candidates = executeQualifyStep(step, candidates, campaign, icpConfig, logger, options?.skipCandidateLimits);
           persistCandidates('qualified', candidates);
           break;
         }
 
         case 'enrich': {
-          if (step.candidate_limit && candidates.length > step.candidate_limit) {
+          if (step.candidate_limit && candidates.length > step.candidate_limit && !options?.skipCandidateLimits) {
             candidates.sort((a, b) => b.signals.length - a.signals.length);
             logger.thinking('enrich', `Ranked ${candidates.length} candidates by signal count, enriching top ${step.candidate_limit}`);
             candidates = candidates.slice(0, step.candidate_limit);
@@ -843,7 +844,14 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
           const skipSources = lightEnrichRan ? ['website_analysis', 'dns_fingerprint'] : undefined;
           const { candidates: enrichedCandidates, summary: enrichmentSummary } = await enrichCandidates(
             candidates,
-            { sourceOverrides: enrichSourceOverrides, skipSources }
+            {
+              sourceOverrides: enrichSourceOverrides,
+              skipSources,
+              onProgress: (update) => {
+                emitProgress('enrich', update.candidate);
+                logger.thinking('enrich', `Enriched ${update.candidate} (${update.index}/${update.total}) — ${update.sourcesHit}/${update.sourceCount} sources`);
+              },
+            }
           );
           for (const c of enrichedCandidates) {
             c.segment = recalcSegment(c.employee_count_estimate, icpConfig);
@@ -986,7 +994,7 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
               logger.thinking('score', `Filtered ${before - scoredCandidates.length} candidates by confidence (${step.confidence_filter})`);
             }
           }
-          if (step.candidate_limit) {
+          if (step.candidate_limit && !options?.skipCandidateLimits) {
             scoredCandidates = scoredCandidates.slice(0, step.candidate_limit);
           }
           break;

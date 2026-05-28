@@ -44,6 +44,7 @@ export const PERMISSIONS: Record<string, PermissionDef> = {
   'customers:write':   { label: 'Edit Win Book',      category: 'Win Book',    description: 'Edit customer profiles and notes' },
 
   'research:execute':  { label: 'Quick Research',     category: 'Research',    description: 'Run ad-hoc company research' },
+  'research:bulk':     { label: 'Bulk Score-Only',    category: 'Research',    description: 'Run large score-only batches (>50 domains)' },
 
   'activity:read':     { label: 'View Activity Log',  category: 'Activity',    description: 'View audit trail and activity history' },
 };
@@ -65,6 +66,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     'api_keys:manage',
     'customers:read', 'customers:write',
     'research:execute',
+    'research:bulk',
     'activity:read',
   ],
   member: [
@@ -103,7 +105,7 @@ export function seedRolePermissions(): void {
   tx();
 }
 
-const NEW_PERMISSIONS = ['customers:read', 'customers:write', 'research:execute', 'activity:read'];
+const NEW_PERMISSIONS = ['customers:read', 'customers:write', 'research:execute', 'research:bulk', 'activity:read'];
 
 export function ensureNewPermissions(): void {
   const db = getDb();

@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import { v4 as uuid } from 'uuid';
 import { getDb } from '../db/schema.js';
 import { authenticate, requireMember, requirePermission, AuthRequest } from '../auth/middleware.js';
+import { userHasPermission } from '../auth/permissions.js';
 
 const router = Router();
 
@@ -74,12 +75,21 @@ router.post('/', authenticate, requirePermission('research:execute'), async (req
 
 // Batch research — multiple domains at once
 router.post('/batch', authenticate, requirePermission('research:execute'), async (req: AuthRequest, res: Response) => {
-  const { domains, campaign_id, context, csv_context, force_brief } = req.body;
+  const { domains, campaign_id, context, csv_context, force_brief, score_only } = req.body;
   if (!Array.isArray(domains) || domains.length === 0 || !campaign_id) {
     return res.status(400).json({ error: 'domains (array) and campaign_id are required' });
   }
-  if (domains.length > 50) {
-    return res.status(400).json({ error: 'Maximum 50 domains per batch' });
+  if (score_only && force_brief) {
+    return res.status(400).json({ error: 'score_only and force_brief are mutually exclusive' });
+  }
+  const maxBatchSize = score_only ? 10000 : 50;
+  if (domains.length > maxBatchSize) {
+    return res.status(400).json({ error: `Maximum ${maxBatchSize} domains per batch${score_only ? ' (score-only mode)' : ''}` });
+  }
+  if (score_only && domains.length > 50) {
+    if (!userHasPermission(req.user!.role, 'research:bulk', req.apiKeyScopes, req.user!.id)) {
+      return res.status(403).json({ error: 'research:bulk permission required for score-only batches over 50 domains', your_role: req.user!.role });
+    }
   }
 
   const db = getDb();
@@ -162,9 +172,11 @@ router.post('/batch', authenticate, requirePermission('research:execute'), async
   }
 
   const { runCampaign } = await import('../agent/campaignOrchestrator.js');
-  const steps = ['enrich', 'score', 'brief', 'audit'];
+  const steps = score_only ? ['enrich', 'score'] : ['enrich', 'score', 'brief', 'audit'];
 
-  const runPromise = runCampaign(campaign_id, req.user!.id, steps, leadIds, 'batch_research', force_brief ? { skipScoreThreshold: true } : undefined);
+  const opts: { skipScoreThreshold?: boolean; skipCandidateLimits?: boolean } = { skipCandidateLimits: true };
+  if (force_brief) opts.skipScoreThreshold = true;
+  const runPromise = runCampaign(campaign_id, req.user!.id, steps, leadIds, 'batch_research', opts);
   runPromise.catch(err => {
     console.error('[batch-research] Failed:', err);
   });
@@ -248,7 +260,7 @@ router.get('/batch/:runId/export', authenticate, async (req: AuthRequest, res: R
     `SELECT id, company_name, domain, segment, fit_score, fit_score_label, confidence,
             hq_location, employee_count, founded_year, funding_stage, total_funding,
             why_now, outreach_strategy, tech_stack, lead_status, candidate_data,
-            source_citations, brief_markdown
+            source_citations, brief_markdown, scorer_thinking, score_breakdown
      FROM leads WHERE id IN (${placeholders})
      ORDER BY fit_score DESC`
   ).all(...leadIds) as any[];
@@ -262,6 +274,7 @@ router.get('/batch/:runId/export', authenticate, async (req: AuthRequest, res: R
     'ss_fit_score', 'ss_fit_score_label', 'ss_confidence', 'ss_segment',
     'ss_employee_count', 'ss_hq_location', 'ss_founded_year', 'ss_funding_stage',
     'ss_total_funding', 'ss_why_now', 'ss_outreach_strategy', 'ss_lead_status',
+    'ss_fit_rationale', 'ss_tech_signals', 'ss_score_summary', 'ss_brief_summary',
   ];
 
   // Determine final headers: original CSV columns (if any) + enriched columns
@@ -278,6 +291,71 @@ router.get('/batch/:runId/export', authenticate, async (req: AuthRequest, res: R
       return `"${s.replace(/"/g, '""')}"`;
     }
     return s;
+  };
+
+  const CATEGORY_MAX_POINTS: Record<string, number> = {
+    segment_scale_fit: 20, why_now_triggers: 15, remote_access_pain: 20,
+    displacement_wedge: 20, vertical_playbook: 15, buyer_access_readiness: 10,
+  };
+  const CATEGORY_LABELS: Record<string, string> = {
+    segment_scale_fit: 'Segment Fit', why_now_triggers: 'Why Now', remote_access_pain: 'Remote Access Pain',
+    displacement_wedge: 'Displacement Wedge', vertical_playbook: 'Vertical Playbook', buyer_access_readiness: 'Buyer Access',
+  };
+
+  const buildFitRationale = (val: string | null): string => {
+    if (!val) return '';
+    try {
+      const bd = JSON.parse(val);
+      const strengths: string[] = [];
+      const gaps: string[] = [];
+      for (const [key, maxPts] of Object.entries(CATEGORY_MAX_POINTS)) {
+        const cat = bd[key];
+        if (!cat) continue;
+        const label = CATEGORY_LABELS[key] || key;
+        const pts = cat.points || 0;
+        const evidence = Array.isArray(cat.evidence) ? cat.evidence.slice(0, 2).join(', ') : '';
+        if (pts >= (maxPts as number) * 0.5) {
+          strengths.push(evidence ? `${label} ${pts}/${maxPts} (${evidence})` : `${label} ${pts}/${maxPts}`);
+        } else if (pts < (maxPts as number) * 0.25) {
+          gaps.push(`${label} ${pts}/${maxPts}`);
+        }
+      }
+      const parts: string[] = [];
+      if (strengths.length) parts.push(`Strengths: ${strengths.join('; ')}`);
+      if (gaps.length) parts.push(`Gaps: ${gaps.join('; ')}`);
+      if (Array.isArray(bd.penalties) && bd.penalties.length) {
+        const penStr = bd.penalties.map((p: any) => `${p.points} ${p.reason || ''}`).join('; ');
+        parts.push(`Penalties: ${penStr}`);
+      }
+      return parts.join('. ') || '';
+    } catch { return ''; }
+  };
+
+  const summarizeTechStack = (val: string | null): string => {
+    if (!val) return '';
+    try {
+      const parsed = JSON.parse(val);
+      if (Array.isArray(parsed)) {
+        return parsed.slice(0, 5).map((t: any) => t.product || t).join(', ');
+      }
+      const parts: string[] = [];
+      if (parsed.vpn_product) parts.push(`VPN: ${parsed.vpn_product}`);
+      if (parsed.pam_product) parts.push(`PAM: ${parsed.pam_product}`);
+      if (parsed.recent_purchases?.length) parts.push(`Recent: ${parsed.recent_purchases.slice(0, 3).join(', ')}`);
+      if (parsed.cloud_infra?.length) parts.push(`Cloud: ${parsed.cloud_infra.slice(0, 3).join(', ')}`);
+      return parts.join('; ') || '';
+    } catch { return String(val).slice(0, 200); }
+  };
+
+  const extractScoreSummary = (lead: any): string => {
+    if (lead.scorer_thinking) return String(lead.scorer_thinking).slice(0, 500);
+    if (lead.candidate_data) {
+      try {
+        const cd = JSON.parse(lead.candidate_data);
+        if (cd.reasoning) return String(cd.reasoning).slice(0, 500);
+      } catch {}
+    }
+    return '';
   };
 
   const summarizeJson = (val: string | null): string => {
@@ -304,6 +382,10 @@ router.get('/batch/:runId/export', authenticate, async (req: AuthRequest, res: R
       ss_why_now: summarizeJson(lead.why_now),
       ss_outreach_strategy: typeof lead.outreach_strategy === 'string' ? lead.outreach_strategy.slice(0, 300) : summarizeJson(lead.outreach_strategy),
       ss_lead_status: lead.lead_status || '',
+      ss_fit_rationale: buildFitRationale(lead.score_breakdown),
+      ss_tech_signals: summarizeTechStack(lead.tech_stack),
+      ss_score_summary: extractScoreSummary(lead),
+      ss_brief_summary: lead.brief_markdown ? String(lead.brief_markdown).slice(0, 500) : '',
     };
 
     if (hasOriginalCsv) {

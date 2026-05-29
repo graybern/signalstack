@@ -7,7 +7,7 @@ import {
   Clock, CheckCircle, XCircle, AlertCircle, RefreshCw, Target,
   DollarSign, ChevronDown, ChevronUp, Calendar, Filter,
   TrendingUp, Users, Loader2, Activity, Eye, Trash2, AlertTriangle,
-  X, Hash, PlayCircle,
+  X, Hash, PlayCircle, ExternalLink,
 } from 'lucide-react';
 import { ScoreBadge, SegmentBadge } from '../components/ScoreBadge';
 import { TokenCounter } from '../components/TokenCounter';
@@ -802,6 +802,9 @@ function CompletedRunRow({ run, expanded, leads, loadingLeads, onToggle, onViewL
                 <Eye className="w-3.5 h-3.5" />
               </button>
             )}
+            <Link to={`/runs/${run.id}`} onClick={e => e.stopPropagation()} className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-brand-600" title="View run details">
+              <ExternalLink className="w-3.5 h-3.5" />
+            </Link>
             {canRerun && run.campaign_id && (run.status === 'failed' || run.status === 'cancelled') && (
               <button onClick={e => { e.stopPropagation(); onResume(); }} disabled={resuming} className="p-1 rounded hover:bg-green-50 text-gray-400 hover:text-green-600" title="Resume from where it stopped">
                 <PlayCircle className={`w-3.5 h-3.5 ${resuming ? 'animate-pulse' : ''}`} />

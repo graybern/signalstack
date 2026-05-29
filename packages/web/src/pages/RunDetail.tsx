@@ -28,6 +28,9 @@ interface RunData {
   started_at: string | null;
   completed_at: string | null;
   created_at: string;
+  resumed_from_run_id: string | null;
+  resumed_by_run_id: string | null;
+  resumed_by_status: string | null;
 }
 
 interface LeadSummary {
@@ -79,7 +82,7 @@ export function RunDetail() {
   const [deleting, setDeleting] = useState(false);
   const [resuming, setResuming] = useState(false);
 
-  const canResume = run && (run.status === 'failed' || run.status === 'cancelled') && run.campaign_id;
+  const canResume = run && (run.status === 'failed' || run.status === 'cancelled') && run.campaign_id && !run.resumed_by_run_id;
 
   const handleResume = async () => {
     if (!run || !id) return;
@@ -236,6 +239,32 @@ export function RunDetail() {
         <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-6">
           <p className="text-sm text-red-700 font-medium">Run Error</p>
           <p className="text-sm text-red-600 mt-1">{run.error_message}</p>
+        </div>
+      )}
+
+      {/* Resume link banners */}
+      {run.resumed_by_run_id && (
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <PlayCircle className="w-4 h-4 text-blue-600" />
+            <p className="text-sm text-blue-700">
+              This run was resumed as a new run{run.resumed_by_status === 'running' ? ' (in progress)' : run.resumed_by_status === 'completed' ? ' (completed)' : ''}.
+            </p>
+          </div>
+          <Link to={`/runs/${run.resumed_by_run_id}`} className="text-sm font-medium text-blue-600 hover:text-blue-800 flex items-center gap-1">
+            View Resume Run <ArrowLeft className="w-3.5 h-3.5 rotate-180" />
+          </Link>
+        </div>
+      )}
+      {run.resumed_from_run_id && (
+        <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 mb-6 flex items-center gap-2">
+          <ArrowLeft className="w-3.5 h-3.5 text-gray-400" />
+          <p className="text-sm text-gray-600">
+            Resumed from{' '}
+            <Link to={`/runs/${run.resumed_from_run_id}`} className="text-brand-600 hover:text-brand-700 font-medium">
+              original run
+            </Link>
+          </p>
         </div>
       )}
 

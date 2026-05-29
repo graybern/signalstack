@@ -202,8 +202,29 @@ export function QuickResearch() {
       setCampaigns(list);
       if (list.length === 1) setCampaignId(list[0].id);
     }).catch(() => {});
-    loadHistory();
-  }, [loadHistory]);
+    // Load history and restore active panel for any in-progress research run
+    api('/research/history').then((data: any) => {
+      const entries: ResearchEntry[] = data || [];
+      setHistory(entries);
+      setLoadingHistory(false);
+      const running = entries.find(e => e.status === 'running' || e.status === 'pending');
+      if (running) {
+        const isBatch = running.run_type === 'batch_research' || running.run_type === 'webhook_research';
+        const domains = isBatch && running.batch_leads ? running.batch_leads.map(l => l.domain) : undefined;
+        setActive({
+          runId: running.id,
+          leadId: !isBatch ? running.batch_leads?.[0]?.id || undefined : undefined,
+          domain: !isBatch ? running.batch_leads?.[0]?.domain : undefined,
+          domains,
+          campaignId: running.campaign_id,
+          campaignName: running.campaign_name || '',
+          status: 'running',
+          mode: isBatch ? 'batch' : 'single',
+          completedDomains: new Set(),
+        });
+      }
+    }).catch(() => { setLoadingHistory(false); });
+  }, []);
 
   useEffect(() => {
     const unsub = subscribe('*', (event: SSEEvent) => {

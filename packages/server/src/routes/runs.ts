@@ -142,6 +142,14 @@ router.get('/:id', authenticate, (req: AuthRequest, res: Response) => {
   ).get(req.params.id) as any;
   if (!run) return res.status(404).json({ error: 'Run not found' });
 
+  const resumedByRun = db.prepare(
+    `SELECT id, status, created_at FROM pipeline_runs WHERE resumed_from_run_id = ? LIMIT 1`
+  ).get(req.params.id) as any;
+  if (resumedByRun) {
+    run.resumed_by_run_id = resumedByRun.id;
+    run.resumed_by_status = resumedByRun.status;
+  }
+
   const leads = db.prepare(
     `SELECT id, company_name, domain, segment, fit_score, fit_score_label,
             confidence, employee_count, hq_location, lead_status, current_feedback, created_at

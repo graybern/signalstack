@@ -72,8 +72,22 @@ app.get('/api/v1/docs/openapi.json', (_req, res) => {
 });
 
 // Health check
-app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok', version: 'v1', time: new Date().toISOString() });
+app.get('/api/health', async (_req, res) => {
+  const { getActiveRunIds } = await import('./agent/runRegistry.js');
+  const usage = process.memoryUsage();
+  const mb = (bytes: number) => Math.round(bytes / 1024 / 1024);
+  res.json({
+    status: 'ok',
+    version: 'v1',
+    time: new Date().toISOString(),
+    uptime_seconds: Math.round(process.uptime()),
+    memory: {
+      rss_mb: mb(usage.rss),
+      heap_used_mb: mb(usage.heapUsed),
+      heap_total_mb: mb(usage.heapTotal),
+    },
+    active_runs: getActiveRunIds().length,
+  });
 });
 
 // AI provider health check
@@ -140,12 +154,23 @@ if (userCount === 0) {
   console.log('Created default admin user (admin@example.com / admin123 — must change on first login)');
 }
 
-// Clean up stale pipeline runs (orphaned by server crash)
+// Clean up stale pipeline runs (orphaned by server crash/restart)
+// Any run still marked running/pending at startup is orphaned — the in-memory AbortController registry is empty
 const staleRuns = db.prepare(
-  "UPDATE pipeline_runs SET status = 'failed', completed_at = datetime('now'), error_message = 'Server restarted while run was in progress' WHERE status IN ('running', 'pending') AND started_at < datetime('now', '-2 hours')"
+  "UPDATE pipeline_runs SET status = 'failed', completed_at = datetime('now'), error_message = 'Server restarted while run was in progress — use Resume to continue' WHERE status IN ('running', 'pending')"
 ).run();
 if (staleRuns.changes > 0) {
-  console.log(`[startup] Cleaned up ${staleRuns.changes} stale pipeline run(s)`);
+  console.log(`[startup] Marked ${staleRuns.changes} orphaned pipeline run(s) as failed`);
+  // Update lead_count for orphaned runs so partial results are visible
+  const orphanedRuns = db.prepare(
+    "SELECT id FROM pipeline_runs WHERE error_message LIKE 'Server restarted%' AND lead_count = 0 AND completed_at >= datetime('now', '-1 minute')"
+  ).all() as any[];
+  for (const run of orphanedRuns) {
+    const count = (db.prepare('SELECT COUNT(*) as c FROM leads WHERE run_id = ?').get(run.id) as any)?.c || 0;
+    if (count > 0) {
+      db.prepare('UPDATE pipeline_runs SET lead_count = ? WHERE id = ?').run(count, run.id);
+    }
+  }
 }
 
 // Seed role permissions on first run
@@ -171,9 +196,67 @@ server.on('error', (err: NodeJS.ErrnoException) => {
   throw err;
 });
 
-function cleanup() {
+let shuttingDown = false;
+async function gracefulShutdown(signal: string) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[shutdown] ${signal} received — draining active runs...`);
+
   server.close();
+
+  const { getActiveRunIds, cancelRun } = await import('./agent/runRegistry.js');
+  const activeIds = getActiveRunIds();
+  if (activeIds.length > 0) {
+    console.log(`[shutdown] Cancelling ${activeIds.length} active run(s)`);
+    for (const id of activeIds) {
+      cancelRun(id);
+    }
+
+    const deadline = Date.now() + 30_000;
+    while (getActiveRunIds().length > 0 && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+
+    const remaining = getActiveRunIds();
+    if (remaining.length > 0) {
+      console.log(`[shutdown] ${remaining.length} run(s) did not finish in time — marking as cancelled`);
+      for (const id of remaining) {
+        db.prepare(
+          `UPDATE pipeline_runs SET status = 'cancelled', completed_at = datetime('now'),
+           error_message = 'Server shutdown while run was in progress — use Resume to continue'
+           WHERE id = ? AND status = 'running'`
+        ).run(id);
+      }
+    }
+  }
+
+  console.log('[shutdown] Clean exit');
   process.exit(0);
 }
-process.on('SIGTERM', cleanup);
-process.on('SIGINT', cleanup);
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+process.on('uncaughtException', async (err) => {
+  console.error('[CRASH] Uncaught exception:', err);
+  try {
+    const { getActiveRunIds } = await import('./agent/runRegistry.js');
+    const activeIds = getActiveRunIds();
+    if (activeIds.length > 0) {
+      console.error(`[CRASH] ${activeIds.length} active run(s) will be orphaned`);
+      for (const id of activeIds) {
+        try {
+          db.prepare(
+            `UPDATE pipeline_runs SET status = 'failed', completed_at = datetime('now'),
+             error_message = ? WHERE id = ? AND status = 'running'`
+          ).run(`Server crashed: ${err.message} — use Resume to continue`, id);
+        } catch { /* best effort */ }
+      }
+    }
+  } catch { /* best effort */ }
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[WARNING] Unhandled rejection:', reason);
+});

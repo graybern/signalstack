@@ -51,7 +51,7 @@ router.get('/', authenticate, (_req: AuthRequest, res: Response) => {
       "SELECT * FROM pipeline_runs WHERE campaign_id = ? ORDER BY created_at DESC LIMIT 1"
     ).get(c.id) as any;
     const avgScore = db.prepare(
-      'SELECT AVG(fit_score) as avg FROM leads WHERE campaign_id = ?'
+      'SELECT AVG(CASE WHEN fit_score > 0 THEN fit_score END) as avg FROM leads WHERE campaign_id = ?'
     ).get(c.id) as { avg: number | null };
     const runCount = db.prepare(
       'SELECT COUNT(*) as count FROM pipeline_runs WHERE campaign_id = ?'
@@ -83,7 +83,7 @@ router.get('/:id', authenticate, (req: AuthRequest, res: Response) => {
   ).get(req.params.id) as { count: number };
 
   const avgScore = db.prepare(
-    'SELECT AVG(fit_score) as avg FROM leads WHERE campaign_id = ?'
+    'SELECT AVG(CASE WHEN fit_score > 0 THEN fit_score END) as avg FROM leads WHERE campaign_id = ?'
   ).get(req.params.id) as { avg: number | null };
 
   const runs = db.prepare(

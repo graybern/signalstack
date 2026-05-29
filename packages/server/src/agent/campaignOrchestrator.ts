@@ -259,7 +259,96 @@ function executeQualifyStep(
   return selected;
 }
 
-export async function runCampaign(campaignId: string, triggeredBy: string | null, requestedSteps?: string[], targetLeadIds?: string[], runType?: string, options?: { skipScoreThreshold?: boolean; skipCandidateLimits?: boolean }): Promise<string> {
+const STAGE_ORDER: string[] = ['discovered', 'qualified', 'enriched', 'scored', 'briefed', 'audited'];
+
+const STAGE_TO_STEPS: Record<string, string[]> = {
+  discovered: ['qualify', 'enrich', 'score', 'brief', 'audit'],
+  qualified: ['enrich', 'score', 'brief', 'audit'],
+  enriched: ['score', 'brief', 'audit'],
+  scored: ['brief', 'audit'],
+  briefed: ['audit'],
+  audited: [],
+};
+
+export interface ResumeAnalysis {
+  original_run_id: string;
+  campaign_id: string | null;
+  total_leads: number;
+  leads_by_stage: Record<string, number>;
+  resumable: boolean;
+  reason?: string;
+  resume_plan: {
+    steps_to_run: string[];
+    lead_ids: string[];
+    leads_already_complete: number;
+    estimated_work: string;
+  };
+}
+
+export function analyzeRunForResume(runId: string): ResumeAnalysis {
+  const db = getDb();
+  const run = db.prepare('SELECT * FROM pipeline_runs WHERE id = ?').get(runId) as any;
+  if (!run) throw new Error('Run not found');
+
+  const leads = db.prepare('SELECT id, pipeline_stage, fit_score FROM leads WHERE run_id = ?').all(runId) as any[];
+
+  const leadsByStage: Record<string, number> = {};
+  for (const l of leads) {
+    leadsByStage[l.pipeline_stage] = (leadsByStage[l.pipeline_stage] || 0) + 1;
+  }
+
+  const result: ResumeAnalysis = {
+    original_run_id: runId,
+    campaign_id: run.campaign_id,
+    total_leads: leads.length,
+    leads_by_stage: leadsByStage,
+    resumable: false,
+    resume_plan: { steps_to_run: [], lead_ids: [], leads_already_complete: 0, estimated_work: '' },
+  };
+
+  if (leads.length === 0) {
+    result.reason = 'No leads were discovered before the run failed. Use Rerun instead.';
+    return result;
+  }
+
+  // Find leads that still need work
+  const completeLeads = leads.filter(l => l.pipeline_stage === 'audited');
+  const incompleteLeads = leads.filter(l => l.pipeline_stage !== 'audited');
+
+  if (incompleteLeads.length === 0) {
+    result.reason = 'All leads already completed processing.';
+    return result;
+  }
+
+  // Find the earliest incomplete stage to determine which steps to run
+  let earliestIncompleteStageIdx = STAGE_ORDER.length;
+  for (const l of incompleteLeads) {
+    const idx = STAGE_ORDER.indexOf(l.pipeline_stage);
+    if (idx >= 0 && idx < earliestIncompleteStageIdx) {
+      earliestIncompleteStageIdx = idx;
+    }
+  }
+
+  const earliestStage = STAGE_ORDER[earliestIncompleteStageIdx];
+  const stepsToRun = STAGE_TO_STEPS[earliestStage] || [];
+
+  if (stepsToRun.length === 0) {
+    result.reason = 'Could not determine steps to resume.';
+    return result;
+  }
+
+  result.resumable = true;
+  result.resume_plan = {
+    steps_to_run: stepsToRun,
+    lead_ids: leads.map(l => l.id),
+    leads_already_complete: completeLeads.length,
+    estimated_work: `${incompleteLeads.length} leads starting from ${stepsToRun[0]}`,
+  };
+
+  return result;
+}
+
+export async function runCampaign(campaignId: string, triggeredBy: string | null, requestedSteps?: string[], targetLeadIds?: string[], runType?: string, options?: { skipScoreThreshold?: boolean; skipCandidateLimits?: boolean }, resumeFromRunId?: string): Promise<string> {
   const db = getDb();
   const runId = uuidv4();
 
@@ -270,13 +359,14 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
 
   // Create pipeline run record
   db.prepare(
-    `INSERT INTO pipeline_runs (id, triggered_by, campaign_id, status, started_at, steps_run, target_lead_ids, run_type, created_at)
-     VALUES (?, ?, ?, 'running', datetime('now'), ?, ?, ?, datetime('now'))`
+    `INSERT INTO pipeline_runs (id, triggered_by, campaign_id, status, started_at, steps_run, target_lead_ids, run_type, resumed_from_run_id, created_at)
+     VALUES (?, ?, ?, 'running', datetime('now'), ?, ?, ?, ?, datetime('now'))`
   ).run(
     runId, triggeredBy, campaignId,
     requestedSteps ? JSON.stringify(requestedSteps) : null,
     targetLeadIds?.length ? JSON.stringify(targetLeadIds) : null,
     runType || (targetLeadIds?.length ? 'stage_rerun' : 'campaign'),
+    resumeFromRunId || null,
   );
 
   const logger = new ActivityLogger(runId, campaignId);
@@ -564,6 +654,20 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
           targeted: targetLeadIds?.length || 0,
         }
       );
+    }
+
+    // When resuming, build a map of each lead's current stage so we can skip already-completed work
+    const resumeLeadStages = new Map<string, string>();
+    if (resumeFromRunId && startsAfterDiscover) {
+      const stageRows = db.prepare('SELECT id, pipeline_stage FROM leads WHERE run_id = ?').all(resumeFromRunId) as any[];
+      for (const row of stageRows) {
+        resumeLeadStages.set(row.id, row.pipeline_stage);
+      }
+      const alreadyScored = stageRows.filter(r => STAGE_ORDER.indexOf(r.pipeline_stage) >= STAGE_ORDER.indexOf('scored')).length;
+      const alreadyBriefed = stageRows.filter(r => STAGE_ORDER.indexOf(r.pipeline_stage) >= STAGE_ORDER.indexOf('briefed')).length;
+      if (alreadyScored > 0 || alreadyBriefed > 0) {
+        logger.thinking('resume', `Resume context: ${alreadyScored} already scored, ${alreadyBriefed} already briefed — will skip`);
+      }
     }
 
     // ── Iterate funnel steps ──
@@ -916,11 +1020,46 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
             logger.thinking('score', 'Could not load feedback context — proceeding without historical learning');
           }
 
-          logger.phaseStart('score', `Scoring ${candidates.length} candidates against ICP (model: ${stepModel})...`);
+          // When resuming, pre-populate scoredCandidates with already-scored leads
+          let resumeSkippedScore = 0;
+          if (resumeLeadStages.size > 0) {
+            for (const candidate of candidates) {
+              const leadId = getLeadId(candidate.company_name);
+              const currentStage = resumeLeadStages.get(leadId);
+              if (currentStage && STAGE_ORDER.indexOf(currentStage) >= STAGE_ORDER.indexOf('scored')) {
+                const existingLead = db.prepare('SELECT fit_score, fit_score_label, confidence, score_breakdown, scorer_thinking FROM leads WHERE id = ?').get(leadId) as any;
+                if (existingLead && existingLead.fit_score > 0) {
+                  scoredCandidates.push({
+                    candidate,
+                    score: {
+                      fit_score: existingLead.fit_score,
+                      fit_score_label: existingLead.fit_score_label || '',
+                      confidence: existingLead.confidence || 'medium',
+                      score_breakdown: existingLead.score_breakdown ? JSON.parse(existingLead.score_breakdown) : {} as any,
+                      reasoning: existingLead.scorer_thinking || undefined,
+                    } as ScoringResult,
+                  });
+                  resumeSkippedScore++;
+                }
+              }
+            }
+            if (resumeSkippedScore > 0) {
+              logger.thinking('score', `Resume: skipping ${resumeSkippedScore} already-scored leads`);
+            }
+          }
+
+          const candidatesToScore = resumeLeadStages.size > 0
+            ? candidates.filter(c => {
+                const lid = getLeadId(c.company_name);
+                const stage = resumeLeadStages.get(lid);
+                return !stage || STAGE_ORDER.indexOf(stage) < STAGE_ORDER.indexOf('scored');
+              })
+            : candidates;
+
+          logger.phaseStart('score', `Scoring ${candidatesToScore.length} candidates against ICP (model: ${stepModel})${resumeSkippedScore > 0 ? ` (${resumeSkippedScore} skipped — already scored)` : ''}...`);
           const scoreTracker = tracker.getTrackerForModel(stepModel);
-          scoredCandidates = [];
-          for (let ci = 0; ci < candidates.length; ci++) {
-            const candidate = candidates[ci];
+          for (let ci = 0; ci < candidatesToScore.length; ci++) {
+            const candidate = candidatesToScore[ci];
             if (signal.aborted) throw new Error('Run cancelled by user');
             const leadId = getLeadId(candidate.company_name);
             if (targetLeadIds?.length) {
@@ -1011,9 +1150,44 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
         case 'brief': {
           const briefLimit = step.candidate_limit || targetCount;
           const selected = scoredCandidates.slice(0, briefLimit);
-          logger.phaseStart('brief', `Generating outreach briefs for ${selected.length} candidates (model: ${stepModel})...`);
+
+          // When resuming, pre-populate briefResults with already-briefed leads and filter them out
+          let resumeSkippedBrief = 0;
+          const toBrief: { candidate: ResearchCandidate; score: ScoringResult }[] = [];
+          for (const entry of selected) {
+            const leadId = getLeadId(entry.candidate.company_name);
+            const currentStage = resumeLeadStages.get(leadId);
+            if (currentStage && STAGE_ORDER.indexOf(currentStage) >= STAGE_ORDER.indexOf('briefed')) {
+              const existingLead = db.prepare('SELECT brief_markdown, pain_hypotheses, tech_stack, competitive_displacement, outreach_strategy, source_citations, why_now, brief_thinking FROM leads WHERE id = ?').get(leadId) as any;
+              if (existingLead?.brief_markdown) {
+                briefResults.push({
+                  candidate: entry.candidate,
+                  score: entry.score,
+                  brief: {
+                    brief_markdown: existingLead.brief_markdown,
+                    company_snapshot: '',
+                    personas: [],
+                    pain_hypotheses: existingLead.pain_hypotheses ? JSON.parse(existingLead.pain_hypotheses) : [],
+                    tech_stack: existingLead.tech_stack ? JSON.parse(existingLead.tech_stack) : null,
+                    competitive_displacement: existingLead.competitive_displacement ? JSON.parse(existingLead.competitive_displacement) : null,
+                    outreach_strategy: existingLead.outreach_strategy || '',
+                    source_citations: existingLead.source_citations ? JSON.parse(existingLead.source_citations) : [],
+                    why_now: existingLead.why_now ? JSON.parse(existingLead.why_now) : [],
+                  } as any,
+                });
+                resumeSkippedBrief++;
+                continue;
+              }
+            }
+            toBrief.push(entry);
+          }
+          if (resumeSkippedBrief > 0) {
+            logger.thinking('brief', `Resume: skipping ${resumeSkippedBrief} already-briefed leads`);
+          }
+
+          logger.phaseStart('brief', `Generating outreach briefs for ${toBrief.length} candidates (model: ${stepModel})${resumeSkippedBrief > 0 ? ` (${resumeSkippedBrief} skipped — already briefed)` : ''}...`);
           const briefTracker = tracker.getTrackerForModel(stepModel);
-          for (const { candidate, score } of selected) {
+          for (const { candidate, score } of toBrief) {
             if (signal.aborted) throw new Error('Run cancelled by user');
             const leadId = getLeadId(candidate.company_name);
             if (targetLeadIds?.length) {
@@ -1381,23 +1555,28 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
     const errorMessage = err instanceof Error ? err.message : String(err);
     const wasCancelled = signal.aborted || errorMessage.includes('cancelled');
 
+    // Count leads persisted so far (partial results survive failure)
+    const partialLeadCount = (db.prepare('SELECT COUNT(*) as c FROM leads WHERE run_id = ?').get(runId) as any)?.c || 0;
+
     if (wasCancelled) {
-      logger.milestone('Run cancelled by user', { partial_leads: 0 });
+      logger.milestone('Run cancelled by user', { partial_leads: partialLeadCount });
       db.prepare(
-        `UPDATE pipeline_runs SET status = 'cancelled', completed_at = datetime('now'), error_message = 'Cancelled by user' WHERE id = ?`
-      ).run(runId);
+        `UPDATE pipeline_runs SET status = 'cancelled', completed_at = datetime('now'), lead_count = ?, error_message = 'Cancelled by user'
+         WHERE id = ?`
+      ).run(partialLeadCount, runId);
       eventBus.emit('campaign.cancelled', {
         campaign_id: campaignId,
         campaign_name: campaign.name,
         run_id: runId,
-        partial_leads: 0,
+        partial_leads: partialLeadCount,
         run_type: runType || 'campaign',
       });
     } else {
       logger.error('campaign', 'Campaign run failed', errorMessage);
       db.prepare(
-        `UPDATE pipeline_runs SET status = 'failed', completed_at = datetime('now'), error_message = ? WHERE id = ?`
-      ).run(errorMessage, runId);
+        `UPDATE pipeline_runs SET status = 'failed', completed_at = datetime('now'), lead_count = ?, error_message = ?
+         WHERE id = ?`
+      ).run(partialLeadCount, errorMessage, runId);
       eventBus.emit('campaign.failed', {
         campaign_id: campaignId,
         campaign_name: campaign.name,

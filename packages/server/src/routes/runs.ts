@@ -4,6 +4,7 @@ import { getDb } from '../db/schema.js';
 import { authenticate, requireMember, requireSuperAdmin, AuthRequest } from '../auth/middleware.js';
 import { runPipeline } from '../agent/orchestrator.js';
 import { cancelRun } from '../agent/runRegistry.js';
+import { analyzeRunForResume, runCampaign } from '../agent/campaignOrchestrator.js';
 
 const router = Router();
 
@@ -209,6 +210,74 @@ router.post('/trigger', authenticate, requireMember, async (req: AuthRequest, re
   });
 
   res.json({ message: 'Pipeline run triggered', status: 'pending' });
+});
+
+// ── GET /:id/resume-analysis — Analyze what a resume would do ────────
+router.get('/:id/resume-analysis', authenticate, requireMember, (req: AuthRequest, res: Response) => {
+  const db = getDb();
+  const run = db.prepare('SELECT id, status, campaign_id FROM pipeline_runs WHERE id = ?').get(req.params.id) as any;
+  if (!run) return res.status(404).json({ error: 'Run not found' });
+  if (!['failed', 'cancelled'].includes(run.status)) {
+    return res.status(400).json({ error: 'Only failed or cancelled runs can be resumed' });
+  }
+  if (!run.campaign_id) {
+    return res.status(400).json({ error: 'Run has no associated campaign' });
+  }
+  try {
+    const analysis = analyzeRunForResume(req.params.id);
+    res.json(analysis);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /:id/resume — Resume a failed/cancelled run ────────────────
+router.post('/:id/resume', authenticate, requireMember, async (req: AuthRequest, res: Response) => {
+  const db = getDb();
+  const run = db.prepare('SELECT * FROM pipeline_runs WHERE id = ?').get(req.params.id) as any;
+  if (!run) return res.status(404).json({ error: 'Run not found' });
+  if (!['failed', 'cancelled'].includes(run.status)) {
+    return res.status(400).json({ error: 'Only failed or cancelled runs can be resumed' });
+  }
+  if (!run.campaign_id) {
+    return res.status(400).json({ error: 'Run has no associated campaign' });
+  }
+
+  const activeRun = db.prepare(
+    "SELECT id FROM pipeline_runs WHERE campaign_id = ? AND status IN ('pending','running') LIMIT 1"
+  ).get(run.campaign_id);
+  if (activeRun) return res.status(409).json({ error: 'A campaign run is already in progress' });
+
+  const analysis = analyzeRunForResume(req.params.id);
+  if (!analysis.resumable) {
+    return res.status(400).json({ error: analysis.reason || 'Run cannot be resumed' });
+  }
+
+  const runPromise = runCampaign(
+    run.campaign_id,
+    req.user!.id,
+    analysis.resume_plan.steps_to_run,
+    analysis.resume_plan.lead_ids,
+    'resume',
+    { skipScoreThreshold: true, skipCandidateLimits: true },
+    run.id,
+  );
+  runPromise.catch(err => {
+    console.error('Resume run failed:', err);
+  });
+
+  await new Promise(resolve => setTimeout(resolve, 50));
+  const newRun = db.prepare(
+    "SELECT id FROM pipeline_runs WHERE campaign_id = ? ORDER BY created_at DESC LIMIT 1"
+  ).get(run.campaign_id) as any;
+
+  res.json({
+    message: 'Resume triggered',
+    status: 'running',
+    run_id: newRun?.id || null,
+    original_run_id: run.id,
+    resume_plan: analysis.resume_plan,
+  });
 });
 
 // ── DELETE /:id — Delete a run + associated data (superadmin only) ──

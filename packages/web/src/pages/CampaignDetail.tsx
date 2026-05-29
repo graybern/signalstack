@@ -8,7 +8,7 @@ import {
   Layers, Settings, Clock, Shield, Rss, Copy, Check, Calendar,
   Search, Send, Globe, Hash, Plus, Trash2, Power, Crosshair,
   BarChart3, DollarSign, Activity, Eye, ExternalLink,
-  ArrowUpDown, ArrowUp, ArrowDown, Filter, X, RefreshCw,
+  ArrowUpDown, ArrowUp, ArrowDown, Filter, X, RefreshCw, PlayCircle,
 } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
@@ -106,6 +106,7 @@ export function CampaignDetail() {
   const [selectedLeadIds, setSelectedLeadIds] = useState<Set<string>>(new Set());
   const [bulkRunning, setBulkRunning] = useState(false);
   const [rerunningRunId, setRerunningRunId] = useState<string | null>(null);
+  const [resumingRunId, setResumingRunId] = useState<string | null>(null);
 
   // Configure state
   const [configTab, setConfigTab] = useState<'definition' | 'funnel' | 'schedule' | 'exclusions' | 'feed'>('definition');
@@ -285,6 +286,31 @@ export function CampaignDetail() {
       alert(err.message);
     } finally {
       setRerunningRunId(null);
+    }
+  };
+
+  const triggerResumeFromRun = async (run: any) => {
+    if (!id) return;
+    setResumingRunId(run.id);
+    try {
+      const analysis = await api<any>(`/runs/${run.id}/resume-analysis`);
+      if (!analysis.resumable) {
+        alert(`Cannot resume: ${analysis.reason}`);
+        return;
+      }
+      const plan = analysis.resume_plan;
+      const confirmed = confirm(
+        `Resume ${plan.lead_ids.length} leads from ${plan.steps_to_run[0]} stage?\n` +
+        `${plan.leads_already_complete} leads already completed.\n` +
+        `Steps to run: ${plan.steps_to_run.join(' → ')}`
+      );
+      if (!confirmed) return;
+      const result = await api<{ run_id: string }>(`/runs/${run.id}/resume`, { method: 'POST' });
+      if (result.run_id) setActiveRunId(result.run_id);
+    } catch (err: any) {
+      alert(err.message || 'Failed to resume run');
+    } finally {
+      setResumingRunId(null);
     }
   };
 
@@ -597,6 +623,8 @@ export function CampaignDetail() {
           canRerun={permissions.canRunCampaign(user?.role)}
           onRerunFromRun={triggerRerunFromRun}
           rerunningRunId={rerunningRunId}
+          onResumeFromRun={triggerResumeFromRun}
+          resumingRunId={resumingRunId}
         />
       )}
 
@@ -1130,7 +1158,7 @@ function LeadsTab({
 
 function RunsTab({
   campaign, campaignId, activeRunId, setActiveRunId, viewLogRunId, setViewLogRunId,
-  canRerun, onRerunFromRun, rerunningRunId,
+  canRerun, onRerunFromRun, rerunningRunId, onResumeFromRun, resumingRunId,
 }: {
   campaign: CampaignFull;
   campaignId: string;
@@ -1141,6 +1169,8 @@ function RunsTab({
   canRerun: boolean;
   onRerunFromRun: (run: any) => void;
   rerunningRunId: string | null;
+  onResumeFromRun: (run: any) => void;
+  resumingRunId: string | null;
 }) {
   if (campaign.runs.length === 0) {
     return (
@@ -1158,17 +1188,19 @@ function RunsTab({
         const isViewing = viewLogRunId === run.id;
         const isActive = activeRunId === run.id;
         const isRerun = run.run_type === 'stage_rerun';
+        const isResume = run.run_type === 'resume';
         let rerunLeadCount = 0;
-        if (isRerun && run.target_lead_ids) {
+        if ((isRerun || isResume) && run.target_lead_ids) {
           try { rerunLeadCount = JSON.parse(run.target_lead_ids).length; } catch {}
         }
         let stepsLabel = '';
-        if (isRerun && run.steps_run) {
+        if ((isRerun || isResume) && run.steps_run) {
           try {
             const steps = JSON.parse(run.steps_run) as string[];
             stepsLabel = steps.map((s: string) => s.charAt(0).toUpperCase() + s.slice(1)).join(' → ');
           } catch {}
         }
+        const canResume = canRerun && (run.status === 'failed' || run.status === 'cancelled') && run.campaign_id;
 
         return (
           <div key={run.id} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
@@ -1181,7 +1213,9 @@ function RunsTab({
                 }`} />
                 <div>
                   <span className="text-sm font-medium text-gray-900">
-                    {isRerun
+                    {isResume
+                      ? `Resume${rerunLeadCount ? ` (${rerunLeadCount} lead${rerunLeadCount > 1 ? 's' : ''})` : ''}`
+                      : isRerun
                       ? `Rerun${rerunLeadCount ? ` (${rerunLeadCount} lead${rerunLeadCount > 1 ? 's' : ''})` : ''}`
                       : `Run ${runNumber}`}
                   </span>
@@ -1226,6 +1260,16 @@ function RunsTab({
                   <Link to={`/runs/${run.id}`} className="flex items-center gap-1 px-2 py-1 text-brand-600 hover:bg-brand-50 rounded">
                     <ExternalLink className="w-3.5 h-3.5" /> Detail
                   </Link>
+                  {canResume && (
+                    <button
+                      onClick={() => onResumeFromRun(run)}
+                      disabled={resumingRunId === run.id}
+                      className="flex items-center gap-1 px-2 py-1 text-green-600 hover:bg-green-50 rounded"
+                    >
+                      <PlayCircle className={`w-3.5 h-3.5 ${resumingRunId === run.id ? 'animate-pulse' : ''}`} />
+                      Resume
+                    </button>
+                  )}
                   {canRerun && run.status !== 'running' && run.status !== 'pending' && (
                     <button
                       onClick={() => onRerunFromRun(run)}

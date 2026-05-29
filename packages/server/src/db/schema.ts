@@ -678,6 +678,7 @@ function initSchema(db: Database.Database) {
     if (!newRunCols.find(c => c.name === 'steps_run')) db.exec("ALTER TABLE pipeline_runs ADD COLUMN steps_run TEXT");
     if (!newRunCols.find(c => c.name === 'target_lead_ids')) db.exec("ALTER TABLE pipeline_runs ADD COLUMN target_lead_ids TEXT");
     if (!newRunCols.find(c => c.name === 'batch_context')) db.exec("ALTER TABLE pipeline_runs ADD COLUMN batch_context TEXT");
+    if (!newRunCols.find(c => c.name === 'resumed_from_run_id')) db.exec("ALTER TABLE pipeline_runs ADD COLUMN resumed_from_run_id TEXT");
     // Recreate indexes
     db.exec(`
       CREATE INDEX IF NOT EXISTS idx_runs_campaign_id ON pipeline_runs(campaign_id);
@@ -711,7 +712,8 @@ function initSchema(db: Database.Database) {
         campaign_id   TEXT,
         steps_run     TEXT,
         target_lead_ids TEXT,
-        batch_context TEXT
+        batch_context TEXT,
+        resumed_from_run_id TEXT
       );
       INSERT OR IGNORE INTO pipeline_runs_new(${colList})
         SELECT ${colList} FROM pipeline_runs;
@@ -720,6 +722,11 @@ function initSchema(db: Database.Database) {
       CREATE INDEX IF NOT EXISTS idx_runs_campaign_id ON pipeline_runs(campaign_id);
     `);
     db.pragma('foreign_keys = ON');
+    // Add column if it wasn't in the source table
+    const finalCols = db.prepare("PRAGMA table_info(pipeline_runs)").all() as { name: string }[];
+    if (!finalCols.find(c => c.name === 'resumed_from_run_id')) {
+      db.exec("ALTER TABLE pipeline_runs ADD COLUMN resumed_from_run_id TEXT");
+    }
   }
 
   // User activity log — audit trail for all entity changes

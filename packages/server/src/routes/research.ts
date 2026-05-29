@@ -224,7 +224,7 @@ router.get('/history', authenticate, (req: AuthRequest, res: Response) => {
     if (run.target_lead_ids) {
       try {
         const leadIds: string[] = JSON.parse(run.target_lead_ids);
-        if (run.run_type === 'batch_research' || run.run_type === 'webhook_research') {
+        if (run.run_type === 'batch_research' || run.run_type === 'webhook_research' || (run.run_type === 'resume' && leadIds.length > 1)) {
           // For batch runs, load summary for all leads
           const placeholders = leadIds.map(() => '?').join(',');
           batchLeads = db.prepare(

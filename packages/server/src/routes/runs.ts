@@ -37,6 +37,24 @@ router.get('/', authenticate, (req: AuthRequest, res: Response) => {
      ORDER BY pr.created_at DESC LIMIT ?`
   ).all(...params, pageLimit);
 
+  // Attach resumed_by info for failed/cancelled runs
+  const resumable = runs.filter((r: any) => r.status === 'failed' || r.status === 'cancelled');
+  if (resumable.length > 0) {
+    const placeholders = resumable.map(() => '?').join(',');
+    const resumeChildren = db.prepare(
+      `SELECT resumed_from_run_id, id as resumed_by_run_id, status as resumed_by_status
+       FROM pipeline_runs WHERE resumed_from_run_id IN (${placeholders})`
+    ).all(...resumable.map((r: any) => r.id)) as any[];
+    const childMap = new Map(resumeChildren.map(c => [c.resumed_from_run_id, c]));
+    for (const r of resumable as any[]) {
+      const child = childMap.get(r.id);
+      if (child) {
+        r.resumed_by_run_id = child.resumed_by_run_id;
+        r.resumed_by_status = child.resumed_by_status;
+      }
+    }
+  }
+
   // Stats aggregation
   const stats = db.prepare(
     `SELECT

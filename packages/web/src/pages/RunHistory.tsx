@@ -47,6 +47,8 @@ interface Run {
   target_lead_ids: string | null;
   steps_run: string | null;
   resumed_from_run_id: string | null;
+  resumed_by_run_id: string | null;
+  resumed_by_status: string | null;
 }
 
 interface UpcomingRun {
@@ -782,6 +784,11 @@ function CompletedRunRow({ run, expanded, leads, loadingLeads, onToggle, onViewL
                   resumed from parent run
                 </Link>
               )}
+              {run.resumed_by_run_id && (
+                <Link to={`/runs/${run.resumed_by_run_id}`} onClick={e => e.stopPropagation()} className="text-[10px] text-blue-600 hover:text-blue-700">
+                  resumed → view run {run.resumed_by_status === 'running' ? '(in progress)' : run.resumed_by_status === 'completed' ? '(completed)' : ''}
+                </Link>
+              )}
             </div>
           </div>
         </td>
@@ -811,7 +818,7 @@ function CompletedRunRow({ run, expanded, leads, loadingLeads, onToggle, onViewL
             <Link to={`/runs/${run.id}`} onClick={e => e.stopPropagation()} className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-brand-600" title="View run details">
               <ExternalLink className="w-3.5 h-3.5" />
             </Link>
-            {canRerun && run.campaign_id && (run.status === 'failed' || run.status === 'cancelled') && (
+            {canRerun && run.campaign_id && (run.status === 'failed' || run.status === 'cancelled') && !run.resumed_by_run_id && (
               <button onClick={e => { e.stopPropagation(); onResume(); }} disabled={resuming} className="p-1 rounded hover:bg-green-50 text-gray-400 hover:text-green-600" title="Resume from where it stopped">
                 <PlayCircle className={`w-3.5 h-3.5 ${resuming ? 'animate-pulse' : ''}`} />
               </button>

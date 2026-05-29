@@ -330,7 +330,15 @@ export function analyzeRunForResume(runId: string): ResumeAnalysis {
   }
 
   const earliestStage = STAGE_ORDER[earliestIncompleteStageIdx];
-  const stepsToRun = STAGE_TO_STEPS[earliestStage] || [];
+  let stepsToRun = STAGE_TO_STEPS[earliestStage] || [];
+
+  // Respect the original run's steps — don't add steps it never intended to run
+  if (run.steps_run) {
+    try {
+      const originalSteps: string[] = JSON.parse(run.steps_run);
+      stepsToRun = stepsToRun.filter(s => originalSteps.includes(s));
+    } catch {}
+  }
 
   if (stepsToRun.length === 0) {
     result.reason = 'Could not determine steps to resume.';

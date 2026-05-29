@@ -664,7 +664,13 @@ function ActiveRunCard({ run, liveProgress, onViewActivity, onCancel, isCancelli
             <span className="text-sm font-medium text-gray-900">
               {run.campaign_name || run.run_type || 'Pipeline Run'}
             </span>
-            <RunTypeBadge type={run.run_type} />
+            {run.run_type === 'resume' ? (
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-green-50 text-green-700 border border-green-200">
+                resuming
+              </span>
+            ) : (
+              <RunTypeBadge type={run.run_type} />
+            )}
             <span className="text-[10px] text-gray-400 font-mono">#{run.run_number}</span>
           </div>
           {progress && (
@@ -771,23 +777,44 @@ function CompletedRunRow({ run, expanded, leads, loadingLeads, onToggle, onViewL
         <td className="px-3 py-3 text-xs text-gray-400 font-mono">#{run.run_number}</td>
         <td className="px-3 py-3">
           <div className="flex items-center gap-1.5">
-            {statusIcon(run.status)}
+            {run.resumed_by_run_id
+              ? (run.resumed_by_status === 'completed'
+                  ? <CheckCircle className="w-4 h-4 text-emerald-500" />
+                  : run.resumed_by_status === 'running' || run.resumed_by_status === 'pending'
+                    ? <Loader2 className="w-4 h-4 text-amber-500 animate-spin" />
+                    : statusIcon(run.status))
+              : statusIcon(run.status)
+            }
             <div>
-              <span className={`text-xs font-medium ${statusColor}`}>{statusLabel}</span>
-              {(isFailed || isMissed) && run.error_message && (
-                <p className={`text-[10px] leading-tight mt-0.5 max-w-[200px] truncate ${isFailed ? 'text-red-500' : 'text-orange-500'}`}>
-                  {run.error_message}
-                </p>
+              {run.resumed_by_run_id ? (
+                <>
+                  <span className={`text-xs font-medium ${
+                    run.resumed_by_status === 'completed' ? 'text-emerald-600' :
+                    run.resumed_by_status === 'running' || run.resumed_by_status === 'pending' ? 'text-amber-600' :
+                    statusColor
+                  }`}>
+                    {run.resumed_by_status === 'completed' ? 'Recovered' :
+                     run.resumed_by_status === 'running' || run.resumed_by_status === 'pending' ? 'Recovering...' :
+                     statusLabel}
+                  </span>
+                  <Link to={`/runs/${run.resumed_by_run_id}`} onClick={e => e.stopPropagation()} className="block text-[10px] text-brand-500 hover:text-brand-700">
+                    View resume run →
+                  </Link>
+                </>
+              ) : (
+                <>
+                  <span className={`text-xs font-medium ${statusColor}`}>{statusLabel}</span>
+                  {(isFailed || isMissed) && run.error_message && (
+                    <p className={`text-[10px] leading-tight mt-0.5 max-w-[200px] truncate ${isFailed ? 'text-red-500' : 'text-orange-500'}`}>
+                      {run.error_message}
+                    </p>
+                  )}
+                </>
               )}
               {run.resumed_from_run_id && (
-                <Link to={`/runs/${run.resumed_from_run_id}`} onClick={e => e.stopPropagation()} className="text-[10px] text-green-600 hover:text-green-700">
-                  resumed from parent run
-                </Link>
-              )}
-              {run.resumed_by_run_id && (
-                <Link to={`/runs/${run.resumed_by_run_id}`} onClick={e => e.stopPropagation()} className="text-[10px] text-blue-600 hover:text-blue-700">
-                  resumed → view run {run.resumed_by_status === 'running' ? '(in progress)' : run.resumed_by_status === 'completed' ? '(completed)' : ''}
-                </Link>
+                <p className="text-[10px] text-gray-400">
+                  ↳ continues <Link to={`/runs/${run.resumed_from_run_id}`} onClick={e => e.stopPropagation()} className="text-brand-500 hover:text-brand-700">parent run</Link>
+                </p>
               )}
             </div>
           </div>

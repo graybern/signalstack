@@ -240,6 +240,24 @@ router.get('/history', authenticate, (req: AuthRequest, res: Response) => {
     return { ...run, lead: leadInfo, batch_leads: batchLeads };
   });
 
+  // Attach resumed_by info for failed/cancelled runs
+  const resumableRuns = enriched.filter((r: any) => r.status === 'failed' || r.status === 'cancelled');
+  if (resumableRuns.length > 0) {
+    const ph = resumableRuns.map(() => '?').join(',');
+    const resumeChildren = db.prepare(
+      `SELECT resumed_from_run_id, id as resumed_by_run_id, status as resumed_by_status
+       FROM pipeline_runs WHERE resumed_from_run_id IN (${ph})`
+    ).all(...resumableRuns.map((r: any) => r.id)) as any[];
+    const childMap = new Map(resumeChildren.map((c: any) => [c.resumed_from_run_id, c]));
+    for (const r of resumableRuns) {
+      const child = childMap.get(r.id);
+      if (child) {
+        r.resumed_by_run_id = child.resumed_by_run_id;
+        r.resumed_by_status = child.resumed_by_status;
+      }
+    }
+  }
+
   res.json(enriched);
 });
 

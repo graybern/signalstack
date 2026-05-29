@@ -35,6 +35,9 @@ interface ResearchEntry {
   triggered_by_name: string | null;
   steps_run: string | null;
   run_type: string;
+  resumed_from_run_id: string | null;
+  resumed_by_run_id: string | null;
+  resumed_by_status: string | null;
   lead: {
     id: string;
     company_name: string;
@@ -71,6 +74,7 @@ interface ActiveResearch {
   error?: string;
   mode: 'single' | 'batch';
   completedDomains?: Set<string>;
+  isResume?: boolean;
 }
 
 interface CSVContext {
@@ -198,6 +202,7 @@ export function QuickResearch() {
         status: 'running',
         mode: isBatch ? 'batch' : 'single',
         completedDomains: new Set(),
+        isResume: true,
       });
       setShowActiveLog(true);
       loadHistory();
@@ -234,6 +239,7 @@ export function QuickResearch() {
           status: 'running',
           mode: isBatch ? 'batch' : 'single',
           completedDomains: new Set(),
+          isResume: running.run_type === 'resume',
         });
       }
     }).catch(() => { setLoadingHistory(false); });
@@ -915,7 +921,7 @@ export function QuickResearch() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {history.map(entry => {
+                {history.filter(e => !e.resumed_from_run_id).map(entry => {
                   const isBatch = entry.run_type === 'batch_research' || entry.run_type === 'webhook_research' || (entry.run_type === 'resume' && (entry.batch_leads?.length || 0) > 1);
                   return (
                     <HistoryRow
@@ -962,6 +968,11 @@ function SingleActivePanel({ active, showLog, setShowLog, phaseLabels }: {
             <div className="flex items-center gap-2">
               <span className="text-sm font-medium text-gray-900">{active.domain}</span>
               <span className="text-xs text-gray-500">via {active.campaignName}</span>
+              {active.isResume && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-green-50 text-green-700 border border-green-200">
+                  recovering
+                </span>
+              )}
             </div>
             {active.context && (
               <p className="text-xs text-gray-500 mt-0.5 line-clamp-1" title={active.context}>
@@ -1023,8 +1034,15 @@ function BatchActivePanel({ active, showLog, setShowLog, phaseLabels }: {
             <StatusIcon status={active.status} />
             <div>
               <div className="flex items-center gap-2">
-                <span className="text-sm font-medium text-gray-900">Batch Research</span>
+                <span className="text-sm font-medium text-gray-900">
+                  {active.isResume ? 'Resuming Batch' : 'Batch Research'}
+                </span>
                 <span className="text-xs text-gray-500">{totalDomains} domains via {active.campaignName}</span>
+                {active.isResume && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-green-50 text-green-700 border border-green-200">
+                    recovering
+                  </span>
+                )}
               </div>
               <PhaseDisplay active={active} phaseLabels={phaseLabels} />
             </div>
@@ -1187,7 +1205,7 @@ function HistoryRow({ entry, isBatch, expandedLog, expandedBatch, onToggleLog, o
   const isRunning = entry.status === 'running' || entry.status === 'pending';
   const isFailed = entry.status === 'failed';
   const isCancelled = entry.status === 'cancelled';
-  const canResume = (isFailed || isCancelled) && entry.campaign_id;
+  const canResume = (isFailed || isCancelled) && entry.campaign_id && !entry.resumed_by_run_id;
   const batchCount = entry.batch_leads?.length || 0;
 
   return (
@@ -1262,7 +1280,7 @@ function HistoryRow({ entry, isBatch, expandedLog, expandedBatch, onToggleLog, o
         </td>
         {/* Status */}
         <td className="px-4 py-3">
-          <StatusBadge status={entry.status} error={entry.error_message} />
+          <StatusBadge status={entry.status} error={entry.error_message} resumedByStatus={entry.resumed_by_status} />
         </td>
         {/* Cost */}
         <td className="px-4 py-3 text-xs text-gray-500">
@@ -1465,7 +1483,7 @@ function PrioritySelector({ allDomains, selected, onSelectedChange, maxSize }: {
   );
 }
 
-function StatusBadge({ status, error }: { status: string; error: string | null }) {
+function StatusBadge({ status, error, resumedByStatus }: { status: string; error: string | null; resumedByStatus?: string | null }) {
   if (status === 'running' || status === 'pending') {
     return (
       <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full">
@@ -1483,6 +1501,22 @@ function StatusBadge({ status, error }: { status: string; error: string | null }
     );
   }
   if (status === 'failed') {
+    if (resumedByStatus === 'completed') {
+      return (
+        <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full">
+          <CheckCircle className="w-3 h-3" />
+          Recovered
+        </span>
+      );
+    }
+    if (resumedByStatus === 'running' || resumedByStatus === 'pending') {
+      return (
+        <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full">
+          <Loader2 className="w-3 h-3 animate-spin" />
+          Recovering
+        </span>
+      );
+    }
     return (
       <span className="inline-flex items-center gap-1 text-xs font-medium text-red-700 bg-red-50 px-2 py-0.5 rounded-full" title={error || undefined}>
         <XCircle className="w-3 h-3" />

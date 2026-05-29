@@ -1,10 +1,10 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { api } from '../api/client';
+import { api, downloadFile } from '../api/client';
 import { formatDateTime } from '../utils/dates';
 import {
   ArrowLeft, CheckCircle2, XCircle, Clock, Loader2,
-  Users, TrendingUp, DollarSign, Target, ExternalLink,
+  Users, TrendingUp, DollarSign, Target, ExternalLink, Download,
   ChevronDown, ChevronUp, Trash2, AlertTriangle, PlayCircle,
 } from 'lucide-react';
 import { ScoreBadge, SegmentBadge } from '../components/ScoreBadge';
@@ -283,15 +283,15 @@ export function RunDetail() {
           </div>
         </div>
       )}
-      {(run.resumed_from_run_id || run.resumed_by_run_id) && (
+      {leads.length > 0 && run.status !== 'running' && run.status !== 'pending' && (
         <div className="mb-6">
-          <a
-            href={`/api/runs/${id}/chain-export`}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-brand-600 bg-brand-50 border border-brand-200 rounded-lg hover:bg-brand-100"
+          <button
+            onClick={() => downloadFile(`/runs/${id}/chain-export`, `signalstack-results-${new Date().toISOString().split('T')[0]}.csv`)}
+            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-brand-600 rounded-lg hover:bg-brand-700 transition-colors shadow-sm"
           >
-            <ExternalLink className="w-3.5 h-3.5" />
-            Download Complete Chain Results (CSV)
-          </a>
+            <Download className="w-4 h-4" />
+            Download Results (CSV)
+          </button>
         </div>
       )}
 

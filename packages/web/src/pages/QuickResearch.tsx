@@ -1370,11 +1370,11 @@ function HistoryRow({ entry, isBatch, expandedLog, expandedBatch, onToggleLog, o
             <Link to={`/runs/${entry.id}`} className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-brand-600 inline-flex" title="View run details">
               <ExternalLink className="w-3.5 h-3.5" />
             </Link>
-            {isBatch && entry.status === 'completed' && (
+            {isBatch && (entry.status === 'completed' || ((entry.status === 'failed' || entry.status === 'cancelled') && entry.lead_count > 0)) && (
               <button
                 onClick={() => downloadFile(`/research/batch/${entry.id}/export`, `signalstack-batch-${new Date().toISOString().split('T')[0]}.csv`)}
                 className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-emerald-600 transition-colors"
-                title="Download enriched CSV"
+                title="Download results CSV"
               >
                 <Download className="w-3.5 h-3.5" />
               </button>

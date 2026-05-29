@@ -347,6 +347,16 @@ export function analyzeRunForResume(runId: string): ResumeAnalysis {
       const originalSteps: string[] = JSON.parse(run.steps_run);
       stepsToRun = stepsToRun.filter(s => originalSteps.includes(s));
     } catch {}
+  } else if (run.campaign_id) {
+    // steps_run is NULL — infer from campaign's funnel_config
+    const campaignRow = db.prepare('SELECT funnel_config FROM campaigns WHERE id = ?').get(run.campaign_id) as any;
+    if (campaignRow?.funnel_config) {
+      try {
+        const fc = JSON.parse(campaignRow.funnel_config);
+        const enabledIds = (fc.steps || []).filter((s: any) => s.enabled).map((s: any) => s.id);
+        stepsToRun = stepsToRun.filter(s => enabledIds.includes(s));
+      } catch {}
+    }
   }
 
   if (stepsToRun.length === 0) {

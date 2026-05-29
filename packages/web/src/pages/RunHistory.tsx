@@ -1,11 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { api } from '../api/client';
+import { api, downloadFile } from '../api/client';
 import { formatDateTime, formatDateTimeWithWeekday, formatTime } from '../utils/dates';
 import { useAuth } from '../hooks/useAuth';
 import {
   Clock, CheckCircle, XCircle, AlertCircle, RefreshCw, Target,
-  DollarSign, ChevronDown, ChevronUp, Calendar, Filter,
+  DollarSign, ChevronDown, ChevronUp, Calendar, Filter, Download,
   TrendingUp, Users, Loader2, Activity, Eye, Trash2, AlertTriangle,
   X, Hash, PlayCircle, ExternalLink,
 } from 'lucide-react';
@@ -884,6 +884,11 @@ function CompletedRunRow({ run, expanded, leads, loadingLeads, onToggle, onViewL
             <Link to={`/runs/${run.id}`} onClick={e => e.stopPropagation()} className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-brand-600" title="View run details">
               <ExternalLink className="w-3.5 h-3.5" />
             </Link>
+            {run.lead_count > 0 && run.status !== 'running' && run.status !== 'pending' && (
+              <button onClick={e => { e.stopPropagation(); downloadFile(`/runs/${run.id}/chain-export`, `signalstack-run-${new Date().toISOString().split('T')[0]}.csv`); }} className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-emerald-600 transition-colors" title="Download results CSV">
+                <Download className="w-3.5 h-3.5" />
+              </button>
+            )}
             {canRerun && run.campaign_id && (run.status === 'failed' || run.status === 'cancelled') && !run.resumed_by_run_id && (
               <button onClick={e => { e.stopPropagation(); onResume(); }} disabled={resuming} className="p-1 rounded hover:bg-green-50 text-gray-400 hover:text-green-600" title="Resume from where it stopped">
                 <PlayCircle className={`w-3.5 h-3.5 ${resuming ? 'animate-pulse' : ''}`} />

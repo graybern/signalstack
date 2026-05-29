@@ -279,10 +279,19 @@ router.post('/:id/resume', authenticate, requireMember, async (req: AuthRequest,
     return res.status(400).json({ error: analysis.reason || 'Run cannot be resumed' });
   }
 
+  // Belt-and-suspenders: intersect with original run's steps_run
+  let stepsToRun = analysis.resume_plan.steps_to_run;
+  if (run.steps_run) {
+    try {
+      const originalSteps: string[] = JSON.parse(run.steps_run);
+      stepsToRun = stepsToRun.filter((s: string) => originalSteps.includes(s));
+    } catch {}
+  }
+
   const runPromise = runCampaign(
     run.campaign_id,
     req.user!.id,
-    analysis.resume_plan.steps_to_run,
+    stepsToRun,
     analysis.resume_plan.lead_ids,
     'resume',
     { skipScoreThreshold: true, skipCandidateLimits: true },

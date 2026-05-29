@@ -46,6 +46,7 @@ interface Run {
   run_number: number;
   target_lead_ids: string | null;
   steps_run: string | null;
+  resumed_from_run_id: string | null;
 }
 
 interface UpcomingRun {
@@ -776,6 +777,11 @@ function CompletedRunRow({ run, expanded, leads, loadingLeads, onToggle, onViewL
                   {run.error_message}
                 </p>
               )}
+              {run.resumed_from_run_id && (
+                <Link to={`/runs/${run.resumed_from_run_id}`} onClick={e => e.stopPropagation()} className="text-[10px] text-green-600 hover:text-green-700">
+                  resumed from parent run
+                </Link>
+              )}
             </div>
           </div>
         </td>
@@ -897,6 +903,8 @@ function RunTypeBadge({ type }: { type: string | null }) {
     enrichment: 'bg-purple-50 text-purple-700',
     stage_rerun: 'bg-amber-50 text-amber-700',
     quick_research: 'bg-emerald-50 text-emerald-700',
+    batch_research: 'bg-purple-50 text-purple-700',
+    resume: 'bg-green-50 text-green-700',
   };
   const label = type || 'pipeline';
   return (

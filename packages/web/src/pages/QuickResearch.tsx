@@ -186,7 +186,20 @@ export function QuickResearch() {
         `Steps to run: ${plan.steps_to_run.join(' → ')}`
       );
       if (!confirmed) return;
-      await api(`/runs/${entry.id}/resume`, { method: 'POST' });
+      const result = await api<any>(`/runs/${entry.id}/resume`, { method: 'POST' });
+      const isBatch = entry.run_type === 'batch_research' || entry.run_type === 'webhook_research';
+      const domains = isBatch && entry.batch_leads ? entry.batch_leads.map(l => l.domain) : undefined;
+      setActive({
+        runId: result.run_id,
+        domain: !isBatch ? entry.batch_leads?.[0]?.domain : undefined,
+        domains,
+        campaignId: entry.campaign_id,
+        campaignName: entry.campaign_name || '',
+        status: 'running',
+        mode: isBatch ? 'batch' : 'single',
+        completedDomains: new Set(),
+      });
+      setShowActiveLog(true);
       loadHistory();
     } catch (err: any) {
       alert(err.message || 'Failed to resume');

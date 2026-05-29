@@ -187,7 +187,7 @@ export function QuickResearch() {
       );
       if (!confirmed) return;
       const result = await api<any>(`/runs/${entry.id}/resume`, { method: 'POST' });
-      const isBatch = entry.run_type === 'batch_research' || entry.run_type === 'webhook_research';
+      const isBatch = entry.run_type === 'batch_research' || entry.run_type === 'webhook_research' || (entry.batch_leads?.length || 0) > 1;
       const domains = isBatch && entry.batch_leads ? entry.batch_leads.map(l => l.domain) : undefined;
       setActive({
         runId: result.run_id,
@@ -222,7 +222,7 @@ export function QuickResearch() {
       setLoadingHistory(false);
       const running = entries.find(e => e.status === 'running' || e.status === 'pending');
       if (running) {
-        const isBatch = running.run_type === 'batch_research' || running.run_type === 'webhook_research';
+        const isBatch = running.run_type === 'batch_research' || running.run_type === 'webhook_research' || (running.batch_leads?.length || 0) > 1;
         const domains = isBatch && running.batch_leads ? running.batch_leads.map(l => l.domain) : undefined;
         setActive({
           runId: running.id,
@@ -916,7 +916,7 @@ export function QuickResearch() {
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {history.map(entry => {
-                  const isBatch = entry.run_type === 'batch_research' || entry.run_type === 'webhook_research';
+                  const isBatch = entry.run_type === 'batch_research' || entry.run_type === 'webhook_research' || (entry.run_type === 'resume' && (entry.batch_leads?.length || 0) > 1);
                   return (
                     <HistoryRow
                       key={entry.id}

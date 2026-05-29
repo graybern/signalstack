@@ -279,6 +279,11 @@ router.post('/:id/resume', authenticate, requireMember, async (req: AuthRequest,
     "SELECT id FROM pipeline_runs WHERE campaign_id = ? ORDER BY created_at DESC LIMIT 1"
   ).get(run.campaign_id) as any;
 
+  // Copy batch_context from parent so CSV export works on the resume run
+  if (newRun && run.batch_context) {
+    db.prepare('UPDATE pipeline_runs SET batch_context = ? WHERE id = ?').run(run.batch_context, newRun.id);
+  }
+
   res.json({
     message: 'Resume triggered',
     status: 'running',

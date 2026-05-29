@@ -211,6 +211,9 @@ router.get('/history', authenticate, (req: AuthRequest, res: Response) => {
      LEFT JOIN campaigns c ON c.id = pr.campaign_id
      LEFT JOIN users u ON u.id = pr.triggered_by
      WHERE pr.run_type IN ('quick_research', 'batch_research', 'webhook_research')
+        OR (pr.run_type = 'resume' AND pr.resumed_from_run_id IN (
+          SELECT id FROM pipeline_runs WHERE run_type IN ('quick_research', 'batch_research', 'webhook_research')
+        ))
      ORDER BY pr.created_at DESC LIMIT 50`
   ).all() as any[];
 
@@ -248,7 +251,7 @@ router.get('/batch/:runId/export', authenticate, async (req: AuthRequest, res: R
   ).get(req.params.runId) as any;
 
   if (!run) return res.status(404).json({ error: 'Run not found' });
-  if (!['batch_research', 'webhook_research'].includes(run.run_type)) {
+  if (!['batch_research', 'webhook_research', 'resume'].includes(run.run_type)) {
     return res.status(400).json({ error: 'Export is only available for batch research runs' });
   }
 

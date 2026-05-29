@@ -7,7 +7,7 @@ import {
   Clock, CheckCircle, XCircle, AlertCircle, RefreshCw, Target,
   DollarSign, ChevronDown, ChevronUp, Calendar, Filter,
   TrendingUp, Users, Loader2, Activity, Eye, Trash2, AlertTriangle,
-  X, Hash,
+  X, Hash, PlayCircle,
 } from 'lucide-react';
 import { ScoreBadge, SegmentBadge } from '../components/ScoreBadge';
 import { TokenCounter } from '../components/TokenCounter';
@@ -88,6 +88,7 @@ export function RunHistory() {
   const [liveProgress, setLiveProgress] = useState<Record<string, ProgressData>>({});
   const [activityRunId, setActivityRunId] = useState<string | null>(null);
   const [rerunningRunId, setRerunningRunId] = useState<string | null>(null);
+  const [resumingRunId, setResumingRunId] = useState<string | null>(null);
 
   // Selection for bulk delete
   const [selectedRuns, setSelectedRuns] = useState<Set<string>>(new Set());
@@ -134,6 +135,31 @@ export function RunHistory() {
   useEffect(() => {
     api('/campaigns').then(data => setCampaigns(Array.isArray(data) ? data.map((c: any) => ({ id: c.id, name: c.name })) : [])).catch(() => {});
   }, []);
+
+  const handleResumeFromRun = async (run: Run) => {
+    if (!run.campaign_id) return;
+    setResumingRunId(run.id);
+    try {
+      const analysis = await api(`/runs/${run.id}/resume-analysis`) as any;
+      if (!analysis.resumable) {
+        alert(`Cannot resume: ${analysis.reason}`);
+        return;
+      }
+      const plan = analysis.resume_plan;
+      const confirmed = confirm(
+        `Resume ${plan.lead_ids.length} leads from ${plan.steps_to_run[0]} stage?\n` +
+        `${plan.leads_already_complete} leads already completed.\n` +
+        `Steps to run: ${plan.steps_to_run.join(' → ')}`
+      );
+      if (!confirmed) return;
+      await api(`/runs/${run.id}/resume`, { method: 'POST' });
+      loadRuns();
+    } catch (err: any) {
+      alert(err.message || 'Failed to resume run');
+    } finally {
+      setResumingRunId(null);
+    }
+  };
 
   const handleRerunFromRun = async (run: Run) => {
     if (!run.campaign_id) return;
@@ -538,6 +564,8 @@ export function RunHistory() {
                     canRerun={!!canRerun}
                     onRerun={() => handleRerunFromRun(run)}
                     rerunning={rerunningRunId === run.id}
+                    onResume={() => handleResumeFromRun(run)}
+                    resuming={resumingRunId === run.id}
                   />
                 ))}
               </tbody>
@@ -689,7 +717,7 @@ function ActiveRunCard({ run, liveProgress, onViewActivity, onCancel, isCancelli
   );
 }
 
-function CompletedRunRow({ run, expanded, leads, loadingLeads, onToggle, onViewLog, showingLog, isSuperAdmin, selected, onSelect, onDelete, colSpan, canRerun, onRerun, rerunning }: {
+function CompletedRunRow({ run, expanded, leads, loadingLeads, onToggle, onViewLog, showingLog, isSuperAdmin, selected, onSelect, onDelete, colSpan, canRerun, onRerun, rerunning, onResume, resuming }: {
   run: Run;
   expanded: boolean;
   leads: any[];
@@ -705,6 +733,8 @@ function CompletedRunRow({ run, expanded, leads, loadingLeads, onToggle, onViewL
   canRerun: boolean;
   onRerun: () => void;
   rerunning: boolean;
+  onResume: () => void;
+  resuming: boolean;
 }) {
   const totalTokens = (run.input_tokens || 0) + (run.output_tokens || 0);
   const isFailed = run.status === 'failed';
@@ -770,6 +800,11 @@ function CompletedRunRow({ run, expanded, leads, loadingLeads, onToggle, onViewL
             {onViewLog && (
               <button onClick={e => { e.stopPropagation(); onViewLog(); }} className={`p-1 rounded hover:bg-gray-100 ${showingLog ? 'text-brand-600' : 'text-gray-400'}`} title="View Activity Log">
                 <Eye className="w-3.5 h-3.5" />
+              </button>
+            )}
+            {canRerun && run.campaign_id && (run.status === 'failed' || run.status === 'cancelled') && (
+              <button onClick={e => { e.stopPropagation(); onResume(); }} disabled={resuming} className="p-1 rounded hover:bg-green-50 text-gray-400 hover:text-green-600" title="Resume from where it stopped">
+                <PlayCircle className={`w-3.5 h-3.5 ${resuming ? 'animate-pulse' : ''}`} />
               </button>
             )}
             {canRerun && run.campaign_id && run.status !== 'running' && run.status !== 'pending' && (

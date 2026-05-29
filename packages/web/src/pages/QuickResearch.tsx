@@ -11,7 +11,7 @@ import {
   Search, Loader2, CheckCircle, XCircle, ExternalLink,
   Globe, Target, ArrowRight, RefreshCw, Clock, Eye,
   ChevronUp, ChevronDown, Upload, FileSpreadsheet, Download,
-  Layers, Plus, Minus, ChevronsRight, Info,
+  Layers, Plus, Minus, ChevronsRight, Info, PlayCircle,
 } from 'lucide-react';
 
 interface Campaign {
@@ -131,6 +131,7 @@ export function QuickResearch() {
   const [loadingHistory, setLoadingHistory] = useState(true);
   const [expandedLogId, setExpandedLogId] = useState<string | null>(null);
   const [expandedBatchId, setExpandedBatchId] = useState<string | null>(null);
+  const [resumingId, setResumingId] = useState<string | null>(null);
 
   // Batch mode state
   const [batchText, setBatchText] = useState('');
@@ -168,6 +169,31 @@ export function QuickResearch() {
       setLoadingHistory(false);
     }
   }, []);
+
+  const handleResume = async (entry: ResearchEntry) => {
+    if (!entry.campaign_id) return;
+    setResumingId(entry.id);
+    try {
+      const analysis = await api(`/runs/${entry.id}/resume-analysis`) as any;
+      if (!analysis.resumable) {
+        alert(`Cannot resume: ${analysis.reason}`);
+        return;
+      }
+      const plan = analysis.resume_plan;
+      const confirmed = confirm(
+        `Resume ${plan.lead_ids.length} leads from ${plan.steps_to_run[0]} stage?\n` +
+        `${plan.leads_already_complete} leads already completed.\n` +
+        `Steps to run: ${plan.steps_to_run.join(' → ')}`
+      );
+      if (!confirmed) return;
+      await api(`/runs/${entry.id}/resume`, { method: 'POST' });
+      loadHistory();
+    } catch (err: any) {
+      alert(err.message || 'Failed to resume');
+    } finally {
+      setResumingId(null);
+    }
+  };
 
   useEffect(() => {
     api('/campaigns').then((data: any) => {
@@ -867,6 +893,8 @@ export function QuickResearch() {
                       onToggleLog={() => setExpandedLogId(expandedLogId === entry.id ? null : entry.id)}
                       onToggleBatch={() => setExpandedBatchId(expandedBatchId === entry.id ? null : entry.id)}
                       colSpan={COL_SPAN}
+                      onResume={() => handleResume(entry)}
+                      resuming={resumingId === entry.id}
                     />
                   );
                 })}
@@ -1111,7 +1139,7 @@ function StepsPills({ stepsRun }: { stepsRun: string | null }) {
   }
 }
 
-function HistoryRow({ entry, isBatch, expandedLog, expandedBatch, onToggleLog, onToggleBatch, colSpan }: {
+function HistoryRow({ entry, isBatch, expandedLog, expandedBatch, onToggleLog, onToggleBatch, colSpan, onResume, resuming }: {
   entry: ResearchEntry;
   isBatch: boolean;
   expandedLog: boolean;
@@ -1119,9 +1147,13 @@ function HistoryRow({ entry, isBatch, expandedLog, expandedBatch, onToggleLog, o
   onToggleLog: () => void;
   onToggleBatch: () => void;
   colSpan: number;
+  onResume: () => void;
+  resuming: boolean;
 }) {
   const isRunning = entry.status === 'running' || entry.status === 'pending';
   const isFailed = entry.status === 'failed';
+  const isCancelled = entry.status === 'cancelled';
+  const canResume = (isFailed || isCancelled) && entry.campaign_id;
   const batchCount = entry.batch_leads?.length || 0;
 
   return (
@@ -1220,6 +1252,16 @@ function HistoryRow({ entry, isBatch, expandedLog, expandedBatch, onToggleLog, o
             >
               <Eye className="w-3.5 h-3.5" />
             </button>
+            {canResume && (
+              <button
+                onClick={onResume}
+                disabled={resuming}
+                className="p-1 rounded hover:bg-green-50 text-gray-400 hover:text-green-600 transition-colors"
+                title="Resume from where it stopped"
+              >
+                <PlayCircle className={`w-3.5 h-3.5 ${resuming ? 'animate-pulse' : ''}`} />
+              </button>
+            )}
             {isBatch && entry.status === 'completed' && (
               <button
                 onClick={() => downloadFile(`/research/batch/${entry.id}/export`, `signalstack-batch-${new Date().toISOString().split('T')[0]}.csv`)}

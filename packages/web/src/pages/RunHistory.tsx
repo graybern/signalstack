@@ -13,6 +13,8 @@ import { ScoreBadge, SegmentBadge } from '../components/ScoreBadge';
 import { TokenCounter } from '../components/TokenCounter';
 import { useEventStream } from '../hooks/useEventStream';
 import { ActivityPanel } from '../components/ActivityPanel';
+import { ResumeModal, classifyError } from '../components/ResumeModal';
+import type { ResumeAnalysis } from '../components/ResumeModal';
 
 interface RunStats {
   total_runs: number;
@@ -92,10 +94,11 @@ export function RunHistory() {
   const [activityRunId, setActivityRunId] = useState<string | null>(null);
   const [rerunningRunId, setRerunningRunId] = useState<string | null>(null);
   const [resumingRunId, setResumingRunId] = useState<string | null>(null);
+  const [resumeModal, setResumeModal] = useState<{ run: Run; analysis: ResumeAnalysis } | null>(null);
 
   // Selection for bulk delete
   const [selectedRuns, setSelectedRuns] = useState<Set<string>>(new Set());
-  const [deleteConfirm, setDeleteConfirm] = useState<{ type: 'single' | 'bulk'; ids: string[]; leadCount: number } | null>(null);
+  const [deleteConfirm, setDeleteConfirm] = useState<{ type: 'single' | 'bulk'; ids: string[]; leadCount: number; chainWarning?: string } | null>(null);
   const [deleting, setDeleting] = useState(false);
 
   // Filters
@@ -143,19 +146,25 @@ export function RunHistory() {
     if (!run.campaign_id) return;
     setResumingRunId(run.id);
     try {
-      const analysis = await api(`/runs/${run.id}/resume-analysis`) as any;
+      const analysis = await api(`/runs/${run.id}/resume-analysis`) as ResumeAnalysis;
       if (!analysis.resumable) {
         alert(`Cannot resume: ${analysis.reason}`);
         return;
       }
-      const plan = analysis.resume_plan;
-      const confirmed = confirm(
-        `Resume ${plan.lead_ids.length} leads from ${plan.steps_to_run[0]} stage?\n` +
-        `${plan.leads_already_complete} leads already completed.\n` +
-        `Steps to run: ${plan.steps_to_run.join(' → ')}`
-      );
-      if (!confirmed) return;
-      await api(`/runs/${run.id}/resume`, { method: 'POST' });
+      setResumeModal({ run, analysis });
+    } catch (err: any) {
+      alert(err.message || 'Failed to analyze run for resume');
+    } finally {
+      setResumingRunId(null);
+    }
+  };
+
+  const confirmResume = async () => {
+    if (!resumeModal) return;
+    setResumingRunId(resumeModal.run.id);
+    try {
+      await api(`/runs/${resumeModal.run.id}/resume`, { method: 'POST' });
+      setResumeModal(null);
       loadRuns();
     } catch (err: any) {
       alert(err.message || 'Failed to resume run');
@@ -265,7 +274,7 @@ export function RunHistory() {
     setDeleting(true);
     try {
       if (deleteConfirm.type === 'single') {
-        await api(`/runs/${deleteConfirm.ids[0]}`, { method: 'DELETE' });
+        await api(`/runs/${deleteConfirm.ids[0]}?force=true`, { method: 'DELETE' });
       } else {
         await api('/runs', { method: 'DELETE', body: JSON.stringify({ ids: deleteConfirm.ids }) });
       }
@@ -562,7 +571,14 @@ export function RunHistory() {
                     isSuperAdmin={isSuperAdmin}
                     selected={selectedRuns.has(run.id)}
                     onSelect={() => toggleSelect(run.id)}
-                    onDelete={() => setDeleteConfirm({ type: 'single', ids: [run.id], leadCount: run.lead_count || 0 })}
+                    onDelete={() => {
+                      const chainWarning = run.resumed_from_run_id
+                        ? 'This is a resume run. Its leads may belong to the original run and won\'t be affected.'
+                        : run.resumed_by_run_id
+                          ? 'This run was resumed by another run. Leads processed during the resume are linked to this run\'s chain.'
+                          : undefined;
+                      setDeleteConfirm({ type: 'single', ids: [run.id], leadCount: run.lead_count || 0, chainWarning });
+                    }}
                     colSpan={isSuperAdmin ? 13 : 12}
                     canRerun={!!canRerun}
                     onRerun={() => handleRerunFromRun(run)}
@@ -595,7 +611,7 @@ export function RunHistory() {
             <p className="text-sm text-gray-600 mb-4">
               This will permanently delete {deleteConfirm.ids.length === 1 ? 'this run' : `${deleteConfirm.ids.length} runs`} and all associated data:
             </p>
-            <ul className="text-sm text-gray-600 mb-6 space-y-1 pl-4">
+            <ul className="text-sm text-gray-600 mb-4 space-y-1 pl-4">
               <li className="flex items-center gap-2">
                 <span className="w-1.5 h-1.5 rounded-full bg-red-400" />
                 {deleteConfirm.leadCount} lead{deleteConfirm.leadCount !== 1 ? 's' : ''} (with personas and feedback)
@@ -605,6 +621,12 @@ export function RunHistory() {
                 Activity logs and analytics data
               </li>
             </ul>
+            {deleteConfirm.chainWarning && (
+              <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 text-amber-600 mt-0.5 flex-shrink-0" />
+                <p className="text-xs text-amber-800">{deleteConfirm.chainWarning}</p>
+              </div>
+            )}
             <div className="flex justify-end gap-3">
               <button
                 onClick={() => setDeleteConfirm(null)}
@@ -623,6 +645,23 @@ export function RunHistory() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Resume Confirmation Modal */}
+      {resumeModal && (
+        <ResumeModal
+          analysis={resumeModal.analysis}
+          run={{
+            error_message: resumeModal.run.error_message,
+            campaign_name: resumeModal.run.campaign_name || undefined,
+            steps_run: resumeModal.run.steps_run,
+            run_type: resumeModal.run.run_type || undefined,
+            status: resumeModal.run.status,
+          }}
+          onConfirm={confirmResume}
+          onCancel={() => setResumeModal(null)}
+          resuming={resumingRunId === resumeModal.run.id}
+        />
       )}
     </div>
   );
@@ -864,21 +903,29 @@ function CompletedRunRow({ run, expanded, leads, loadingLeads, onToggle, onViewL
           </div>
         </td>
       </tr>
-      {(isFailed || isMissed || isCancelled) && expanded && run.error_message && (
-        <tr>
-          <td colSpan={colSpan} className={`px-4 py-3 ${isFailed ? 'bg-red-50' : isMissed ? 'bg-orange-50' : 'bg-gray-50'}`}>
-            <div className="flex items-start gap-2">
-              <AlertCircle className={`w-4 h-4 mt-0.5 flex-shrink-0 ${isFailed ? 'text-red-500' : isMissed ? 'text-orange-500' : 'text-gray-400'}`} />
-              <div>
-                <p className={`text-xs font-medium ${isFailed ? 'text-red-700' : isMissed ? 'text-orange-700' : 'text-gray-600'}`}>
-                  {isFailed ? 'Run Failed' : isMissed ? 'Scheduled Run Missed' : 'Run Cancelled'}
-                </p>
-                <p className={`text-xs mt-0.5 ${isFailed ? 'text-red-600' : isMissed ? 'text-orange-600' : 'text-gray-500'}`}>{run.error_message}</p>
+      {(isFailed || isMissed || isCancelled) && expanded && run.error_message && (() => {
+        const errInfo = isMissed ? null : classifyError(run.error_message, run.status);
+        return (
+          <tr>
+            <td colSpan={colSpan} className={`px-4 py-3 ${isFailed ? 'bg-red-50' : isMissed ? 'bg-orange-50' : 'bg-gray-50'}`}>
+              <div className="flex items-start gap-2">
+                <AlertCircle className={`w-4 h-4 mt-0.5 flex-shrink-0 ${isFailed ? 'text-red-500' : isMissed ? 'text-orange-500' : 'text-gray-400'}`} />
+                <div className="flex-1 min-w-0">
+                  <p className={`text-xs font-medium ${isFailed ? 'text-red-700' : isMissed ? 'text-orange-700' : 'text-gray-600'}`}>
+                    {isMissed ? 'Scheduled Run Missed' : errInfo?.headline || 'Run Failed'}
+                  </p>
+                  {errInfo && (
+                    <p className="text-xs text-gray-500 mt-0.5">{errInfo.advice}</p>
+                  )}
+                  <p className={`text-[10px] mt-1 font-mono break-all ${isFailed ? 'text-red-400' : isMissed ? 'text-orange-400' : 'text-gray-400'}`}>
+                    {run.error_message}
+                  </p>
+                </div>
               </div>
-            </div>
-          </td>
-        </tr>
-      )}
+            </td>
+          </tr>
+        );
+      })()}
       {expanded && !((isFailed || isMissed) && run.error_message) && (
         <tr>
           <td colSpan={colSpan} className="px-0">

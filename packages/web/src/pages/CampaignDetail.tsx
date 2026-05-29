@@ -21,6 +21,8 @@ import { FunnelConfigurator } from '../components/FunnelConfigurator';
 import { useEventStream } from '../hooks/useEventStream';
 import { permissions } from '../utils/permissions';
 import { useToast } from '../components/Toast';
+import { ResumeModal } from '../components/ResumeModal';
+import type { ResumeAnalysis } from '../components/ResumeModal';
 
 interface SearchPattern {
   name: string;
@@ -289,23 +291,32 @@ export function CampaignDetail() {
     }
   };
 
+  const [resumeModal, setResumeModal] = useState<{ run: any; analysis: ResumeAnalysis } | null>(null);
+
   const triggerResumeFromRun = async (run: any) => {
     if (!id) return;
     setResumingRunId(run.id);
     try {
-      const analysis = await api<any>(`/runs/${run.id}/resume-analysis`);
+      const analysis = await api<ResumeAnalysis>(`/runs/${run.id}/resume-analysis`);
       if (!analysis.resumable) {
         alert(`Cannot resume: ${analysis.reason}`);
+        setResumingRunId(null);
         return;
       }
-      const plan = analysis.resume_plan;
-      const confirmed = confirm(
-        `Resume ${plan.lead_ids.length} leads from ${plan.steps_to_run[0]} stage?\n` +
-        `${plan.leads_already_complete} leads already completed.\n` +
-        `Steps to run: ${plan.steps_to_run.join(' → ')}`
-      );
-      if (!confirmed) return;
-      const result = await api<{ run_id: string }>(`/runs/${run.id}/resume`, { method: 'POST' });
+      setResumeModal({ run, analysis });
+    } catch (err: any) {
+      alert(err.message || 'Failed to analyze run for resume');
+    } finally {
+      setResumingRunId(null);
+    }
+  };
+
+  const confirmResumeFromRun = async () => {
+    if (!resumeModal) return;
+    setResumingRunId(resumeModal.run.id);
+    try {
+      const result = await api<{ run_id: string }>(`/runs/${resumeModal.run.id}/resume`, { method: 'POST' });
+      setResumeModal(null);
       if (result.run_id) setActiveRunId(result.run_id);
     } catch (err: any) {
       alert(err.message || 'Failed to resume run');
@@ -683,6 +694,23 @@ export function CampaignDetail() {
           serverTzAbbr={serverTzAbbr}
           serverTzName={serverTzName}
           timezoneList={timezoneList}
+        />
+      )}
+
+      {/* Resume Modal */}
+      {resumeModal && (
+        <ResumeModal
+          analysis={resumeModal.analysis}
+          run={{
+            error_message: resumeModal.run.error_message,
+            campaign_name: campaign?.name,
+            steps_run: resumeModal.run.steps_run,
+            run_type: resumeModal.run.run_type,
+            status: resumeModal.run.status,
+          }}
+          onConfirm={confirmResumeFromRun}
+          onCancel={() => setResumeModal(null)}
+          resuming={resumingRunId === resumeModal.run.id}
         />
       )}
     </div>

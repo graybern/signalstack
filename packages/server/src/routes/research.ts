@@ -172,7 +172,7 @@ router.post('/batch', authenticate, requirePermission('research:execute'), async
   }
 
   const { runCampaign } = await import('../agent/campaignOrchestrator.js');
-  const steps = score_only ? ['enrich', 'score'] : ['enrich', 'score', 'brief', 'audit'];
+  const steps = score_only ? ['enrich', 'score', 'audit'] : ['enrich', 'score', 'brief', 'audit'];
 
   const opts: { skipScoreThreshold?: boolean; skipCandidateLimits?: boolean } = { skipCandidateLimits: true };
   if (force_brief) opts.skipScoreThreshold = true;

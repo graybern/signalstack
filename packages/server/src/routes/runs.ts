@@ -314,8 +314,27 @@ router.post('/:id/resume', authenticate, requireMember, async (req: AuthRequest,
 // ── DELETE /:id — Delete a run + associated data (superadmin only) ──
 router.delete('/:id', authenticate, requireSuperAdmin, (req: AuthRequest, res: Response) => {
   const db = getDb();
-  const run = db.prepare('SELECT id, campaign_id, lead_count FROM pipeline_runs WHERE id = ?').get(req.params.id) as any;
+  const run = db.prepare('SELECT id, campaign_id, lead_count, resumed_from_run_id FROM pipeline_runs WHERE id = ?').get(req.params.id) as any;
   if (!run) return res.status(404).json({ error: 'Run not found' });
+
+  const force = req.query.force === 'true';
+  if (!force) {
+    const resumedBy = db.prepare('SELECT id FROM pipeline_runs WHERE resumed_from_run_id = ?').get(run.id) as any;
+    if (resumedBy) {
+      return res.status(409).json({
+        error: 'This run has been resumed by another run. Deleting it may affect data integrity.',
+        resumed_by_run_id: resumedBy.id,
+        hint: 'Add ?force=true to delete anyway',
+      });
+    }
+    if (run.resumed_from_run_id) {
+      return res.status(409).json({
+        error: 'This is a resume run linked to a parent. Deleting it may affect the resume chain.',
+        resumed_from_run_id: run.resumed_from_run_id,
+        hint: 'Add ?force=true to delete anyway',
+      });
+    }
+  }
 
   const deleteTx = db.transaction(() => {
     const leads = db.prepare('SELECT id FROM leads WHERE run_id = ?').all(req.params.id) as any[];
@@ -359,6 +378,64 @@ router.delete('/', authenticate, requireSuperAdmin, (req: AuthRequest, res: Resp
   deleteTx();
 
   res.json({ success: true, deleted_runs: ids.length, deleted_leads: totalLeads });
+});
+
+// ── GET /:id/chain-export — Export leads from a full resume chain ──
+router.get('/:id/chain-export', authenticate, requireMember, (req: AuthRequest, res: Response) => {
+  const db = getDb();
+
+  // Walk the chain to find the root run
+  let rootId = req.params.id;
+  for (let i = 0; i < 20; i++) {
+    const run = db.prepare('SELECT resumed_from_run_id FROM pipeline_runs WHERE id = ?').get(rootId) as any;
+    if (!run || !run.resumed_from_run_id) break;
+    rootId = run.resumed_from_run_id;
+  }
+
+  // Collect all run IDs in the chain (root + all descendants)
+  const chainIds: string[] = [rootId];
+  const queue = [rootId];
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    const children = db.prepare('SELECT id FROM pipeline_runs WHERE resumed_from_run_id = ?').all(current) as any[];
+    for (const child of children) {
+      chainIds.push(child.id);
+      queue.push(child.id);
+    }
+  }
+
+  // Fetch all leads from all runs in the chain, deduplicate by domain (prefer latest updated_at)
+  const placeholders = chainIds.map(() => '?').join(',');
+  const leads = db.prepare(
+    `SELECT l.*,
+      (SELECT json_group_array(json_object('id',p.id,'role_type',p.role_type,'name',p.name,'title',p.title,'linkedin_url',p.linkedin_url,'department',p.department,'outreach_angle',p.outreach_angle,'talking_points',p.talking_points,'outreach_message',p.outreach_message))
+       FROM personas p WHERE p.lead_id = l.id) as personas_json
+     FROM leads l WHERE l.run_id IN (${placeholders}) ORDER BY l.domain, l.updated_at DESC`
+  ).all(...chainIds) as any[];
+
+  // Deduplicate by domain
+  const seen = new Set<string>();
+  const deduped = leads.filter(l => {
+    const key = (l.domain || l.company_name).toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  // Generate CSV
+  const fields = ['company_name', 'domain', 'segment', 'fit_score', 'fit_score_label', 'confidence',
+    'hq_location', 'employee_count', 'pipeline_stage', 'outreach_strategy', 'brief_markdown'];
+  const header = fields.join(',');
+  const rows = deduped.map(l => fields.map(f => {
+    const val = l[f];
+    if (val == null) return '';
+    const str = String(val);
+    return str.includes(',') || str.includes('"') || str.includes('\n') ? `"${str.replace(/"/g, '""')}"` : str;
+  }).join(','));
+
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="signalstack-chain-export.csv"`);
+  res.send([header, ...rows].join('\n'));
 });
 
 export default router;

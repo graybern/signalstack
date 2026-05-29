@@ -10,6 +10,8 @@ import {
 import { ScoreBadge, SegmentBadge } from '../components/ScoreBadge';
 import { ActivityPanel } from '../components/ActivityPanel';
 import { AILogPanel } from '../components/AILogPanel';
+import { ResumeModal, classifyError } from '../components/ResumeModal';
+import type { ResumeAnalysis } from '../components/ResumeModal';
 
 interface RunData {
   id: string;
@@ -81,6 +83,7 @@ export function RunDetail() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [resuming, setResuming] = useState(false);
+  const [resumeModal, setResumeModal] = useState<ResumeAnalysis | null>(null);
 
   const canResume = run && (run.status === 'failed' || run.status === 'cancelled') && run.campaign_id && !run.resumed_by_run_id;
 
@@ -88,19 +91,26 @@ export function RunDetail() {
     if (!run || !id) return;
     setResuming(true);
     try {
-      const analysis = await api<any>(`/runs/${id}/resume-analysis`);
+      const analysis = await api<ResumeAnalysis>(`/runs/${id}/resume-analysis`);
       if (!analysis.resumable) {
         alert(`Cannot resume: ${analysis.reason}`);
+        setResuming(false);
         return;
       }
-      const plan = analysis.resume_plan;
-      const confirmed = confirm(
-        `Resume ${plan.lead_ids.length} leads from ${plan.steps_to_run[0]} stage?\n` +
-        `${plan.leads_already_complete} leads already completed.\n` +
-        `Steps to run: ${plan.steps_to_run.join(' → ')}`
-      );
-      if (!confirmed) return;
+      setResumeModal(analysis);
+    } catch (err: any) {
+      alert(err.message || 'Failed to analyze run for resume');
+    } finally {
+      setResuming(false);
+    }
+  };
+
+  const confirmResume = async () => {
+    if (!id) return;
+    setResuming(true);
+    try {
       const result = await api<any>(`/runs/${id}/resume`, { method: 'POST' });
+      setResumeModal(null);
       if (result.run_id) {
         window.location.href = `/runs/${result.run_id}`;
       }
@@ -235,12 +245,16 @@ export function RunDetail() {
       </div>
 
       {/* Error message */}
-      {run.error_message && (
-        <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-6">
-          <p className="text-sm text-red-700 font-medium">Run Error</p>
-          <p className="text-sm text-red-600 mt-1">{run.error_message}</p>
-        </div>
-      )}
+      {run.error_message && (() => {
+        const errInfo = classifyError(run.error_message, run.status);
+        return (
+          <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-6">
+            <p className="text-sm text-red-700 font-medium">{errInfo.headline}</p>
+            <p className="text-xs text-gray-600 mt-1">{errInfo.advice}</p>
+            <p className="text-[10px] text-red-400 font-mono mt-2 break-all">{run.error_message}</p>
+          </div>
+        );
+      })()}
 
       {/* Resume link banners */}
       {run.resumed_by_run_id && (
@@ -257,14 +271,27 @@ export function RunDetail() {
         </div>
       )}
       {run.resumed_from_run_id && (
-        <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 mb-6 flex items-center gap-2">
-          <ArrowLeft className="w-3.5 h-3.5 text-gray-400" />
-          <p className="text-sm text-gray-600">
-            Resumed from{' '}
-            <Link to={`/runs/${run.resumed_from_run_id}`} className="text-brand-600 hover:text-brand-700 font-medium">
-              original run
-            </Link>
-          </p>
+        <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 mb-6 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <ArrowLeft className="w-3.5 h-3.5 text-gray-400" />
+            <p className="text-sm text-gray-600">
+              Resumed from{' '}
+              <Link to={`/runs/${run.resumed_from_run_id}`} className="text-brand-600 hover:text-brand-700 font-medium">
+                original run
+              </Link>
+            </p>
+          </div>
+        </div>
+      )}
+      {(run.resumed_from_run_id || run.resumed_by_run_id) && (
+        <div className="mb-6">
+          <a
+            href={`/api/runs/${id}/chain-export`}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-brand-600 bg-brand-50 border border-brand-200 rounded-lg hover:bg-brand-100"
+          >
+            <ExternalLink className="w-3.5 h-3.5" />
+            Download Complete Chain Results (CSV)
+          </a>
         </div>
       )}
 
@@ -376,6 +403,22 @@ export function RunDetail() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Resume Modal */}
+      {resumeModal && run && (
+        <ResumeModal
+          analysis={resumeModal}
+          run={{
+            error_message: run.error_message,
+            campaign_name: run.campaign_name || undefined,
+            run_type: run.run_type || undefined,
+            status: run.status,
+          }}
+          onConfirm={confirmResume}
+          onCancel={() => setResumeModal(null)}
+          resuming={resuming}
+        />
       )}
     </div>
   );

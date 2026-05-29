@@ -270,6 +270,14 @@ const STAGE_TO_STEPS: Record<string, string[]> = {
   audited: [],
 };
 
+export interface ResumeLeadDetail {
+  id: string;
+  company_name: string;
+  domain: string;
+  pipeline_stage: string;
+  fit_score: number | null;
+}
+
 export interface ResumeAnalysis {
   original_run_id: string;
   campaign_id: string | null;
@@ -282,6 +290,7 @@ export interface ResumeAnalysis {
     lead_ids: string[];
     leads_already_complete: number;
     estimated_work: string;
+    lead_details: ResumeLeadDetail[];
   };
 }
 
@@ -290,7 +299,7 @@ export function analyzeRunForResume(runId: string): ResumeAnalysis {
   const run = db.prepare('SELECT * FROM pipeline_runs WHERE id = ?').get(runId) as any;
   if (!run) throw new Error('Run not found');
 
-  const leads = db.prepare('SELECT id, pipeline_stage, fit_score FROM leads WHERE run_id = ?').all(runId) as any[];
+  const leads = db.prepare('SELECT id, company_name, domain, pipeline_stage, fit_score FROM leads WHERE run_id = ?').all(runId) as any[];
 
   const leadsByStage: Record<string, number> = {};
   for (const l of leads) {
@@ -303,7 +312,7 @@ export function analyzeRunForResume(runId: string): ResumeAnalysis {
     total_leads: leads.length,
     leads_by_stage: leadsByStage,
     resumable: false,
-    resume_plan: { steps_to_run: [], lead_ids: [], leads_already_complete: 0, estimated_work: '' },
+    resume_plan: { steps_to_run: [], lead_ids: [], leads_already_complete: 0, estimated_work: '', lead_details: [] },
   };
 
   if (leads.length === 0) {
@@ -351,6 +360,13 @@ export function analyzeRunForResume(runId: string): ResumeAnalysis {
     lead_ids: leads.map(l => l.id),
     leads_already_complete: completeLeads.length,
     estimated_work: `${incompleteLeads.length} leads starting from ${stepsToRun[0]}`,
+    lead_details: leads.map(l => ({
+      id: l.id,
+      company_name: l.company_name,
+      domain: l.domain,
+      pipeline_stage: l.pipeline_stage,
+      fit_score: l.fit_score ?? null,
+    })),
   };
 
   return result;
@@ -413,14 +429,26 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
       }
     }
 
+    let phaseProgress = 0;
+    let phaseTotal = 0;
+    let currentPhase = '';
+    function setPhaseCounter(phase: string, total: number) {
+      currentPhase = phase;
+      phaseProgress = 0;
+      phaseTotal = total;
+    }
+
     const emitProgress = (phase: string, currentCompany?: string) => {
       stepNumber++;
+      if (phase === currentPhase) phaseProgress++;
       const progressData = {
         current_step: phase,
         current_company: currentCompany,
         step_number: stepNumber,
         total_steps: totalSteps,
         phase,
+        phase_progress: phaseProgress,
+        phase_total: phaseTotal,
         tokens: tracker.getSummary(),
       };
       db.prepare('UPDATE pipeline_runs SET progress_json = ? WHERE id = ?')
@@ -511,7 +539,6 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
         scorer_thinking = COALESCE(excluded.scorer_thinking, leads.scorer_thinking),
         brief_thinking = COALESCE(excluded.brief_thinking, leads.brief_thinking),
         linkedin_company_url = COALESCE(excluded.linkedin_company_url, leads.linkedin_company_url),
-        run_id = excluded.run_id,
         updated_at = datetime('now')`
     );
 
@@ -944,6 +971,7 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
         }
 
         case 'enrich': {
+          setPhaseCounter('enrich', candidates.length);
           if (step.candidate_limit && candidates.length > step.candidate_limit && !options?.skipCandidateLimits) {
             candidates.sort((a, b) => b.signals.length - a.signals.length);
             logger.thinking('enrich', `Ranked ${candidates.length} candidates by signal count, enriching top ${step.candidate_limit}`);
@@ -1015,6 +1043,7 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
         }
 
         case 'score': {
+          setPhaseCounter('score', candidates.length);
           // Update total steps now we know actual candidate count
           totalSteps = stepNumber + candidates.length + Math.min(candidates.length, targetCount) + 1;
 
@@ -1163,6 +1192,7 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
         case 'brief': {
           const briefLimit = step.candidate_limit || targetCount;
           const selected = scoredCandidates.slice(0, briefLimit);
+          setPhaseCounter('brief', selected.length);
 
           // When resuming, pre-populate briefResults with already-briefed leads and filter them out
           let resumeSkippedBrief = 0;
@@ -1250,6 +1280,7 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
         }
 
         case 'audit': {
+          setPhaseCounter('audit', briefResults.length || 1);
           // ── Recovery pass: retry failed/incomplete leads before auditing ──
           const needsScoreRecovery = failedLeads.filter(f => f.stage === 'score');
           const needsBriefRecovery = failedLeads.filter(f => f.stage === 'brief');

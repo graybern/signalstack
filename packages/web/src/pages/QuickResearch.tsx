@@ -5,6 +5,7 @@ import { formatDateTime, timeAgo } from '../utils/dates';
 import { useEventStream, SSEEvent } from '../hooks/useEventStream';
 import { ScoreBadge } from '../components/ScoreBadge';
 import { ActivityPanel } from '../components/ActivityPanel';
+import { ResumeModal } from '../components/ResumeModal';
 import { useAuthContext } from '../App';
 import { permissions } from '../utils/permissions';
 import {
@@ -71,6 +72,8 @@ interface ActiveResearch {
   currentCompany?: string;
   stepNumber?: number;
   totalSteps?: number;
+  phaseProgress?: number;
+  phaseTotal?: number;
   error?: string;
   mode: 'single' | 'batch';
   completedDomains?: Set<string>;
@@ -174,6 +177,8 @@ export function QuickResearch() {
     }
   }, []);
 
+  const [resumeModal, setResumeModal] = useState<{ entry: ResearchEntry; analysis: any } | null>(null);
+
   const handleResume = async (entry: ResearchEntry) => {
     if (!entry.campaign_id) return;
     setResumingId(entry.id);
@@ -181,16 +186,24 @@ export function QuickResearch() {
       const analysis = await api(`/runs/${entry.id}/resume-analysis`) as any;
       if (!analysis.resumable) {
         alert(`Cannot resume: ${analysis.reason}`);
+        setResumingId(null);
         return;
       }
-      const plan = analysis.resume_plan;
-      const confirmed = confirm(
-        `Resume ${plan.lead_ids.length} leads from ${plan.steps_to_run[0]} stage?\n` +
-        `${plan.leads_already_complete} leads already completed.\n` +
-        `Steps to run: ${plan.steps_to_run.join(' → ')}`
-      );
-      if (!confirmed) return;
+      setResumeModal({ entry, analysis });
+    } catch (err: any) {
+      alert(err.message || 'Failed to analyze for resume');
+    } finally {
+      setResumingId(null);
+    }
+  };
+
+  const confirmResume = async () => {
+    if (!resumeModal) return;
+    const { entry } = resumeModal;
+    setResumingId(entry.id);
+    try {
       const result = await api<any>(`/runs/${entry.id}/resume`, { method: 'POST' });
+      setResumeModal(null);
       const isBatch = entry.run_type === 'batch_research' || entry.run_type === 'webhook_research' || (entry.batch_leads?.length || 0) > 1;
       const domains = isBatch && entry.batch_leads ? entry.batch_leads.map(l => l.domain) : undefined;
       setActive({
@@ -264,6 +277,8 @@ export function QuickResearch() {
             currentCompany: data.current_company,
             stepNumber: data.step_number,
             totalSteps: data.total_steps,
+            phaseProgress: data.phase_progress ?? prev.phaseProgress,
+            phaseTotal: data.phase_total ?? prev.phaseTotal,
             completedDomains: completed,
           };
         });
@@ -943,6 +958,23 @@ export function QuickResearch() {
           </div>
         )}
       </div>
+
+      {/* Resume Modal */}
+      {resumeModal && (
+        <ResumeModal
+          analysis={resumeModal.analysis}
+          run={{
+            error_message: resumeModal.entry.error_message || undefined,
+            campaign_name: resumeModal.entry.campaign_name || undefined,
+            steps_run: resumeModal.entry.steps_run,
+            run_type: resumeModal.entry.run_type,
+            status: resumeModal.entry.status,
+          }}
+          onConfirm={confirmResume}
+          onCancel={() => setResumeModal(null)}
+          resuming={resumingId === resumeModal.entry.id}
+        />
+      )}
     </div>
   );
 }
@@ -1019,8 +1051,11 @@ function BatchActivePanel({ active, showLog, setShowLog, phaseLabels }: {
   phaseLabels: Record<string, string>;
 }) {
   const totalDomains = active.domains?.length || 0;
-  const completedCount = (active.completedDomains?.size || 0) + (active.status === 'completed' ? totalDomains - (active.completedDomains?.size || 0) : 0);
-  const progressPct = totalDomains > 0 ? Math.round((completedCount / totalDomains) * 100) : 0;
+  const domainCompleted = (active.completedDomains?.size || 0) + (active.status === 'completed' ? totalDomains - (active.completedDomains?.size || 0) : 0);
+  const hasPhaseProgress = active.phaseProgress != null && active.phaseTotal != null && active.phaseTotal > 0;
+  const completedCount = hasPhaseProgress ? active.phaseProgress! : domainCompleted;
+  const progressTotal = hasPhaseProgress ? active.phaseTotal! : totalDomains;
+  const progressPct = progressTotal > 0 ? Math.round((completedCount / progressTotal) * 100) : 0;
 
   return (
     <div className={`rounded-xl border mb-6 overflow-hidden ${
@@ -1080,7 +1115,12 @@ function BatchActivePanel({ active, showLog, setShowLog, phaseLabels }: {
         </div>
         <div className="flex items-center justify-between mt-1.5">
           <span className="text-xs text-gray-600">
-            {active.status === 'completed' ? `${totalDomains} of ${totalDomains}` : `${completedCount} of ${totalDomains}`} domains processed
+            {active.status === 'completed'
+              ? `${totalDomains} of ${totalDomains} domains processed`
+              : hasPhaseProgress
+                ? `${completedCount} of ${progressTotal} ${active.phase === 'score' ? 'scored' : active.phase === 'brief' ? 'briefed' : active.phase === 'enrich' ? 'enriched' : 'processed'}`
+                : `${completedCount} of ${totalDomains} domains processed`
+            }
           </span>
           {active.currentCompany && active.status === 'running' && (
             <span className="text-xs text-amber-700">
@@ -1142,11 +1182,15 @@ function PhaseDisplay({ active, phaseLabels }: { active: ActiveResearch; phaseLa
           {phaseLabels[active.phase] || active.phase}
           {active.mode === 'single' && active.currentCompany ? ` — ${active.currentCompany}` : ''}
         </p>
-        {active.stepNumber != null && active.totalSteps != null && (
+        {active.phaseProgress != null && active.phaseTotal != null && active.phaseTotal > 0 ? (
+          <span className="text-[10px] text-amber-600">
+            {active.phaseProgress}/{active.phaseTotal}
+          </span>
+        ) : active.stepNumber != null && active.totalSteps != null ? (
           <span className="text-[10px] text-amber-600">
             {active.stepNumber}/{active.totalSteps}
           </span>
-        )}
+        ) : null}
       </div>
     );
   }
@@ -1170,15 +1214,24 @@ function StepsPills({ stepsRun }: { stepsRun: string | null }) {
   if (!stepsRun) return <span className="text-xs text-gray-400">-</span>;
   try {
     const steps: string[] = JSON.parse(stepsRun);
+    const isScoreOnly = steps.includes('score') && !steps.includes('brief');
     return (
       <div className="flex items-center gap-0.5">
+        {isScoreOnly && (
+          <span className="text-[9px] px-1 py-0.5 rounded bg-amber-50 text-amber-600 font-medium mr-0.5" title="Score-only mode">
+            Score Only
+          </span>
+        )}
         {steps.map(step => {
-          const info = STEP_LABELS[step] || { label: step[0]?.toUpperCase() || '?', color: 'bg-gray-100 text-gray-600' };
+          const isAuditInScoreOnly = step === 'audit' && isScoreOnly;
+          const info = isAuditInScoreOnly
+            ? { label: 'QC', color: 'bg-emerald-100 text-emerald-700' }
+            : STEP_LABELS[step] || { label: step[0]?.toUpperCase() || '?', color: 'bg-gray-100 text-gray-600' };
           return (
             <span
               key={step}
               className={`w-5 h-5 flex items-center justify-center text-[10px] font-bold rounded ${info.color}`}
-              title={step}
+              title={isAuditInScoreOnly ? 'Quality Check' : step}
             >
               {info.label}
             </span>

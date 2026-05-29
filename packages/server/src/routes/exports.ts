@@ -92,6 +92,7 @@ router.post('/custom', authenticate, (req: AuthRequest, res: Response) => {
   const conditions: string[] = [];
   const params: any[] = [];
 
+  if (filters?.run_id) { conditions.push('l.run_id = ?'); params.push(filters.run_id); }
   if (filters?.campaign_id) { conditions.push('l.campaign_id = ?'); params.push(filters.campaign_id); }
   if (filters?.segment) { conditions.push('l.segment = ?'); params.push(filters.segment); }
   if (filters?.feedback) { conditions.push('l.current_feedback = ?'); params.push(filters.feedback); }

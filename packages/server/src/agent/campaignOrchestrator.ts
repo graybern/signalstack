@@ -1078,6 +1078,11 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
                 label: score.fit_score_label,
                 confidence: score.confidence,
               });
+              persistCandidates('scored', [candidate],
+                new Map([[candidate.company_name, score]]),
+                undefined,
+                new Map([[candidate.company_name, { scorer: score.reasoning || undefined }]])
+              );
               if (targetLeadIds?.length) {
                 eventBus.emit('lead.stage_rerun', { lead_id: leadId, company_name: candidate.company_name, stage: 'score', status: 'completed', message: `Score: ${score.fit_score}/100 — ${score.fit_score_label}`, run_id: runId });
               }
@@ -1207,6 +1212,11 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
                 pain_hypotheses: painSummary,
                 outreach_strategy: brief.outreach_strategy?.substring(0, 200),
               });
+              persistCandidates('briefed', [candidate],
+                new Map([[candidate.company_name, score]]),
+                new Map([[candidate.company_name, brief]]),
+                new Map([[candidate.company_name, { scorer: score.reasoning || undefined, brief: brief.thinking || undefined }]])
+              );
               if (targetLeadIds?.length) {
                 eventBus.emit('lead.stage_rerun', { lead_id: leadId, company_name: candidate.company_name, stage: 'brief', status: 'completed', message: `Brief ready — ${brief.personas?.length || 0} personas`, run_id: runId });
                 eventBus.emit('lead.brief_rerun', { lead_id: leadId, company_name: candidate.company_name, status: 'completed', message: `Brief generated for ${candidate.company_name}` });

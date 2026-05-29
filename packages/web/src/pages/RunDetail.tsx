@@ -5,7 +5,7 @@ import { formatDateTime } from '../utils/dates';
 import {
   ArrowLeft, CheckCircle2, XCircle, Clock, Loader2,
   Users, TrendingUp, DollarSign, Target, ExternalLink,
-  ChevronDown, ChevronUp, Trash2, AlertTriangle,
+  ChevronDown, ChevronUp, Trash2, AlertTriangle, PlayCircle,
 } from 'lucide-react';
 import { ScoreBadge, SegmentBadge } from '../components/ScoreBadge';
 import { ActivityPanel } from '../components/ActivityPanel';
@@ -77,6 +77,36 @@ export function RunDetail() {
   const [showLeads, setShowLeads] = useState(true);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [resuming, setResuming] = useState(false);
+
+  const canResume = run && (run.status === 'failed' || run.status === 'cancelled') && run.campaign_id;
+
+  const handleResume = async () => {
+    if (!run || !id) return;
+    setResuming(true);
+    try {
+      const analysis = await api<any>(`/runs/${id}/resume-analysis`);
+      if (!analysis.resumable) {
+        alert(`Cannot resume: ${analysis.reason}`);
+        return;
+      }
+      const plan = analysis.resume_plan;
+      const confirmed = confirm(
+        `Resume ${plan.lead_ids.length} leads from ${plan.steps_to_run[0]} stage?\n` +
+        `${plan.leads_already_complete} leads already completed.\n` +
+        `Steps to run: ${plan.steps_to_run.join(' → ')}`
+      );
+      if (!confirmed) return;
+      const result = await api<any>(`/runs/${id}/resume`, { method: 'POST' });
+      if (result.run_id) {
+        window.location.href = `/runs/${result.run_id}`;
+      }
+    } catch (err: any) {
+      alert(err.message || 'Failed to resume run');
+    } finally {
+      setResuming(false);
+    }
+  };
 
   const handleClearLeads = async () => {
     if (!id) return;
@@ -161,6 +191,16 @@ export function RunDetail() {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          {canResume && (
+            <button
+              onClick={handleResume}
+              disabled={resuming}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50"
+            >
+              <PlayCircle className={`w-4 h-4 ${resuming ? 'animate-pulse' : ''}`} />
+              {resuming ? 'Resuming...' : 'Resume Run'}
+            </button>
+          )}
           {leads.length > 0 && (
             <button
               onClick={() => setShowDeleteConfirm(true)}
@@ -185,7 +225,7 @@ export function RunDetail() {
       {/* Stats bar */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
         <StatCard icon={<Users className="w-4 h-4 text-brand-500" />} label="Leads" value={String(run.lead_count)} />
-        <StatCard icon={<TrendingUp className="w-4 h-4 text-emerald-500" />} label="Avg Score" value={leads.length > 0 ? String(Math.round(leads.reduce((s, l) => s + l.fit_score, 0) / leads.length)) : '—'} />
+        <StatCard icon={<TrendingUp className="w-4 h-4 text-emerald-500" />} label="Avg Score" value={(() => { const scored = leads.filter(l => l.fit_score > 0); return scored.length > 0 ? String(Math.round(scored.reduce((s, l) => s + l.fit_score, 0) / scored.length)) : '—'; })()} />
         <StatCard icon={<Clock className="w-4 h-4 text-blue-500" />} label="Duration" value={duration} />
         <StatCard icon={<DollarSign className="w-4 h-4 text-amber-500" />} label="Cost" value={run.estimated_cost > 0 ? `$${run.estimated_cost.toFixed(2)}` : '—'} />
         <StatCard icon={<Target className="w-4 h-4 text-purple-500" />} label="Model" value={run.model_used ? run.model_used.split('@')[0].replace('claude-', '') : '—'} />

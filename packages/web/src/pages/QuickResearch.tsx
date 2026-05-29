@@ -1262,6 +1262,9 @@ function HistoryRow({ entry, isBatch, expandedLog, expandedBatch, onToggleLog, o
                 <PlayCircle className={`w-3.5 h-3.5 ${resuming ? 'animate-pulse' : ''}`} />
               </button>
             )}
+            <Link to={`/runs/${entry.id}`} className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-brand-600 inline-flex" title="View run details">
+              <ExternalLink className="w-3.5 h-3.5" />
+            </Link>
             {isBatch && entry.status === 'completed' && (
               <button
                 onClick={() => downloadFile(`/research/batch/${entry.id}/export`, `signalstack-batch-${new Date().toISOString().split('T')[0]}.csv`)}

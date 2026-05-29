@@ -77,6 +77,7 @@ interface ActiveResearch {
   error?: string;
   mode: 'single' | 'batch';
   completedDomains?: Set<string>;
+  domainPhases?: Map<string, string>;
   isResume?: boolean;
 }
 
@@ -267,8 +268,16 @@ export function QuickResearch() {
         setActive(prev => {
           if (!prev) return null;
           const completed = new Set(prev.completedDomains || []);
+          const phases = new Map(prev.domainPhases || []);
           if (prev.mode === 'batch' && data.current_company && prev.currentCompany && prev.currentCompany !== data.current_company) {
-            completed.add(prev.currentCompany);
+            const matchedDomain = prev.domains?.find(d =>
+              prev.currentCompany!.toLowerCase().includes(d.split('.')[0].toLowerCase()) ||
+              d === prev.currentCompany
+            );
+            if (matchedDomain) {
+              completed.add(matchedDomain);
+              phases.set(matchedDomain, prev.phase || 'processing');
+            }
           }
           return {
             ...prev,
@@ -280,12 +289,21 @@ export function QuickResearch() {
             phaseProgress: data.phase_progress ?? prev.phaseProgress,
             phaseTotal: data.phase_total ?? prev.phaseTotal,
             completedDomains: completed,
+            domainPhases: phases,
           };
         });
       }
 
       if ((type === 'campaign.completed' || type === 'pipeline.completed') && data.run_id === active.runId) {
-        setActive(prev => prev ? { ...prev, status: 'completed' } : null);
+        setActive(prev => {
+          if (!prev) return null;
+          const phases = new Map(prev.domainPhases || []);
+          const finalPhase = prev.phase || 'score';
+          for (const d of prev.domains || []) {
+            if (!phases.has(d)) phases.set(d, finalPhase);
+          }
+          return { ...prev, status: 'completed', domainPhases: phases };
+        });
         loadHistory();
       }
 
@@ -1102,7 +1120,7 @@ function BatchActivePanel({ active, showLog, setShowLog, phaseLabels }: {
           </div>
         </div>
 
-        {/* Progress bar */}
+        {/* Phase progress bar */}
         <div className="bg-white/60 rounded-full h-2 overflow-hidden">
           <div
             className={`h-full rounded-full transition-all duration-500 ${
@@ -1113,7 +1131,7 @@ function BatchActivePanel({ active, showLog, setShowLog, phaseLabels }: {
             style={{ width: `${active.status === 'completed' ? 100 : progressPct}%` }}
           />
         </div>
-        <div className="flex items-center justify-between mt-1.5">
+        <div className="flex items-center justify-between mt-1">
           <span className="text-xs text-gray-600">
             {active.status === 'completed'
               ? `${totalDomains} of ${totalDomains} domains processed`
@@ -1129,6 +1147,21 @@ function BatchActivePanel({ active, showLog, setShowLog, phaseLabels }: {
           )}
         </div>
 
+        {/* Overall pipeline progress bar */}
+        {active.stepNumber != null && active.totalSteps != null && active.totalSteps > 0 && active.status !== 'completed' && (
+          <div className="mt-2">
+            <div className="bg-white/40 rounded-full h-1 overflow-hidden">
+              <div
+                className="h-full rounded-full transition-all duration-500 bg-gray-400"
+                style={{ width: `${Math.round((active.stepNumber / active.totalSteps) * 100)}%` }}
+              />
+            </div>
+            <span className="text-[10px] text-gray-400 mt-0.5 block">
+              Overall: {active.stepNumber} of {active.totalSteps} steps
+            </span>
+          </div>
+        )}
+
         {/* Per-domain status list */}
         {active.domains && active.domains.length > 0 && (
           <div className="mt-3 bg-white/50 rounded-lg border border-gray-200/50 max-h-48 overflow-y-auto">
@@ -1136,18 +1169,29 @@ function BatchActivePanel({ active, showLog, setShowLog, phaseLabels }: {
               {active.domains.map(d => {
                 const isCompleted = active.status === 'completed' || active.completedDomains?.has(d);
                 const isCurrent = active.currentCompany?.toLowerCase().includes(d.split('.')[0]) || active.currentCompany === d;
+                const phase = active.domainPhases?.get(d);
+                const phaseLabel = phase === 'enrich' ? 'Enriched' : phase === 'score' ? 'Scored' : phase === 'brief' ? 'Briefed' : phase === 'audit' ? 'Audited' : phase ? phase : '';
+                const phaseColor = phase === 'enrich' ? 'text-emerald-500' : phase === 'score' ? 'text-blue-500' : phase === 'brief' ? 'text-purple-500' : 'text-gray-400';
                 return (
                   <div key={d} className="flex items-center gap-2 px-3 py-1.5 text-xs">
                     {isCompleted ? (
-                      <CheckCircle className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                      <CheckCircle className={`w-3.5 h-3.5 shrink-0 ${phase === 'score' ? 'text-blue-500' : phase === 'brief' ? 'text-purple-500' : 'text-emerald-500'}`} />
                     ) : isCurrent ? (
                       <Loader2 className="w-3.5 h-3.5 text-amber-500 animate-spin shrink-0" />
                     ) : (
                       <div className="w-3.5 h-3.5 rounded-full border border-gray-300 shrink-0" />
                     )}
-                    <span className={`font-mono ${isCompleted ? 'text-gray-500' : isCurrent ? 'text-amber-700 font-medium' : 'text-gray-400'}`}>
+                    <span className={`font-mono flex-1 ${isCompleted ? 'text-gray-500' : isCurrent ? 'text-amber-700 font-medium' : 'text-gray-400'}`}>
                       {d}
                     </span>
+                    {isCompleted && phaseLabel && (
+                      <span className={`text-[10px] font-medium ${phaseColor}`}>{phaseLabel}</span>
+                    )}
+                    {isCurrent && active.phase && (
+                      <span className="text-[10px] font-medium text-amber-500">
+                        {active.phase === 'enrich' ? 'Enriching...' : active.phase === 'score' ? 'Scoring...' : active.phase === 'brief' ? 'Briefing...' : `${active.phase}...`}
+                      </span>
+                    )}
                   </div>
                 );
               })}

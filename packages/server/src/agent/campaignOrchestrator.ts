@@ -1021,6 +1021,27 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
             });
           }
 
+          // ── Enrichment quality check — flag leads missing key firmographic data ──
+          const qualityIssues: string[] = [];
+          for (const c of enrichedCandidates) {
+            const missing: string[] = [];
+            if (!c.hq_location) missing.push('HQ location');
+            if (!c.employee_count_estimate) missing.push('employee count');
+            if (!c.linkedin_company_url) missing.push('LinkedIn URL');
+            if (missing.length > 0) {
+              qualityIssues.push(`${c.company_name}: missing ${missing.join(', ')}`);
+            }
+          }
+          if (qualityIssues.length > 0) {
+            logger.thinking('enrich', `Data quality: ${qualityIssues.length}/${enrichedCandidates.length} leads missing firmographic data`);
+            for (const issue of qualityIssues.slice(0, 10)) {
+              logger.thinking('enrich', `  ${issue}`);
+            }
+            if (qualityIssues.length > 10) {
+              logger.thinking('enrich', `  ... and ${qualityIssues.length - 10} more`);
+            }
+          }
+
           // ── Enrichment success gate ──
           const minSources = step.min_enrichment_sources ?? 1;
           if (minSources > 0) {

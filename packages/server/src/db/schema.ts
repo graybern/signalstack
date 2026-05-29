@@ -729,6 +729,12 @@ function initSchema(db: Database.Database) {
     }
   }
 
+  // Ensure resumed_from_run_id exists (may have been skipped if cancelled/missed migrations already ran)
+  const resumeCol = db.prepare("PRAGMA table_info(pipeline_runs)").all() as { name: string }[];
+  if (!resumeCol.find(c => c.name === 'resumed_from_run_id')) {
+    db.exec("ALTER TABLE pipeline_runs ADD COLUMN resumed_from_run_id TEXT");
+  }
+
   // User activity log — audit trail for all entity changes
   db.exec(`
     CREATE TABLE IF NOT EXISTS activity_log (

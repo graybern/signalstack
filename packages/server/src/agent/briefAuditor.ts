@@ -12,14 +12,21 @@ interface AuditInput {
 }
 
 const WEIGHTS: Record<string, number> = {
-  structure: 12,
-  pain_hypotheses: 15,
-  personas: 20,
-  sources: 10,
-  evidence: 13,
-  why_now: 10,
-  competitive: 10,
+  structure: 5,
+  pain_hypotheses: 8,
+  personas: 10,
+  sources: 5,
+  evidence: 7,
+  why_now: 5,
+  competitive: 5,
   scoring_consistency: 10,
+  dimension_completeness: 15,
+  factsheet_integrity: 15,
+  timing_integrity: 10,
+  cross_reference: 15,
+  hallucination: 10,
+  enrichment_completeness: 5,
+  score_fact_alignment: 5,
 };
 
 function checkStructure(brief: BriefResult): { score: number; issues: AuditIssue[] } {
@@ -292,7 +299,249 @@ function checkScoringConsistency(score: ScoringResult): { score: number; issues:
   return { score: Math.max(0, pts), issues };
 }
 
-export function auditBrief(input: AuditInput, threshold: number = 60): AuditResult {
+// ── New v2 checks ────────────────────────────────────────────────────
+
+function checkDimensionCompleteness(score: ScoringResult): { score: number; issues: AuditIssue[] } {
+  const issues: AuditIssue[] = [];
+  let pts = WEIGHTS.dimension_completeness;
+
+  if (!score.dimensions) {
+    if (score.scoring_version === 2) {
+      issues.push({ check: 'dimension_completeness', severity: 'error', message: 'Scoring version 2 but dimensions missing' });
+      return { score: 0, issues };
+    }
+    return { score: pts, issues };
+  }
+
+  const dims = score.dimensions;
+  if (dims.icp_fit == null) { issues.push({ check: 'dimension_completeness', severity: 'error', message: 'icp_fit dimension missing' }); pts -= 3; }
+  if (dims.timing == null) { issues.push({ check: 'dimension_completeness', severity: 'error', message: 'timing dimension missing' }); pts -= 3; }
+  if (!dims.data_confidence) { issues.push({ check: 'dimension_completeness', severity: 'error', message: 'data_confidence grade missing' }); pts -= 2; }
+  if (dims.reachability == null) { issues.push({ check: 'dimension_completeness', severity: 'warning', message: 'reachability dimension missing' }); pts -= 2; }
+  if (!dims.verdict) { issues.push({ check: 'dimension_completeness', severity: 'warning', message: 'verdict not generated' }); pts -= 2; }
+
+  if (!score.fact_sheet) {
+    issues.push({ check: 'dimension_completeness', severity: 'error', message: 'FactSheet missing from scoring result' });
+    pts -= 3;
+  }
+
+  return { score: Math.max(0, pts), issues };
+}
+
+function checkFactsheetIntegrity(score: ScoringResult): { score: number; issues: AuditIssue[] } {
+  const issues: AuditIssue[] = [];
+  let pts = WEIGHTS.factsheet_integrity;
+
+  if (!score.fact_sheet) return { score: pts, issues };
+  const fs = score.fact_sheet;
+
+  const confirmedVpn = fs.vpn_products_detected.filter(v => v.confidence === 'confirmed');
+  if (confirmedVpn.length > 0 && fs.facts_from_enrichment === 0) {
+    issues.push({ check: 'factsheet_integrity', severity: 'error', message: `${confirmedVpn.length} "confirmed" VPN product(s) but facts_from_enrichment is 0` });
+    pts -= 8;
+  }
+
+  const confirmedComp = fs.competitor_products_detected.filter(c => c.confidence === 'confirmed');
+  if (confirmedComp.length > 0 && fs.facts_from_enrichment === 0) {
+    issues.push({ check: 'factsheet_integrity', severity: 'error', message: `"confirmed" competitor products but no enrichment facts` });
+    pts -= 5;
+  }
+
+  if (fs.employee_count_confirmed && fs.employee_count_range === 'unknown') {
+    issues.push({ check: 'factsheet_integrity', severity: 'error', message: 'employee_count_confirmed=true but range is "unknown" — impossible state' });
+    pts -= 5;
+  }
+
+  if (fs.active_evaluation_evidence.some(e => e.confidence === 'confirmed') && fs.facts_from_enrichment === 0) {
+    issues.push({ check: 'factsheet_integrity', severity: 'error', message: '"confirmed" active evaluation but no enrichment sources' });
+    pts -= 5;
+  }
+
+  return { score: Math.max(0, pts), issues };
+}
+
+function checkTimingIntegrity(score: ScoringResult): { score: number; issues: AuditIssue[] } {
+  const issues: AuditIssue[] = [];
+  let pts = WEIGHTS.timing_integrity;
+
+  if (!score.dimensions || !score.fact_sheet) return { score: pts, issues };
+  const dims = score.dimensions;
+  const fs = score.fact_sheet;
+
+  if (dims.timing > 25) {
+    const hasNonModelSignal = [
+      ...fs.active_evaluation_evidence.filter(e => e.confidence !== 'model_knowledge'),
+      ...fs.funding_events,
+      ...fs.hiring_signals,
+      ...fs.leadership_changes,
+    ].length > 0;
+
+    if (!hasNonModelSignal) {
+      issues.push({ check: 'timing_integrity', severity: 'error', message: `Timing score ${dims.timing} > 25 but all signals are model_knowledge — gate violation` });
+      pts -= 8;
+    }
+  }
+
+  if (dims.timing > 60) {
+    const hasRecent = [
+      ...fs.funding_events.filter(f => f.recency === 'recent'),
+      ...fs.hiring_signals.filter(h => h.recency === 'recent'),
+      ...fs.leadership_changes.filter(l => l.recency === 'recent'),
+      ...fs.active_evaluation_evidence.filter(e => e.confidence === 'confirmed'),
+    ].length > 0;
+
+    if (!hasRecent) {
+      issues.push({ check: 'timing_integrity', severity: 'error', message: `Timing score ${dims.timing} > 60 but no "recent" signals found` });
+      pts -= 6;
+    }
+  }
+
+  return { score: Math.max(0, pts), issues };
+}
+
+function checkCrossReference(brief: BriefResult, score: ScoringResult): { score: number; issues: AuditIssue[] } {
+  const issues: AuditIssue[] = [];
+  let pts = WEIGHTS.cross_reference;
+
+  if (!score.fact_sheet) return { score: pts, issues };
+  const fs = score.fact_sheet;
+  const briefText = (brief.brief_markdown || '') + ' ' + (brief.company_snapshot || '');
+  const briefLower = briefText.toLowerCase();
+
+  // Check for customer name-drops in brief
+  const customerNamePatterns = [
+    /\b(epic games|riot games|2k games|snyk|hashicorp|confluent|cyera)\b/i,
+    /\bcustomer[s]?\s+(like|such as|including)\s+/i,
+    /\b(deployed at|used by|adopted by|powers|trusted by)\s+[A-Z]/,
+  ];
+  for (const pattern of customerNamePatterns) {
+    if (pattern.test(briefText)) {
+      issues.push({ check: 'cross_reference', severity: 'error', message: `Brief contains customer name-drop or case study reference: ${pattern.source.substring(0, 40)}` });
+      pts -= 5;
+    }
+  }
+
+  // Check VPN products mentioned in brief match FactSheet
+  const fsVpnProducts = fs.vpn_products_detected.map(v => v.product.toLowerCase());
+  const vpnMentionPatterns = [/cisco anyconnect/i, /globalprotect/i, /forticlient/i, /pulse secure/i, /ivanti/i, /openvpn/i];
+  for (const pattern of vpnMentionPatterns) {
+    const match = briefLower.match(pattern);
+    if (match && !fsVpnProducts.some(p => p.includes(match[0].toLowerCase()))) {
+      issues.push({ check: 'cross_reference', severity: 'warning', message: `Brief mentions VPN "${match[0]}" not in FactSheet` });
+      pts -= 3;
+    }
+  }
+
+  // Check persona names match FactSheet contacts
+  if (brief.personas) {
+    const fsNames = new Set(fs.named_contacts.map(c => c.name?.toLowerCase()).filter(Boolean));
+    for (const p of brief.personas) {
+      if (p.name && !fsNames.has(p.name.toLowerCase())) {
+        issues.push({ check: 'cross_reference', severity: 'warning', message: `Persona "${p.name}" not found in FactSheet named_contacts` });
+        pts -= 2;
+      }
+    }
+  }
+
+  return { score: Math.max(0, pts), issues };
+}
+
+function checkHallucination(brief: BriefResult, candidate: ResearchCandidate): { score: number; issues: AuditIssue[] } {
+  const issues: AuditIssue[] = [];
+  let pts = WEIGHTS.hallucination;
+  const srcCount = candidate.enrichment_source_count || 0;
+  const isThinData = srcCount === 0 || (srcCount <= 1 && candidate.signals.length < 3);
+
+  if (!isThinData) return { score: pts, issues };
+
+  const briefText = (brief.brief_markdown || '') + ' ' + (brief.company_snapshot || '');
+
+  // Check for assertive language in thin-data context
+  const assertivePatterns = [
+    /actively evaluating/i,
+    /currently exploring/i,
+    /planning to replace/i,
+    /recently adopted/i,
+    /known to use/i,
+    /confirmed.{0,20}usage/i,
+  ];
+
+  for (const pattern of assertivePatterns) {
+    if (pattern.test(briefText)) {
+      issues.push({ check: 'hallucination', severity: 'error', message: `Assertive claim in thin-data context: "${pattern.source}"` });
+      pts -= 3;
+    }
+  }
+
+  // Check why-now claims without citations in thin data
+  const whyNow = brief.why_now || [];
+  const citationPattern = /\[\d+\]/;
+  const unsourcedClaims = whyNow.filter(w => !citationPattern.test(w));
+  if (unsourcedClaims.length > 0) {
+    issues.push({ check: 'hallucination', severity: 'warning', message: `${unsourcedClaims.length} why-now claim(s) without [N] source citations in thin-data context` });
+    pts -= Math.min(5, unsourcedClaims.length * 2);
+  }
+
+  return { score: Math.max(0, pts), issues };
+}
+
+function checkEnrichmentCompleteness(candidate: ResearchCandidate): { score: number; issues: AuditIssue[] } {
+  const issues: AuditIssue[] = [];
+  let pts = WEIGHTS.enrichment_completeness;
+
+  const srcCount = candidate.enrichment_source_count || 0;
+  if (srcCount === 0) {
+    issues.push({ check: 'enrichment_completeness', severity: 'warning', message: 'No enrichment sources — research incomplete' });
+    pts -= 3;
+  }
+
+  if (!candidate.domain_validated) {
+    issues.push({ check: 'enrichment_completeness', severity: 'info', message: 'Domain not validated via DNS/HTTP' });
+    pts -= 1;
+  }
+
+  if (candidate.signals.length === 0) {
+    issues.push({ check: 'enrichment_completeness', severity: 'warning', message: 'Zero signals identified' });
+    pts -= 2;
+  }
+
+  return { score: Math.max(0, pts), issues };
+}
+
+function checkScoreFactAlignment(score: ScoringResult): { score: number; issues: AuditIssue[] } {
+  const issues: AuditIssue[] = [];
+  let pts = WEIGHTS.score_fact_alignment;
+
+  if (!score.dimensions || !score.fact_sheet) return { score: pts, issues };
+  const dims = score.dimensions;
+  const fs = score.fact_sheet;
+
+  // High ICP fit but no data
+  if (dims.icp_fit >= 60 && fs.employee_count_range === 'unknown' && !fs.engineering_team_evidence && fs.remote_workforce_evidence === 'none') {
+    issues.push({ check: 'score_fact_alignment', severity: 'error', message: `ICP fit ${dims.icp_fit} >= 60 but no employee range, no engineering evidence, no remote workforce evidence` });
+    pts -= 3;
+  }
+
+  // High reachability but no contacts
+  if (dims.reachability >= 50 && fs.named_contacts.length === 0) {
+    issues.push({ check: 'score_fact_alignment', severity: 'error', message: `Reachability ${dims.reachability} >= 50 but zero named contacts` });
+    pts -= 3;
+  }
+
+  // High data confidence but few enrichment facts
+  if (dims.data_confidence_score >= 65 && fs.facts_from_enrichment <= 1) {
+    issues.push({ check: 'score_fact_alignment', severity: 'warning', message: `Data confidence score ${dims.data_confidence_score} >= 65 but only ${fs.facts_from_enrichment} enrichment facts` });
+    pts -= 2;
+  }
+
+  return { score: Math.max(0, pts), issues };
+}
+
+export function auditBrief(input: AuditInput, threshold: number = 78): AuditResult {
+  // Scale thresholds from the old 100pt system to the new 130pt system
+  if (threshold <= 100) {
+    threshold = Math.round(threshold * 1.3);
+  }
   const { brief, candidate, score } = input;
 
   const results = {
@@ -304,6 +553,13 @@ export function auditBrief(input: AuditInput, threshold: number = 60): AuditResu
     why_now: checkWhyNow(brief),
     competitive: checkCompetitive(brief),
     scoring_consistency: checkScoringConsistency(score),
+    dimension_completeness: checkDimensionCompleteness(score),
+    factsheet_integrity: checkFactsheetIntegrity(score),
+    timing_integrity: checkTimingIntegrity(score),
+    cross_reference: checkCrossReference(brief, score),
+    hallucination: checkHallucination(brief, candidate),
+    enrichment_completeness: checkEnrichmentCompleteness(candidate),
+    score_fact_alignment: checkScoreFactAlignment(score),
   };
 
   const totalScore = Object.values(results).reduce((sum, r) => sum + r.score, 0);

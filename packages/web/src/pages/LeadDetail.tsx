@@ -5,7 +5,7 @@ import { useAuthContext } from '../App';
 import { permissions } from '../utils/permissions';
 import { useEventStream } from '../hooks/useEventStream';
 import { formatDate, formatDateTimeFull } from '../utils/dates';
-import { ScoreBadge, ScoreLabel, ConfidenceBadge, SegmentBadge } from '../components/ScoreBadge';
+import { ScoreBadge, ScoreLabel, ConfidenceBadge, SegmentBadge, ScoreRing, GradeBadge, DimensionRail, SourceDot } from '../components/ScoreBadge';
 import { renderInlineMarkdown } from '../utils/inlineMarkdown';
 import {
   ArrowLeft, ExternalLink, Building2, Users, MapPin, Globe, Calendar,
@@ -347,55 +347,112 @@ export function LeadDetail() {
         </div>
       )}
 
-      {/* Header */}
-      <div className="bg-white rounded-xl border border-gray-200 p-6 mb-4">
-        <div className="flex items-start gap-4">
-          <ScoreBadge score={lead.fit_score} size="lg" />
-          <div className="flex-1">
-            <div className="flex items-center gap-3 mb-1">
-              <h1 className="text-2xl font-bold">{lead.company_name}</h1>
-              <SegmentBadge segment={lead.segment} />
-              <ConfidenceBadge confidence={lead.confidence || 'medium'} />
-              {signalCount > 0 && (
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-50 text-indigo-700 border border-indigo-200">
-                  <Signal className="w-3 h-3" />
-                  {signalCount} signals
-                </span>
+      {/* Header — 3-Zone Layout for v2, classic for v1 */}
+      <div className="bg-white rounded-xl border border-gray-200 mb-4 overflow-hidden">
+        {/* Zone 1 — Identity + Verdict */}
+        <div className="p-6">
+          <div className="flex items-start gap-4">
+            {lead.scoring_version === 2 && lead.dimensions_parsed ? (
+              <ScoreRing score={lead.fit_score} size={72} grade={lead.dimensions_parsed.data_confidence} />
+            ) : (
+              <ScoreBadge score={lead.fit_score} size="lg" />
+            )}
+            <div className="flex-1">
+              <div className="flex items-center gap-3 mb-1">
+                <h1 className="text-2xl font-bold">{lead.company_name}</h1>
+                <SegmentBadge segment={lead.segment} />
+                {lead.scoring_version === 2 && lead.dimensions_parsed?.data_confidence ? (
+                  <GradeBadge grade={lead.dimensions_parsed.data_confidence} />
+                ) : (
+                  <ConfidenceBadge confidence={lead.confidence || 'medium'} />
+                )}
+                {lead.feedback?.length > 0 && lead.feedback[0].verdict && (
+                  <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${
+                    lead.feedback[0].verdict === 'good_fit' ? 'bg-emerald-50 text-emerald-700' :
+                    lead.feedback[0].verdict === 'bad_fit' ? 'bg-red-50 text-red-700' :
+                    'bg-amber-50 text-amber-700'
+                  }`}>
+                    {lead.feedback[0].verdict.replace(/_/g, ' ')}
+                  </span>
+                )}
+                {signalCount > 0 && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-50 text-indigo-700 border border-indigo-200">
+                    <Signal className="w-3 h-3" />
+                    {signalCount}
+                  </span>
+                )}
+              </div>
+              {/* Verdict line */}
+              {lead.scoring_version === 2 && lead.dimensions_parsed?.verdict ? (
+                <p className="text-sm text-gray-600 mb-2">{lead.dimensions_parsed.verdict}</p>
+              ) : (
+                <div className="flex items-center gap-1 text-sm text-gray-500 mb-2">
+                  <ScoreLabel score={lead.fit_score} />
+                  <span className="mx-1">&middot;</span>
+                  <span>{lead.fit_score}/100</span>
+                </div>
               )}
-            </div>
-            <div className="flex items-center gap-1 text-sm text-gray-500">
-              <ScoreLabel score={lead.fit_score} />
-              <span className="mx-1">&middot;</span>
-              <span>{lead.fit_score}/100</span>
-            </div>
-            <div className="flex flex-wrap gap-4 mt-3 text-sm text-gray-600">
-              <span className={`flex items-center gap-1 ${lead.hq_location ? '' : 'text-gray-300'}`}><MapPin className="w-4 h-4" />{lead.hq_location || 'Unknown'}</span>
-              <span className={`flex items-center gap-1 ${lead.employee_count ? '' : 'text-gray-300'}`}>
-                <Users className="w-4 h-4" />
-                {lead.employee_count ? `~${lead.employee_count.toLocaleString()} employees` : 'Unknown'}
-                {(() => {
-                  const notes: string = lead.candidate_data_parsed?.notes || '';
-                  const srcMatch = notes.match(/Employee count(?: updated from| \()(\w+)/);
-                  const divergeMatch = notes.match(/(\d+)x divergence/);
-                  return (
-                    <>
-                      {srcMatch && <span className="text-gray-400 text-xs">({srcMatch[1]})</span>}
-                      {divergeMatch && parseInt(divergeMatch[1]) >= 5 && (
-                        <span title={`Sources diverged ${divergeMatch[1]}x — cross-validated`}>
-                          <AlertTriangle className="w-3 h-3 text-amber-500" />
-                        </span>
-                      )}
-                    </>
-                  );
-                })()}
-              </span>
-              <span className={`flex items-center gap-1 ${lead.founded_year ? '' : 'text-gray-300'}`}><Calendar className="w-4 h-4" />{lead.founded_year ? `Founded ${lead.founded_year}` : 'Unknown'}</span>
-              <span className={`flex items-center gap-1 ${lead.funding_stage ? '' : 'text-gray-300'}`}><Building2 className="w-4 h-4" />{lead.funding_stage ? `${lead.funding_stage}${lead.total_funding ? ` (${lead.total_funding})` : ''}` : 'N/A'}</span>
-              {lead.updated_at && <span className="flex items-center gap-1"><RefreshCw className="w-4 h-4" />Updated {formatDateTimeFull(lead.updated_at)}</span>}
-              <a href={`https://${(lead.website || lead.domain || '').replace(/^https?:\/\//, '')}`} target="_blank" rel="noopener" className="flex items-center gap-1 text-brand-600 hover:underline"><Globe className="w-4 h-4" />{(lead.website || lead.domain || '').replace(/^https?:\/\//, '')}</a>
-              {lead.linkedin_company_url ? <a href={lead.linkedin_company_url} target="_blank" rel="noopener" className="flex items-center gap-1 text-blue-600 hover:underline"><Linkedin className="w-4 h-4" />LinkedIn</a> : <span className="flex items-center gap-1 text-gray-300"><Linkedin className="w-4 h-4" />LinkedIn</span>}
+              {/* Metadata strip */}
+              <div className="flex flex-wrap gap-4 text-sm text-gray-600">
+                <span className={`flex items-center gap-1 ${lead.hq_location ? '' : 'text-gray-300'}`}><MapPin className="w-4 h-4" />{lead.hq_location || 'Needs discovery'}</span>
+                <span className={`flex items-center gap-1 ${lead.employee_count ? '' : 'text-gray-300'}`}>
+                  <Users className="w-4 h-4" />
+                  {lead.employee_count ? `~${lead.employee_count.toLocaleString()} employees` : 'Needs discovery'}
+                  {(() => {
+                    const src = lead.employee_count_source;
+                    const notes: string = lead.candidate_data_parsed?.notes || '';
+                    const divergeMatch = notes.match(/(\d+)x divergence/);
+                    return (
+                      <>
+                        {src && <SourceDot status={src === 'enrichment' ? 'confirmed' : 'inferred'} />}
+                        {divergeMatch && parseInt(divergeMatch[1]) >= 5 && (
+                          <span title={`Sources diverged ${divergeMatch[1]}x — cross-validated`}>
+                            <AlertTriangle className="w-3 h-3 text-amber-500" />
+                          </span>
+                        )}
+                      </>
+                    );
+                  })()}
+                </span>
+                <span className={`flex items-center gap-1 ${lead.founded_year ? '' : 'text-gray-300'}`}><Calendar className="w-4 h-4" />{lead.founded_year ? `Founded ${lead.founded_year}` : 'Needs discovery'}</span>
+                <span className={`flex items-center gap-1 ${lead.funding_stage ? '' : 'text-gray-300'}`}><Building2 className="w-4 h-4" />{lead.funding_stage ? `${lead.funding_stage}${lead.total_funding ? ` (${lead.total_funding})` : ''}` : 'Needs discovery'}</span>
+                {lead.updated_at && <span className="flex items-center gap-1"><RefreshCw className="w-4 h-4" />Updated {formatDateTimeFull(lead.updated_at)}</span>}
+                <a href={`https://${(lead.website || lead.domain || '').replace(/^https?:\/\//, '')}`} target="_blank" rel="noopener" className="flex items-center gap-1 text-brand-600 hover:underline"><Globe className="w-4 h-4" />{(lead.website || lead.domain || '').replace(/^https?:\/\//, '')}</a>
+                {lead.linkedin_company_url ? <a href={lead.linkedin_company_url} target="_blank" rel="noopener" className="flex items-center gap-1 text-blue-600 hover:underline"><Linkedin className="w-4 h-4" />LinkedIn</a> : <span className="flex items-center gap-1 text-gray-300 text-xs italic border-b border-dashed border-gray-300"><Linkedin className="w-4 h-4" />Find on LinkedIn</span>}
+              </div>
             </div>
           </div>
+        </div>
+
+        {/* Zone 2 — Dimension Rail (v2 only) */}
+        {lead.scoring_version === 2 && lead.dimensions_parsed && (
+          <div className="px-6 py-3 bg-gray-50 border-t border-gray-100">
+            <DimensionRail dimensions={lead.dimensions_parsed} />
+          </div>
+        )}
+
+        {/* Zone 3 — Context Bar */}
+        <div className="px-6 py-2 border-t border-gray-100 flex items-center gap-4 text-[11px] text-gray-400">
+          {lead.scoring_version === 2 && <span>Scoring v2 deterministic</span>}
+          {lead.scoring_model && <span>{lead.scoring_model}</span>}
+          {lead.ai_audit && (
+            <span className={lead.ai_audit.verdict === 'pass' ? 'text-emerald-500' : lead.ai_audit.verdict === 'fail' ? 'text-red-400' : 'text-amber-400'}>
+              Audit: {lead.ai_audit.verdict}
+            </span>
+          )}
+          {lead.enrichment_metadata_parsed && (
+            <span>
+              Sources: {lead.enrichment_metadata_parsed.sources_responded?.length ?? 0}/{lead.enrichment_metadata_parsed.sources_available?.length ?? 0} checked
+            </span>
+          )}
+          {(lead as any).cross_campaign?.length > 0 && (() => {
+            const maxDivergence = Math.max(...(lead as any).cross_campaign.map((cc: any) => Math.abs(cc.fit_score - lead.fit_score)));
+            return maxDivergence >= 15 ? (
+              <span className="text-amber-500 font-medium">
+                <AlertTriangle className="w-3 h-3 inline" /> Score diverges &plusmn;{maxDivergence} across campaigns
+              </span>
+            ) : null;
+          })()}
         </div>
       </div>
 
@@ -784,8 +841,250 @@ export function LeadDetail() {
             </div>
           )}
 
-          {/* Score Breakdown */}
-          {scoreBreakdown && (() => {
+          {/* Score Breakdown — v2 Dimensions Panel or v1 Legacy */}
+          {lead.scoring_version === 2 && lead.dimensions_parsed ? (() => {
+            const dims = lead.dimensions_parsed;
+            const DIM_META: { key: string; label: string; color: string; icon: string; getValue: () => string }[] = [
+              { key: 'icp_fit', label: 'ICP Fit', color: 'sky', icon: '🎯', getValue: () => `${dims.icp_fit}/100` },
+              { key: 'timing', label: 'Timing', color: 'amber', icon: '⏱', getValue: () => `${dims.timing}/100` },
+              { key: 'data_confidence', label: 'Data Confidence', color: 'emerald', icon: '📊', getValue: () => `${dims.data_confidence} (${dims.data_confidence_score}/100)` },
+              { key: 'reachability', label: 'Reachability', color: 'violet', icon: '📬', getValue: () => `${dims.reachability}/100` },
+              { key: 'research_completeness', label: 'Research', color: 'slate', icon: '🔍', getValue: () => `${dims.research_completeness}%` },
+              { key: 'signal_density', label: 'Signals', color: 'indigo', icon: '📡', getValue: () => `${dims.signal_density?.total_signals ?? 0}` },
+            ];
+            const factSheet = lead.fact_sheet_parsed;
+
+            return (
+              <>
+                {/* Dimensions Panel */}
+                <div className="bg-white rounded-xl border border-gray-200 p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="font-medium text-gray-900 flex items-center gap-2">
+                      <Signal className="w-4 h-4" /> Scoring Dimensions
+                    </h3>
+                    <span className={`text-sm font-bold px-2 py-0.5 rounded-full ${
+                      lead.fit_score >= 75 ? 'bg-emerald-100 text-emerald-700' :
+                      lead.fit_score >= 60 ? 'bg-amber-100 text-amber-700' :
+                      'bg-red-100 text-red-700'
+                    }`}>
+                      {lead.fit_score}/100
+                    </span>
+                  </div>
+                  <div className="space-y-1">
+                    {DIM_META.map((dim) => {
+                      const rawValue = dim.key === 'data_confidence' ? (dims.data_confidence_score ?? 0)
+                        : dim.key === 'signal_density' ? (dims.signal_density?.total_signals ?? 0)
+                        : (dims as any)[dim.key] ?? 0;
+                      const maxVal = dim.key === 'signal_density' ? 20 : 100;
+                      const pct = Math.min(rawValue / maxVal, 1);
+                      const barColor = pct >= 0.7 ? `bg-${dim.color}-500` : pct >= 0.4 ? `bg-${dim.color}-400` : 'bg-gray-300';
+                      const isExpanded = expandedSignalCat === dim.key;
+                      const hasDetail = dim.key !== 'signal_density' && dim.key !== 'research_completeness';
+
+                      return (
+                        <div key={dim.key}>
+                          <button
+                            onClick={() => hasDetail && setExpandedSignalCat(isExpanded ? null : dim.key)}
+                            className={`w-full flex items-center gap-2 py-1.5 rounded -mx-1 px-1 ${hasDetail ? 'hover:bg-gray-50 cursor-pointer' : 'cursor-default'}`}
+                          >
+                            <span className="w-2 text-xs">{dim.icon}</span>
+                            <span className={`w-28 text-xs font-medium text-${dim.color}-700 text-left truncate shrink-0`}>{dim.label}</span>
+                            <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
+                              <div className={`h-full ${barColor} rounded-full transition-all`} style={{ width: `${Math.round(pct * 100)}%` }} />
+                            </div>
+                            <span className="w-16 text-right text-[11px] text-gray-500 shrink-0">{dim.getValue()}</span>
+                            {hasDetail ? (
+                              <ChevronDown className={`w-3 h-3 text-gray-400 transition-transform shrink-0 ${isExpanded ? 'rotate-180' : ''}`} />
+                            ) : (
+                              <span className="w-3 h-3 shrink-0" />
+                            )}
+                          </button>
+                          {isExpanded && factSheet && dim.key === 'icp_fit' && (
+                            <div className="ml-6 mt-1 mb-2 space-y-0.5 text-[11px] text-gray-500">
+                              <div>Industry: {factSheet.industry || 'Unknown'}{factSheet.sub_industry ? ` / ${factSheet.sub_industry}` : ''}</div>
+                              <div>Employee range: {factSheet.employee_count_range} {factSheet.employee_count_confirmed ? '(confirmed)' : '(unconfirmed)'}</div>
+                              <div>Remote workforce: {factSheet.remote_workforce_evidence}</div>
+                              <div>Multi-office: {factSheet.multi_office ? `Yes (${factSheet.office_count ?? '?'} offices)` : 'No/Unknown'}</div>
+                              <div>Vertical: {factSheet.vertical_match} {factSheet.vertical_name ? `— ${factSheet.vertical_name}` : ''}</div>
+                              {factSheet.vpn_products_detected?.length > 0 && (
+                                <div>VPN: {factSheet.vpn_products_detected.map((v: any) => `${v.product} (${v.confidence})`).join(', ')}</div>
+                              )}
+                              {factSheet.competitor_products_detected?.length > 0 && (
+                                <div>Competitors: {factSheet.competitor_products_detected.map((c: any) => `${c.product} (${c.confidence})`).join(', ')}</div>
+                              )}
+                            </div>
+                          )}
+                          {isExpanded && factSheet && dim.key === 'timing' && (
+                            <div className="ml-6 mt-1 mb-2 space-y-0.5 text-[11px] text-gray-500">
+                              {factSheet.active_evaluation_evidence?.length > 0 && (
+                                <div className="text-amber-700 font-medium">Active evaluation: {factSheet.active_evaluation_evidence.map((e: any) => `${e.description} (${e.confidence})`).join('; ')}</div>
+                              )}
+                              {factSheet.funding_events?.length > 0 && (
+                                <div>Funding: {factSheet.funding_events.map((f: any) => `${f.type}${f.amount ? ` ${f.amount}` : ''} (${f.recency})`).join(', ')}</div>
+                              )}
+                              {factSheet.hiring_signals?.length > 0 && (
+                                <div>Hiring: {factSheet.hiring_signals.map((h: any) => `${h.role} (${h.recency})`).join(', ')}</div>
+                              )}
+                              {factSheet.leadership_changes?.length > 0 && (
+                                <div>Leadership: {factSheet.leadership_changes.map((l: any) => `${l.title} (${l.recency})`).join(', ')}</div>
+                              )}
+                              {factSheet.compliance_signals?.length > 0 && (
+                                <div>Compliance: {factSheet.compliance_signals.map((c: any) => `${c.regulation}: ${c.evidence}`).join('; ')}</div>
+                              )}
+                            </div>
+                          )}
+                          {isExpanded && factSheet && dim.key === 'data_confidence' && (
+                            <div className="ml-6 mt-1 mb-2 space-y-0.5 text-[11px] text-gray-500">
+                              <div>Facts from enrichment: {factSheet.facts_from_enrichment ?? 0}</div>
+                              <div>Facts from model knowledge: {factSheet.facts_from_model_knowledge ?? 0}</div>
+                              <div>Fact confidence: {factSheet.fact_confidence ?? 'unknown'}</div>
+                              {lead.enrichment_metadata_parsed && (
+                                <>
+                                  <div>Sources responded: {lead.enrichment_metadata_parsed.sources_responded?.length ?? 0}</div>
+                                  <div>Sources failed: {lead.enrichment_metadata_parsed.sources_failed?.length ?? 0}</div>
+                                  <div>Corroboration: {lead.enrichment_metadata_parsed.corroboration_count ?? 0} fields confirmed by 2+ sources</div>
+                                </>
+                              )}
+                            </div>
+                          )}
+                          {isExpanded && factSheet && dim.key === 'reachability' && (
+                            <div className="ml-6 mt-1 mb-2 space-y-0.5 text-[11px] text-gray-500">
+                              {factSheet.named_contacts?.length > 0 ? factSheet.named_contacts.map((c: any, i: number) => (
+                                <div key={i}>
+                                  {c.name || 'Unnamed'} — {c.title} ({c.role_fit})
+                                  {c.has_linkedin && <span className="text-blue-500 ml-1">LinkedIn</span>}
+                                  {c.has_email && <span className="text-emerald-500 ml-1">Email</span>}
+                                </div>
+                              )) : <div>No named contacts found</div>}
+                              <div>Security team visible: {factSheet.security_team_visible ? 'Yes' : 'No'}</div>
+                              <div>IT org visible: {factSheet.it_org_visible ? 'Yes' : 'No'}</div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {scoreBreakdown && (scoreBreakdown.penalties || []).length > 0 && (
+                    <div className="border-t mt-2 pt-2 space-y-1">
+                      {(scoreBreakdown.penalties || []).map((p: any, i: number) => (
+                        <div key={i} className="text-xs text-red-600">Penalty: {p.points} &mdash; {p.reason}</div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Signal Breakdown */}
+                {dims.signal_density && dims.signal_density.categories && Object.keys(dims.signal_density.categories).length > 0 && (
+                  <div className="bg-white rounded-xl border border-gray-200 p-4">
+                    <h3 className="font-medium text-gray-900 flex items-center gap-2 mb-3">
+                      <Signal className="w-4 h-4" /> Signal Breakdown
+                    </h3>
+                    <div className="space-y-2">
+                      {Object.entries(dims.signal_density.categories as Record<string, any[]>).map(([cat, signals]) => (
+                        <div key={cat}>
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className="text-xs font-medium text-gray-700 capitalize">{cat}</span>
+                            <span className="text-[10px] text-gray-400">{signals.length}</span>
+                          </div>
+                          <div className="flex flex-wrap gap-1">
+                            {signals.map((sig: any, i: number) => (
+                              <span key={i} className={`text-[10px] px-1.5 py-0.5 rounded-full border ${
+                                sig.recency === 'recent' ? 'bg-indigo-50 text-indigo-700 border-indigo-200' :
+                                sig.recency === 'aged' ? 'bg-gray-50 text-gray-500 border-gray-200 opacity-60' :
+                                'bg-gray-50 text-gray-400 border-gray-200 opacity-50'
+                              }`}>
+                                {sig.signal || sig.description || cat}
+                                {sig.source_type === 'model_knowledge' && <span className="ml-0.5 text-[8px] bg-gray-200 text-gray-500 px-1 rounded">AI</span>}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Source Status Grid */}
+                {lead.enrichment_metadata_parsed && (
+                  <div className="bg-white rounded-xl border border-gray-200 p-4">
+                    <h3 className="font-medium text-gray-900 flex items-center gap-2 mb-3">
+                      <Globe className="w-4 h-4" /> Enrichment Sources
+                    </h3>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {(lead.enrichment_metadata_parsed.sources_available || []).map((src: string) => {
+                        const responded = (lead.enrichment_metadata_parsed.sources_responded || []).includes(src);
+                        const failed = (lead.enrichment_metadata_parsed.sources_failed || []).includes(src);
+                        const status = responded ? 'responded' : failed ? 'failed' : 'unchecked';
+                        return (
+                          <div key={src} className="flex items-center gap-1.5 text-[11px] text-gray-600">
+                            <SourceDot status={status} />
+                            <span className={failed ? 'line-through text-gray-400' : ''}>{src}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* FactSheet Viewer */}
+                {factSheet && (
+                  <div className="bg-white rounded-xl border border-gray-200 p-4">
+                    <button
+                      onClick={() => setExpandedSignalCat(expandedSignalCat === 'factsheet' ? null : 'factsheet')}
+                      className="w-full flex items-center justify-between"
+                    >
+                      <h3 className="font-medium text-gray-900 flex items-center gap-2">
+                        <FileText className="w-4 h-4" /> FactSheet
+                      </h3>
+                      <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform ${expandedSignalCat === 'factsheet' ? 'rotate-180' : ''}`} />
+                    </button>
+                    {expandedSignalCat === 'factsheet' && (
+                      <div className="mt-3 space-y-3 text-[11px] text-gray-600">
+                        <div>
+                          <div className="text-[10px] font-medium text-gray-400 uppercase mb-1">Company Profile</div>
+                          <div className="space-y-0.5">
+                            <div>Industry: {factSheet.industry || '—'}{factSheet.sub_industry ? ` / ${factSheet.sub_industry}` : ''}</div>
+                            <div>Employees: {factSheet.employee_count_range} {factSheet.employee_count_confirmed ? '✓' : '?'}</div>
+                            <div>Engineering team: {factSheet.engineering_team_evidence ? 'Yes' : 'No evidence'}</div>
+                            <div>Contractors: {factSheet.contractor_usage_evidence ? 'Yes' : 'No evidence'}</div>
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-[10px] font-medium text-gray-400 uppercase mb-1">Remote Access</div>
+                          <div className="space-y-0.5">
+                            <div>Remote workforce: {factSheet.remote_workforce_evidence}</div>
+                            <div>BYOD/BYOC: {factSheet.byod_byoc_evidence ? 'Yes' : 'No evidence'}</div>
+                            <div>DevEx initiative: {factSheet.developer_experience_initiative ? 'Yes' : 'No evidence'}</div>
+                          </div>
+                        </div>
+                        {(factSheet.vpn_products_detected?.length > 0 || factSheet.competitor_products_detected?.length > 0) && (
+                          <div>
+                            <div className="text-[10px] font-medium text-gray-400 uppercase mb-1">Displacement</div>
+                            <div className="space-y-0.5">
+                              {factSheet.vpn_products_detected?.map((v: any, i: number) => (
+                                <div key={i}>VPN: {v.product} <span className={v.confidence === 'confirmed' ? 'text-emerald-600' : 'text-amber-500'}>({v.confidence})</span> — {v.source}</div>
+                              ))}
+                              {factSheet.competitor_products_detected?.map((c: any, i: number) => (
+                                <div key={i}>Competitor: {c.product} <span className={c.confidence === 'confirmed' ? 'text-emerald-600' : 'text-amber-500'}>({c.confidence})</span> — {c.source}</div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        <div>
+                          <div className="text-[10px] font-medium text-gray-400 uppercase mb-1">Source Classification</div>
+                          <div className="space-y-0.5">
+                            <div>Enrichment facts: {factSheet.facts_from_enrichment ?? 0}</div>
+                            <div>Model knowledge facts: {factSheet.facts_from_model_knowledge ?? 0}</div>
+                            <div>Overall confidence: {factSheet.fact_confidence ?? 'unknown'}</div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </>
+            );
+          })() : scoreBreakdown && (() => {
             const CATEGORY_META: Record<string, { label: string; max: number }> = {
               segment_scale_fit: { label: 'Segment & Scale Fit', max: 20 },
               why_now_triggers: { label: 'Why Now Triggers', max: 15 },

@@ -76,7 +76,7 @@ router.get('/', authenticate, (req: AuthRequest, res: Response) => {
   }
 
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-  const allowedSorts = ['fit_score', 'company_name', 'segment', 'created_at', 'lead_status', 'convergence_score', 'current_feedback', 'next_outreach_date'];
+  const allowedSorts = ['fit_score', 'icp_fit_score', 'timing_score', 'company_name', 'segment', 'created_at', 'lead_status', 'convergence_score', 'current_feedback', 'next_outreach_date'];
   const sortCol = allowedSorts.includes(sort as string) ? sort : 'fit_score';
   const sortOrder = order === 'asc' ? 'ASC' : 'DESC';
   const offset = (parseInt(page as string) - 1) * parseInt(limit as string);
@@ -188,16 +188,18 @@ router.get('/export', authenticate, (req: AuthRequest, res: Response) => {
     `SELECT l.company_name, l.domain, l.segment, l.fit_score, l.fit_score_label, l.confidence,
        l.hq_location, l.employee_count, l.founded_year, l.funding_stage, l.total_funding,
        l.current_feedback, l.next_outreach_date, l.signal_count, l.created_at,
+       l.icp_fit_score, l.timing_score, l.data_confidence, l.reachability_score,
+       l.scoring_version,
        c.name as campaign_name
      FROM leads l LEFT JOIN campaigns c ON c.id = l.campaign_id
      ${where}
      ORDER BY l.fit_score DESC`
   ).all(...params) as any[];
 
-  // All available fields
   const allFields = ['company_name', 'domain', 'segment', 'fit_score', 'fit_score_label', 'confidence',
     'hq_location', 'employee_count', 'founded_year', 'funding_stage', 'total_funding',
-    'current_feedback', 'next_outreach_date', 'signal_count', 'campaign_name', 'created_at'];
+    'current_feedback', 'next_outreach_date', 'signal_count', 'campaign_name', 'created_at',
+    'icp_fit_score', 'timing_score', 'data_confidence', 'reachability_score', 'scoring_version'];
 
   // If fields param provided, filter to only requested fields (validated against available)
   let fields = allFields;
@@ -749,6 +751,24 @@ function parseLead(row: any) {
   try { lead.candidate_data_parsed = JSON.parse(row.candidate_data); } catch { lead.candidate_data_parsed = null; }
   try { lead.audit_issues_parsed = JSON.parse(row.audit_issues); } catch { lead.audit_issues_parsed = null; }
   try { lead.ai_audit = JSON.parse(row.ai_audit_result); } catch { lead.ai_audit = null; }
+  try { lead.fact_sheet_parsed = JSON.parse(row.fact_sheet); } catch { lead.fact_sheet_parsed = null; }
+  try { lead.signal_density_parsed = JSON.parse(row.signal_density); } catch { lead.signal_density_parsed = null; }
+  try { lead.enrichment_metadata_parsed = JSON.parse(row.enrichment_metadata); } catch { lead.enrichment_metadata_parsed = null; }
+
+  if (row.scoring_version === 2 && row.icp_fit_score != null) {
+    lead.dimensions_parsed = {
+      icp_fit: row.icp_fit_score,
+      timing: row.timing_score,
+      data_confidence: row.data_confidence,
+      data_confidence_score: row.data_confidence_score,
+      reachability: row.reachability_score,
+      research_completeness: row.research_completeness,
+      signal_density: lead.signal_density_parsed,
+      verdict: row.scoring_verdict || null,
+    };
+  } else {
+    lead.dimensions_parsed = null;
+  }
 
   let signalCount = 0;
   if (lead.sources_parsed && Array.isArray(lead.sources_parsed)) signalCount += lead.sources_parsed.length;

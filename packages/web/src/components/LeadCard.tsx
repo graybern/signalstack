@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { ScoreBadge, ConfidenceBadge, SegmentBadge } from './ScoreBadge';
+import { ScoreBadge, ConfidenceBadge, SegmentBadge, GradeBadge, MiniGauge } from './ScoreBadge';
 import { Building2, Users, MapPin, ExternalLink, ThumbsUp, ThumbsDown, Minus, Zap } from 'lucide-react';
 import { stripMarkdown } from '../utils/inlineMarkdown';
 
@@ -101,6 +101,17 @@ export function LeadCard({ lead }: LeadCardProps) {
               <span className="flex items-center gap-1"><Building2 className="w-3 h-3" />{lead.funding_stage}</span>
             )}
           </div>
+
+          {lead.scoring_version === 2 && lead.dimensions_parsed && (
+            <div className="flex items-center gap-2.5 mb-2">
+              <MiniGauge label="ICP" value={lead.dimensions_parsed.icp_fit} color="sky" />
+              <MiniGauge label="TIME" value={lead.dimensions_parsed.timing} color="amber" />
+              <MiniGauge label="REACH" value={lead.dimensions_parsed.reachability} color="violet" />
+              {lead.dimensions_parsed.data_confidence && (
+                <GradeBadge grade={lead.dimensions_parsed.data_confidence} size="sm" />
+              )}
+            </div>
+          )}
 
           {whyNow.length > 0 && (
             <p className="text-sm text-gray-700 mb-2 line-clamp-2">

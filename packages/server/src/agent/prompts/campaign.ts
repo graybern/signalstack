@@ -203,8 +203,11 @@ Only include companies at these stages: ${discoverConfig.funding_stage_filter.jo
   // Recency
   const recencySection = discoverConfig?.recency_months
     ? `## Recency
-Focus on companies with significant activity in the last ${discoverConfig.recency_months} months (funding, hiring, product launches, news).`
-    : '';
+Focus on companies with significant activity in the last ${discoverConfig.recency_months} months (funding, hiring, product launches, news).${discoverConfig.prefer_recent_signals !== false ? '\nRank companies with the most recent signals higher in your list — freshness of activity is a strong buying indicator.' : ''}`
+    : (discoverConfig?.prefer_recent_signals !== false
+      ? `## Signal Freshness
+Rank companies with the most recent activity (funding, hiring, product launches, news) higher in your list — freshness of activity is a strong buying indicator.`
+      : '');
 
   // Technology categories (DSPM, ITSM, Observability, etc.)
   const techCategoriesSection = discoverConfig?.technology_categories?.length

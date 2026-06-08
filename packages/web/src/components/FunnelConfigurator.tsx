@@ -32,6 +32,7 @@ interface FunnelStepConfig {
   geographic_focus?: string[];
   funding_stage_filter?: string[];
   recency_months?: number;
+  prefer_recent_signals?: boolean;
   verticals_override?: string[];
   use_org_verticals?: boolean;
   technology_categories?: string[];
@@ -56,6 +57,7 @@ interface FunnelStepConfig {
     vertical_playbook?: number;
     buyer_access_readiness?: number;
   };
+  composite_weights?: { icp_fit: number; timing: number };
   min_score_threshold?: number;
   icp_verticals_override?: string[];
   icp_tech_signals_override?: string[];
@@ -69,6 +71,7 @@ interface FunnelStepConfig {
   tech_stack_categories?: { id: string; label: string; examples: string[] }[];
   // Enrich levers
   min_enrichment_sources?: number;
+  required_enrichment_fields?: string[];
   // Audit levers
   audit_quality_threshold?: number;
   audit_use_ai?: boolean;
@@ -521,6 +524,7 @@ function DiscoverConfig({ step, updateStep, globalPrompts, orgICP, searchProvide
             </button>
           ))}
         </div>
+        <SourceStrategyExplainer strategy={step.source_strategy || 'search_augmented'} />
       </div>
 
       {/* Search-augmented config */}
@@ -735,7 +739,21 @@ function DiscoverConfig({ step, updateStep, globalPrompts, orgICP, searchProvide
       </div>
 
       {/* Recency */}
-      <NumberInput label="Focus on activity in last N months" value={step.recency_months} onChange={v => updateStep(step.id, { recency_months: v })} placeholder="e.g. 12" />
+      <div className="grid grid-cols-2 gap-3 items-end">
+        <NumberInput label="Focus on activity in last N months" value={step.recency_months} onChange={v => updateStep(step.id, { recency_months: v })} placeholder="e.g. 12" />
+        <label className="flex items-center gap-2 px-3 py-[7px] border border-gray-200 rounded-lg cursor-pointer hover:bg-gray-50">
+          <input
+            type="checkbox"
+            checked={step.prefer_recent_signals !== false}
+            onChange={e => updateStep(step.id, { prefer_recent_signals: e.target.checked ? undefined : false })}
+            className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+          />
+          <div>
+            <span className="text-xs text-gray-700">Prefer recent signals</span>
+            <span className="text-[10px] text-gray-400 block">Rank companies with fresh activity higher</span>
+          </div>
+        </label>
+      </div>
 
       {/* Industries (ICP absorbed) */}
       <InheritableField
@@ -809,9 +827,21 @@ function DiscoverConfig({ step, updateStep, globalPrompts, orgICP, searchProvide
       {/* Post-discover filters */}
       <div>
         <label className="text-xs font-medium text-gray-700 mb-2 block">Post-discover filters</label>
-        <p className="text-[11px] text-gray-400 mb-2">
-          Programmatic filters applied after AI discovery — removes excluded companies, duplicates, and undersized candidates automatically.
-        </p>
+        <div className="flex items-center gap-1 mb-2 text-[10px] text-gray-400 overflow-x-auto">
+          <span className="px-1.5 py-0.5 bg-blue-50 text-blue-600 rounded font-medium whitespace-nowrap">AI discovers</span>
+          <span>&rarr;</span>
+          <span className="px-1.5 py-0.5 bg-gray-100 text-gray-500 rounded whitespace-nowrap">Exclusion list</span>
+          <span>&rarr;</span>
+          <span className="px-1.5 py-0.5 bg-gray-100 text-gray-500 rounded whitespace-nowrap">Employee floor</span>
+          <span>&rarr;</span>
+          <span className="px-1.5 py-0.5 bg-gray-100 text-gray-500 rounded whitespace-nowrap">Dedup leads</span>
+          <span>&rarr;</span>
+          <span className="px-1.5 py-0.5 bg-gray-100 text-gray-500 rounded whitespace-nowrap">Domain check</span>
+          <span>&rarr;</span>
+          <span className="px-1.5 py-0.5 bg-emerald-50 text-emerald-600 rounded font-medium whitespace-nowrap">Light enrich</span>
+          <span>&rarr;</span>
+          <span className="px-1.5 py-0.5 bg-orange-50 text-orange-600 rounded font-medium whitespace-nowrap">Qualify</span>
+        </div>
         <div className="space-y-2 bg-gray-50 border border-gray-200 rounded-lg p-3">
           <label className="flex items-center gap-2 cursor-pointer">
             <input
@@ -1008,15 +1038,81 @@ function EnrichConfig({ step, updateStep, dataSources }: {
   return (
     <>
       <NumberInput label="Max companies to enrich" value={step.candidate_limit} onChange={v => updateStep(step.id, { candidate_limit: v })} placeholder="15" />
-      <NumberInput
-        label="Min enrichment sources to pass"
-        value={step.min_enrichment_sources}
-        onChange={v => updateStep(step.id, { min_enrichment_sources: v })}
-        placeholder="1"
-      />
-      <p className="text-[10px] text-gray-400 -mt-2">
-        Companies with fewer confirmed data sources are dropped before scoring. Set to 0 to disable.
-      </p>
+
+      {/* Enrichment quality gate */}
+      <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 space-y-3">
+        <div className="flex items-center gap-2">
+          <Filter className="w-3.5 h-3.5 text-gray-500" />
+          <span className="text-xs font-medium text-gray-700">Enrichment quality gate</span>
+        </div>
+        <p className="text-[10px] text-gray-400 leading-relaxed">
+          Companies must meet these requirements to proceed to scoring. This prevents scoring on thin data, which leads to inflated confidence and hallucinated claims.
+        </p>
+
+        <NumberInput
+          label="Min enrichment sources to pass"
+          value={step.min_enrichment_sources}
+          onChange={v => updateStep(step.id, { min_enrichment_sources: v })}
+          placeholder="1"
+        />
+        <p className="text-[10px] text-gray-400 -mt-2">
+          Number of data sources that must return data. Set to 0 to disable.
+        </p>
+
+        {/* Required enrichment fields */}
+        <div>
+          <label className="text-xs font-medium text-gray-700 mb-1.5 block">Required fields to pass</label>
+          <p className="text-[10px] text-gray-400 mb-1.5">Companies missing checked fields are dropped before scoring.</p>
+          <div className="grid grid-cols-2 gap-1.5">
+            {([
+              { id: 'employee_count', label: 'Employee count', desc: 'Headcount from any source' },
+              { id: 'domain', label: 'Website domain', desc: 'Valid company domain' },
+              { id: 'hq_location', label: 'HQ location', desc: 'Headquarters city/country' },
+              { id: 'linkedin_company_url', label: 'LinkedIn URL', desc: 'Company LinkedIn page' },
+              { id: 'founded_year', label: 'Founded year', desc: 'Year company was founded' },
+              { id: 'funding_stage', label: 'Funding stage', desc: 'Current funding round' },
+            ]).map(field => {
+              const required = step.required_enrichment_fields || [];
+              const isChecked = required.includes(field.id);
+              return (
+                <label key={field.id} className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg border cursor-pointer transition-colors ${
+                  isChecked ? 'border-amber-200 bg-amber-50/50' : 'border-gray-200 bg-white hover:border-gray-300'
+                }`}>
+                  <input
+                    type="checkbox"
+                    checked={isChecked}
+                    onChange={e => {
+                      const updated = e.target.checked
+                        ? [...required, field.id]
+                        : required.filter((f: string) => f !== field.id);
+                      updateStep(step.id, { required_enrichment_fields: updated.length ? updated : undefined });
+                    }}
+                    className="rounded border-gray-300 text-amber-600 focus:ring-amber-500"
+                  />
+                  <div>
+                    <span className="text-[11px] text-gray-700">{field.label}</span>
+                    <span className="text-[10px] text-gray-400 block">{field.desc}</span>
+                  </div>
+                </label>
+              );
+            })}
+          </div>
+          {(step.required_enrichment_fields?.length ?? 0) > 0 && (
+            <button
+              onClick={() => updateStep(step.id, { required_enrichment_fields: undefined })}
+              className="text-[10px] text-red-500 hover:text-red-600 mt-1.5"
+            >Clear all requirements</button>
+          )}
+        </div>
+
+        {/* Data confidence explainer */}
+        <div className="flex items-start gap-1.5 px-2.5 py-1.5 bg-emerald-50 border border-emerald-100 rounded-lg">
+          <Info className="w-3 h-3 text-emerald-400 mt-0.5 flex-shrink-0" />
+          <p className="text-[10px] text-emerald-700 leading-relaxed">
+            Data confidence grades (A–F) are computed from: source count (6pts each, max 30), field completeness (0–25), source corroboration — fields confirmed by 2+ sources (5pts each, max 25), domain validation (0–10), and enrichment-vs-inference ratio (0–10).
+          </p>
+        </div>
+      </div>
 
       {dataSources.length > 0 && (
         <div>
@@ -1154,6 +1250,9 @@ function ScoreConfig({ step, updateStep, orgICP }: {
         )}
       </div>
 
+      {/* Composite formula */}
+      <CompositeFormulaControl step={step} updateStep={updateStep} />
+
       {/* Score threshold + confidence */}
       <div className="grid grid-cols-2 gap-3">
         <NumberInput label="Min score to pass to brief" value={step.min_score_threshold} onChange={v => updateStep(step.id, { min_score_threshold: v })} placeholder="e.g. 50" />
@@ -1177,6 +1276,9 @@ function ScoreConfig({ step, updateStep, orgICP }: {
           Scores auto-adjust confidence based on data quality: candidates with zero enrichment sources are capped at "low" confidence, and candidates with only one source are capped at "medium".
         </p>
       </div>
+
+      {/* Scoring rules reference */}
+      <ScoringRulesReference />
 
       {/* ICP overrides */}
       <InheritableField
@@ -1720,6 +1822,283 @@ function OrgReadOnlyField({ label, values, colorClass }: { label: string; values
           <span key={v} className={`text-xs px-2 py-0.5 rounded-md ${colorClass}`}>{v}</span>
         ))}
       </div>
+    </div>
+  );
+}
+
+// ── Source Strategy Explainer ───────────────────────────────────
+
+function SourceStrategyExplainer({ strategy }: { strategy: string }) {
+  const explanations: Record<string, { flow: string; tradeoff: string; color: string }> = {
+    open: {
+      flow: 'AI generates company candidates from its training data. No external queries. Fastest and cheapest, but limited to pre-training knowledge — won\'t find recently-funded startups or breaking news.',
+      tradeoff: 'Speed: fast | Freshness: low | Cost: minimal',
+      color: 'bg-gray-50 border-gray-200 text-gray-600',
+    },
+    search_augmented: {
+      flow: 'AI formulates targeted search queries based on your ICP, retrieves real web results, then analyzes and synthesizes findings into candidate companies. Balances breadth and freshness.',
+      tradeoff: 'Speed: moderate | Freshness: high | Cost: search API + AI tokens',
+      color: 'bg-blue-50 border-blue-200 text-blue-700',
+    },
+    guided: {
+      flow: 'AI starts by researching your listed sources (e.g. Crunchbase lists, G2 categories, industry reports), then expands to related companies. Good for seeding with known high-quality sources.',
+      tradeoff: 'Speed: moderate | Freshness: medium | Cost: AI tokens',
+      color: 'bg-indigo-50 border-indigo-200 text-indigo-700',
+    },
+    restricted: {
+      flow: 'AI only extracts candidates from sources you provide. Won\'t explore beyond your list. Use when you have a curated prospect list and want AI to qualify/research each entry.',
+      tradeoff: 'Speed: fast | Freshness: depends on sources | Cost: AI tokens only',
+      color: 'bg-purple-50 border-purple-200 text-purple-700',
+    },
+  };
+
+  const ex = explanations[strategy];
+  if (!ex) return null;
+
+  return (
+    <div className={`mt-2 px-2.5 py-2 border rounded-lg ${ex.color}`}>
+      <p className="text-[10px] leading-relaxed">{ex.flow}</p>
+      <p className="text-[10px] font-medium mt-1 opacity-75">{ex.tradeoff}</p>
+    </div>
+  );
+}
+
+// ── Composite Formula Control ──────────────────────────────────
+
+function CompositeFormulaControl({ step, updateStep }: {
+  step: FunnelStepConfig;
+  updateStep: (id: string, u: Partial<FunnelStepConfig>) => void;
+}) {
+  const icpWeight = step.composite_weights?.icp_fit ?? 60;
+  const timingWeight = step.composite_weights?.timing ?? 40;
+
+  const setWeights = (icp: number) => {
+    const t = 100 - icp;
+    if (icp === 60 && t === 40) {
+      updateStep(step.id, { composite_weights: undefined });
+    } else {
+      updateStep(step.id, { composite_weights: { icp_fit: icp, timing: t } });
+    }
+  };
+
+  return (
+    <div>
+      <label className="text-xs font-medium text-gray-700 mb-1.5 block">Composite score formula</label>
+      <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 space-y-2.5">
+        <div className="flex items-center gap-3 text-xs">
+          <span className="font-mono text-gray-500">fit_score =</span>
+          <span className="font-mono text-sky-700">ICP Fit × {icpWeight}%</span>
+          <span className="text-gray-400">+</span>
+          <span className="font-mono text-amber-700">Timing × {timingWeight}%</span>
+        </div>
+        <div className="flex items-center gap-3">
+          <span className="text-[10px] text-sky-600 w-12 text-right">ICP {icpWeight}%</span>
+          <input
+            type="range"
+            min={10}
+            max={90}
+            step={5}
+            value={icpWeight}
+            onChange={e => setWeights(parseInt(e.target.value))}
+            className="flex-1 h-1.5 bg-gradient-to-r from-sky-200 to-amber-200 rounded-lg appearance-none cursor-pointer accent-gray-600"
+          />
+          <span className="text-[10px] text-amber-600 w-16">Timing {timingWeight}%</span>
+        </div>
+        {step.composite_weights && (
+          <button onClick={() => updateStep(step.id, { composite_weights: undefined })} className="text-[10px] text-red-500 hover:text-red-600">
+            Reset to default (60/40)
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Scoring Rules Reference ────────────────────────────────────
+
+function ScoringRulesReference() {
+  const [expanded, setExpanded] = useState(false);
+
+  const dimensions = [
+    {
+      name: 'ICP Fit',
+      range: '0–100',
+      color: 'text-sky-700 bg-sky-50 border-sky-200',
+      sections: [
+        { label: 'Segment & Scale (0–25)', rules: [
+          { condition: 'Employee count confirmed in ICP range', pts: '20' },
+          { condition: 'Employee count in range, unconfirmed', pts: '12' },
+          { condition: 'Employee count unknown', pts: '3' },
+          { condition: 'Engineering team evidence', pts: '+3' },
+          { condition: 'Contractor usage evidence', pts: '+2' },
+        ]},
+        { label: 'Remote Access Pain (0–20)', rules: [
+          { condition: 'Remote workforce confirmed + BYOD/BYOC', pts: '20' },
+          { condition: 'Remote workforce confirmed, no BYOD', pts: '14' },
+          { condition: 'Remote workforce inferred', pts: '8' },
+          { condition: 'Multi-office (3+ offices)', pts: '+4' },
+          { condition: 'Developer experience initiative', pts: '+3' },
+        ]},
+        { label: 'Displacement Wedge (0–20)', rules: [
+          { condition: 'VPN product confirmed', pts: '20' },
+          { condition: 'Competitor product confirmed', pts: '16' },
+          { condition: 'VPN product inferred', pts: '14' },
+          { condition: 'Competitor product inferred', pts: '10' },
+          { condition: '2+ legacy solution indicators', pts: '8' },
+        ]},
+        { label: 'Vertical Match (0–15)', rules: [
+          { condition: 'Exact match + strong success similarity', pts: '15' },
+          { condition: 'Exact vertical match', pts: '12' },
+          { condition: 'Adjacent vertical', pts: '8' },
+          { condition: 'Tangential vertical', pts: '4' },
+        ]},
+        { label: 'Buyer Access (0–10)', rules: [
+          { condition: 'Champion with LinkedIn', pts: '10' },
+          { condition: 'Champion without LinkedIn', pts: '7' },
+          { condition: 'Security/IT org visible', pts: '5' },
+        ]},
+      ],
+    },
+    {
+      name: 'Timing',
+      range: '0–100',
+      color: 'text-amber-700 bg-amber-50 border-amber-200',
+      sections: [
+        { label: 'Active Evaluation (0–30)', rules: [
+          { condition: 'Active evaluation confirmed', pts: '30' },
+          { condition: 'Active evaluation inferred', pts: '15' },
+        ]},
+        { label: 'Recent Triggers (0–25)', rules: [
+          { condition: 'Recent funding event', pts: '15–25' },
+          { condition: 'Recent leadership change', pts: '10–15' },
+          { condition: 'Compliance signal', pts: '10' },
+        ]},
+        { label: 'Hiring Signals (0–20)', rules: [
+          { condition: 'VPN/ZTNA hiring, recent', pts: '15–20' },
+          { condition: 'Generic IT hiring, recent', pts: '5–10' },
+          { condition: 'Aged or unknown hiring', pts: '3' },
+        ]},
+        { label: 'Compound Growth (0–15)', rules: [
+          { condition: '3+ signal categories (recent)', pts: '15' },
+          { condition: '2 signal categories', pts: '8' },
+          { condition: '1 signal category', pts: '3' },
+        ]},
+        { label: 'Recency Modifier (0–10)', rules: [
+          { condition: '>50% signals are recent', pts: '10' },
+          { condition: '25–50% recent', pts: '5' },
+        ]},
+      ],
+    },
+    {
+      name: 'Data Confidence',
+      range: 'A–F',
+      color: 'text-emerald-700 bg-emerald-50 border-emerald-200',
+      sections: [
+        { label: 'Grade Scale', rules: [
+          { condition: 'Source count (6pts each)', pts: '0–30' },
+          { condition: 'Field completeness', pts: '0–25' },
+          { condition: 'Source corroboration (5pts per field)', pts: '0–25' },
+          { condition: 'Domain validation', pts: '0–10' },
+          { condition: 'Signal-to-inference ratio', pts: '0–10' },
+        ]},
+        { label: 'Grades', rules: [
+          { condition: 'A: 80+, B: 65+, C: 45+, D: 25+, F: <25', pts: '' },
+        ]},
+      ],
+    },
+    {
+      name: 'Reachability',
+      range: '0–100',
+      color: 'text-violet-700 bg-violet-50 border-violet-200',
+      sections: [
+        { label: 'Contact scoring', rules: [
+          { condition: 'Champion with LinkedIn (max 30)', pts: '30' },
+          { condition: 'Economic buyer with LinkedIn (max 20)', pts: '20' },
+          { condition: 'Other contacts with LinkedIn (max 20)', pts: '10 ea' },
+          { condition: 'Company LinkedIn/org visible', pts: '10' },
+          { condition: 'Email addresses (max 15)', pts: '5 ea' },
+        ]},
+      ],
+    },
+  ];
+
+  const starScale = [
+    { range: '85–100', stars: 5, label: 'Extremely High', color: 'text-emerald-600' },
+    { range: '70–84', stars: 4, label: 'High', color: 'text-blue-600' },
+    { range: '55–69', stars: 3, label: 'Medium', color: 'text-amber-600' },
+    { range: '35–54', stars: 2, label: 'Low', color: 'text-orange-600' },
+    { range: '<35', stars: 1, label: 'Very Low', color: 'text-red-600' },
+  ];
+
+  return (
+    <div className="border border-gray-200 rounded-lg overflow-hidden">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full flex items-center justify-between px-3 py-2 bg-gray-50 hover:bg-gray-100 transition-colors"
+      >
+        <div className="flex items-center gap-2">
+          <BarChart3 className="w-3.5 h-3.5 text-gray-500" />
+          <span className="text-xs font-medium text-gray-700">Deterministic scoring rules reference</span>
+        </div>
+        {expanded ? <ChevronUp className="w-3.5 h-3.5 text-gray-400" /> : <ChevronDown className="w-3.5 h-3.5 text-gray-400" />}
+      </button>
+
+      {expanded && (
+        <div className="px-3 py-3 space-y-4 border-t border-gray-100">
+          <div className="flex items-start gap-1.5 px-2.5 py-1.5 bg-blue-50 border border-blue-100 rounded-lg">
+            <Info className="w-3 h-3 text-blue-400 mt-0.5 flex-shrink-0" />
+            <p className="text-[10px] text-blue-600 leading-relaxed">
+              Scores are computed deterministically from extracted facts — same enrichment data always produces the same score. AI extracts structured facts; these rules compute all point values.
+            </p>
+          </div>
+
+          {dimensions.map(dim => (
+            <div key={dim.name} className={`border rounded-lg overflow-hidden ${dim.color.split(' ')[2]}`}>
+              <div className={`px-2.5 py-1.5 ${dim.color.split(' ')[1]}`}>
+                <span className={`text-xs font-semibold ${dim.color.split(' ')[0]}`}>{dim.name}</span>
+                <span className="text-[10px] text-gray-500 ml-2">({dim.range})</span>
+              </div>
+              <div className="px-2.5 py-2 space-y-2 bg-white">
+                {dim.sections.map(section => (
+                  <div key={section.label}>
+                    <p className="text-[10px] font-medium text-gray-600 mb-0.5">{section.label}</p>
+                    {section.rules.map((rule, i) => (
+                      <div key={i} className="flex items-center justify-between py-0.5">
+                        <span className="text-[10px] text-gray-500">{rule.condition}</span>
+                        {rule.pts && <span className="text-[10px] font-mono text-gray-700 ml-2">{rule.pts}</span>}
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+
+          {/* Star rating scale */}
+          <div className="border border-gray-200 rounded-lg overflow-hidden">
+            <div className="px-2.5 py-1.5 bg-gray-50">
+              <span className="text-xs font-semibold text-gray-700">Star rating scale</span>
+            </div>
+            <div className="px-2.5 py-2 bg-white">
+              {starScale.map(tier => (
+                <div key={tier.range} className="flex items-center gap-2 py-0.5">
+                  <span className="text-[10px] font-mono text-gray-500 w-12">{tier.range}</span>
+                  <span className="text-[10px]">{'★'.repeat(tier.stars)}{'☆'.repeat(5 - tier.stars)}</span>
+                  <span className={`text-[10px] font-medium ${tier.color}`}>{tier.label}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Model-knowledge gate */}
+          <div className="flex items-start gap-1.5 px-2.5 py-1.5 bg-amber-50 border border-amber-100 rounded-lg">
+            <Info className="w-3 h-3 text-amber-400 mt-0.5 flex-shrink-0" />
+            <p className="text-[10px] text-amber-700 leading-relaxed">
+              <span className="font-medium">Anti-hallucination gate:</span> When all timing signals come from AI model knowledge (no enrichment source), the entire timing dimension is capped at 25 points. This prevents inflated scores from unverifiable claims.
+            </p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

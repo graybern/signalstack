@@ -572,6 +572,51 @@ function initSchema(db: Database.Database) {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_leads_pipeline_stage ON leads(pipeline_stage)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_leads_updated_at ON leads(updated_at DESC)`);
 
+  // Precision scoring v2 — deterministic dimension columns
+  const leadColsV2 = db.prepare("PRAGMA table_info(leads)").all() as { name: string }[];
+  if (!leadColsV2.find(c => c.name === 'icp_fit_score')) {
+    db.exec("ALTER TABLE leads ADD COLUMN icp_fit_score INTEGER");
+  }
+  if (!leadColsV2.find(c => c.name === 'timing_score')) {
+    db.exec("ALTER TABLE leads ADD COLUMN timing_score INTEGER");
+  }
+  if (!leadColsV2.find(c => c.name === 'data_confidence')) {
+    db.exec("ALTER TABLE leads ADD COLUMN data_confidence TEXT");
+  }
+  if (!leadColsV2.find(c => c.name === 'data_confidence_score')) {
+    db.exec("ALTER TABLE leads ADD COLUMN data_confidence_score INTEGER");
+  }
+  if (!leadColsV2.find(c => c.name === 'reachability_score')) {
+    db.exec("ALTER TABLE leads ADD COLUMN reachability_score INTEGER");
+  }
+  if (!leadColsV2.find(c => c.name === 'research_completeness')) {
+    db.exec("ALTER TABLE leads ADD COLUMN research_completeness INTEGER");
+  }
+  if (!leadColsV2.find(c => c.name === 'signal_density')) {
+    db.exec("ALTER TABLE leads ADD COLUMN signal_density TEXT");
+  }
+  if (!leadColsV2.find(c => c.name === 'scoring_version')) {
+    db.exec("ALTER TABLE leads ADD COLUMN scoring_version INTEGER DEFAULT 1");
+  }
+  if (!leadColsV2.find(c => c.name === 'enrichment_metadata')) {
+    db.exec("ALTER TABLE leads ADD COLUMN enrichment_metadata TEXT");
+  }
+  if (!leadColsV2.find(c => c.name === 'employee_count_source')) {
+    db.exec("ALTER TABLE leads ADD COLUMN employee_count_source TEXT");
+  }
+  if (!leadColsV2.find(c => c.name === 'scoring_model')) {
+    db.exec("ALTER TABLE leads ADD COLUMN scoring_model TEXT");
+  }
+  if (!leadColsV2.find(c => c.name === 'scoring_icp_version')) {
+    db.exec("ALTER TABLE leads ADD COLUMN scoring_icp_version TEXT");
+  }
+  if (!leadColsV2.find(c => c.name === 'fact_sheet')) {
+    db.exec("ALTER TABLE leads ADD COLUMN fact_sheet TEXT");
+  }
+  if (!leadColsV2.find(c => c.name === 'scoring_verdict')) {
+    db.exec("ALTER TABLE leads ADD COLUMN scoring_verdict TEXT");
+  }
+
   // Run activity log — persistent log of AI thinking/reasoning during runs
   db.exec(`
     CREATE TABLE IF NOT EXISTS run_activity_log (

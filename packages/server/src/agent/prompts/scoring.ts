@@ -185,3 +185,114 @@ Return a JSON object with this exact structure:
 
 Return ONLY the JSON object, no other text.`;
 }
+
+export function getFactExtractionPrompt(icpConfig: ExtendedICPConfig): string {
+  const companyName = icpConfig.company_context?.company_name || 'the company';
+  const oneLiner = icpConfig.company_context?.one_liner || 'a B2B technology solution';
+  const competitors = icpConfig.competitors || [];
+  const verticals = icpConfig.verticals || [];
+  const productsToReplace = icpConfig.products_to_replace || [];
+  const successStories = icpConfig.success_stories || {};
+
+  return `You are a fact extraction analyst for ${companyName}, ${oneLiner}. Your job is to extract and classify structured facts from enrichment data about a prospect company.
+
+## CRITICAL RULES
+1. Do NOT assign scores or point values. Extract facts only.
+2. Classify every fact as one of:
+   - "confirmed" — directly evidenced by an enrichment source with a URL or document
+   - "inferred" — logically deduced from multiple signals but not directly stated
+   - "model_knowledge" — from your training data, not from the provided enrichment
+3. Be conservative: if unsure, mark it "model_knowledge".
+4. Do NOT fabricate facts. If information is absent, use null or empty arrays.
+5. For recency: "recent" = within 90 days, "aged" = older than 90 days, "unknown" = no date available.
+
+## ICP Context (for classifying vertical match and product relevance)
+- **Target Verticals:** ${verticals.join(', ') || 'Not specified'}
+- **Products to Replace:** ${productsToReplace.join(', ') || 'Legacy VPN solutions'}
+- **Competitors:** ${competitors.join(', ') || 'Not specified'}
+${Object.keys(successStories).length > 0 ? `- **Success Story Verticals:** ${Object.keys(successStories).join(', ')}\n` : ''}
+## Output Format
+Return a JSON object with this exact structure (FactSheet):
+\`\`\`json
+{
+  "industry": "string or null",
+  "sub_industry": "string or null",
+  "employee_count_confirmed": false,
+  "employee_count_range": "smb|mm|ent|unknown",
+  "engineering_team_evidence": false,
+  "contractor_usage_evidence": false,
+  "multi_office": false,
+  "office_count": null,
+
+  "remote_workforce_evidence": "confirmed|inferred|none",
+  "byod_byoc_evidence": false,
+  "developer_experience_initiative": false,
+
+  "vpn_products_detected": [{"product": "...", "confidence": "confirmed|inferred|model_knowledge", "source": "..."}],
+  "competitor_products_detected": [{"product": "...", "confidence": "confirmed|inferred|model_knowledge", "source": "..."}],
+  "legacy_solution_indicators": ["..."],
+
+  "vertical_match": "exact|adjacent|tangential|none",
+  "vertical_name": "string or null",
+  "success_story_similarity": "strong|moderate|weak|none",
+
+  "funding_events": [{"type": "...", "amount": "...", "date": "...", "recency": "recent|aged|unknown"}],
+  "hiring_signals": [{"role": "...", "keywords": ["..."], "date": "...", "recency": "recent|aged|unknown"}],
+  "leadership_changes": [{"title": "...", "date": "...", "recency": "recent|aged|unknown"}],
+  "compliance_signals": [{"regulation": "...", "evidence": "..."}],
+  "active_evaluation_evidence": [{"description": "...", "confidence": "confirmed|inferred|model_knowledge", "source": "..."}],
+
+  "named_contacts": [{"name": "...", "title": "...", "has_linkedin": false, "has_email": false, "role_fit": "champion|economic_buyer|technical|executive|unknown"}],
+  "security_team_visible": false,
+  "it_org_visible": false,
+
+  "facts_from_enrichment": 0,
+  "facts_from_model_knowledge": 0,
+  "fact_confidence": "high|medium|low"
+}
+\`\`\`
+
+Return ONLY the JSON object, no other text.`;
+}
+
+export function buildFactExtractionUserMessage(
+  candidate: { company_name: string; domain: string; segment: string; employee_count_estimate: number | null; hq_location: string | null; founded_year: number | null; funding_stage: string | null; total_funding: string | null; investors: string | null; signals: string[]; sources: string[]; notes: string; enrichment_source_count?: number; domain_validated?: boolean; linkedin_company_url?: string | null; key_people?: { name: string; title: string; linkedin_url?: string }[] },
+): string {
+  const enrichmentSourceCount = candidate.enrichment_source_count ?? 0;
+  const signalCount = candidate.signals.length;
+  const sourceCount = candidate.sources.length;
+
+  const keyPeopleSection = candidate.key_people?.length
+    ? `\n## Key People Found (${candidate.key_people.length})\n${candidate.key_people.map(p => `- **${p.name}** — ${p.title}${p.linkedin_url ? ` (LinkedIn: ${p.linkedin_url})` : ''}`).join('\n')}`
+    : '';
+
+  return `Extract structured facts from the following prospect data. Do NOT assign scores.
+
+## Company Information
+- **Company:** ${candidate.company_name}
+- **Domain:** ${candidate.domain}
+- **Segment:** ${candidate.segment}
+- **Employee Count (est.):** ${candidate.employee_count_estimate ?? 'Unknown'}
+- **HQ:** ${candidate.hq_location ?? 'Unknown'}
+- **Founded:** ${candidate.founded_year ?? 'Unknown'}
+- **Funding Stage:** ${candidate.funding_stage ?? 'Unknown'}
+- **Total Funding:** ${candidate.total_funding ?? 'Unknown'}
+- **Investors:** ${candidate.investors ?? 'Unknown'}
+- **LinkedIn:** ${candidate.linkedin_company_url ?? 'Not found'}
+- **Domain Validated:** ${candidate.domain_validated ? 'Yes (DNS + HTTP)' : 'No'}
+
+## Evidence Summary
+- **${signalCount} signal(s)** from **${sourceCount} source(s)**, enriched by **${enrichmentSourceCount} external data source(s)**
+
+## Signals (${signalCount})
+${candidate.signals.map(s => `- ${s}`).join('\n') || '- None identified'}
+
+## Sources (${sourceCount})
+${candidate.sources.map(s => `- ${s}`).join('\n') || '- None'}
+
+## Research Notes
+${candidate.notes}
+${keyPeopleSection}
+
+Classify every fact. Mark enrichment-sourced facts as "confirmed" or "inferred". Mark training-data facts as "model_knowledge". Be conservative.`;
+}

@@ -15,6 +15,7 @@ import type {
   EnrichmentSummary,
 } from './types.js';
 import type { ResearchCandidate } from '../researcher.js';
+import type { EnrichmentMetadata } from '../../types/index.js';
 import { WebSearchAdapter } from './adapters/webSearch.js';
 import { CrunchbaseAdapter } from './adapters/crunchbase.js';
 import { ApolloAdapter } from './adapters/apollo.js';
@@ -208,7 +209,10 @@ async function enrichSingleCandidate(
   sources: DataSourceConfig[],
   errors: EnrichmentSummary['errors']
 ): Promise<{ candidate: ResearchCandidate; wasEnriched: boolean; sourcesHit: number }> {
-  const enrichments: Partial<CompanyEnrichment>[] = [];
+  const enrichments: { sourceId: string; data: Partial<CompanyEnrichment> }[] = [];
+  const sourcesResponded: string[] = [];
+  const sourcesFailed: string[] = [];
+  const sourcesAvailable = sources.map(s => s.id);
   let discoveredLinkedinUrl = candidate.linkedin_company_url || '';
 
   for (const sourceConfig of sources) {
@@ -226,27 +230,110 @@ async function enrichSingleCandidate(
         sourceConfig
       );
       if (Object.keys(enrichment).length > 0) {
-        enrichments.push(enrichment);
+        enrichments.push({ sourceId: sourceConfig.id, data: enrichment });
+        sourcesResponded.push(sourceConfig.id);
         if (enrichment.linkedin_url && !discoveredLinkedinUrl) {
           discoveredLinkedinUrl = enrichment.linkedin_url;
         }
+      } else {
+        sourcesResponded.push(sourceConfig.id);
       }
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
       errors.push({ source: sourceConfig.id, error: errorMsg });
+      sourcesFailed.push(sourceConfig.id);
     }
   }
 
   if (enrichments.length === 0) {
-    return { candidate: { ...candidate, enrichment_source_count: candidate.enrichment_source_count || 0 }, wasEnriched: false, sourcesHit: 0 };
+    const emptyMeta = buildEnrichmentMetadata([], sourcesResponded, sourcesFailed, sourcesAvailable, {} as CompanyEnrichment);
+    return {
+      candidate: { ...candidate, enrichment_source_count: candidate.enrichment_source_count || 0, enrichment_metadata: mergeMetadata(candidate.enrichment_metadata, emptyMeta) },
+      wasEnriched: false, sourcesHit: 0,
+    };
   }
 
-  // Merge enrichments into candidate
-  const merged = mergeEnrichments(enrichments);
+  const merged = mergeEnrichments(enrichments.map(e => e.data));
+  const metadata = buildEnrichmentMetadata(enrichments, sourcesResponded, sourcesFailed, sourcesAvailable, merged);
   const enrichedCandidate = applyCandidateEnrichment(candidate, merged);
   enrichedCandidate.enrichment_source_count = (candidate.enrichment_source_count || 0) + enrichments.length;
+  enrichedCandidate.enrichment_metadata = mergeMetadata(candidate.enrichment_metadata, metadata);
 
   return { candidate: enrichedCandidate, wasEnriched: true, sourcesHit: enrichments.length };
+}
+
+const TRACKED_FIELDS = ['employee_count', 'hq_location', 'founded_year', 'funding_stage', 'website', 'linkedin_url'] as const;
+
+function countCorroboration(fieldSources: Record<string, string[]>): number {
+  return Object.values(fieldSources).filter(s => s.length >= 2).length;
+}
+
+function buildEnrichmentMetadata(
+  enrichments: { sourceId: string; data: Partial<CompanyEnrichment> }[],
+  sourcesResponded: string[],
+  sourcesFailed: string[],
+  sourcesAvailable: string[],
+  merged: CompanyEnrichment,
+): EnrichmentMetadata {
+  const field_completeness = {
+    employee_count: !!merged.employee_count,
+    hq_location: !!merged.hq_location,
+    founded_year: !!merged.founded_year,
+    funding_stage: !!merged.funding_stage,
+    website: !!merged.website,
+    linkedin_url: !!merged.linkedin_url,
+  };
+
+  const field_sources: Record<string, string[]> = {};
+  for (const field of TRACKED_FIELDS) {
+    const contributing: string[] = [];
+    for (const e of enrichments) {
+      const val = (e.data as any)[field];
+      if (val != null && val !== '' && val !== 0) {
+        contributing.push(e.sourceId);
+      }
+    }
+    if (contributing.length > 0) {
+      field_sources[field] = contributing;
+    }
+  }
+
+  return {
+    sources_responded: sourcesResponded,
+    sources_failed: sourcesFailed,
+    sources_available: sourcesAvailable,
+    field_completeness,
+    field_sources,
+    corroboration_count: countCorroboration(field_sources),
+  };
+}
+
+function mergeMetadata(existing: EnrichmentMetadata | undefined, incoming: EnrichmentMetadata): EnrichmentMetadata {
+  if (!existing) return incoming;
+  const merged_responded = [...new Set([...existing.sources_responded, ...incoming.sources_responded])];
+  // Remove from failed any source that later succeeded
+  const merged_failed = [...new Set([...existing.sources_failed, ...incoming.sources_failed])]
+    .filter(s => !merged_responded.includes(s));
+  const merged_available = [...new Set([...existing.sources_available, ...incoming.sources_available])];
+
+  const merged_field_sources: Record<string, string[]> = { ...existing.field_sources };
+  for (const [field, sources] of Object.entries(incoming.field_sources)) {
+    merged_field_sources[field] = [...new Set([...(merged_field_sources[field] || []), ...sources])];
+  }
+
+  const merged_completeness = { ...existing.field_completeness };
+  for (const [k, v] of Object.entries(incoming.field_completeness) as [keyof typeof merged_completeness, boolean][]) {
+    if (v) merged_completeness[k] = true;
+  }
+
+  return {
+    sources_responded: merged_responded,
+    sources_failed: merged_failed,
+    sources_available: merged_available,
+    field_completeness: merged_completeness,
+    field_sources: merged_field_sources,
+    corroboration_count: countCorroboration(merged_field_sources),
+  };
 }
 
 /**

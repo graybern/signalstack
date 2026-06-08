@@ -79,6 +79,20 @@ export interface Lead {
   source_citations: string | null;
   brief_markdown: string | null;
   created_at: string;
+  // Precision scoring v2 fields
+  icp_fit_score: number | null;
+  timing_score: number | null;
+  data_confidence: DataConfidenceGrade | null;
+  data_confidence_score: number | null;
+  reachability_score: number | null;
+  research_completeness: number | null;
+  signal_density: string | null;
+  scoring_version: number;
+  enrichment_metadata: string | null;
+  employee_count_source: string | null;
+  scoring_model: string | null;
+  scoring_icp_version: string | null;
+  fact_sheet: string | null;
 }
 
 export interface Persona {
@@ -223,6 +237,111 @@ export interface ScoreBreakdown {
   total: number;
 }
 
+// ── Precision Upgrade: Deterministic Scoring Engine ──────────────────
+
+export type FactConfidence = 'confirmed' | 'inferred' | 'model_knowledge';
+export type DataConfidenceGrade = 'A' | 'B' | 'C' | 'D' | 'F';
+export type SignalRecency = 'recent' | 'aged' | 'unknown';
+export type SignalCategory = 'tech' | 'hiring' | 'funding' | 'compliance' | 'competitive' | 'news' | 'leadership';
+
+export interface FactSheet {
+  industry: string | null;
+  sub_industry: string | null;
+  employee_count_confirmed: boolean;
+  employee_count_range: 'smb' | 'mm' | 'ent' | 'unknown';
+  engineering_team_evidence: boolean;
+  contractor_usage_evidence: boolean;
+  multi_office: boolean;
+  office_count: number | null;
+
+  remote_workforce_evidence: 'confirmed' | 'inferred' | 'none';
+  byod_byoc_evidence: boolean;
+  developer_experience_initiative: boolean;
+
+  vpn_products_detected: { product: string; confidence: FactConfidence; source: string }[];
+  competitor_products_detected: { product: string; confidence: FactConfidence; source: string }[];
+  legacy_solution_indicators: string[];
+
+  vertical_match: 'exact' | 'adjacent' | 'tangential' | 'none';
+  vertical_name: string | null;
+  success_story_similarity: 'strong' | 'moderate' | 'weak' | 'none';
+
+  funding_events: { type: string; amount?: string; date?: string; recency: SignalRecency }[];
+  hiring_signals: { role: string; keywords: string[]; date?: string; recency: SignalRecency }[];
+  leadership_changes: { title: string; date?: string; recency: SignalRecency }[];
+  compliance_signals: { regulation: string; evidence: string }[];
+  active_evaluation_evidence: { description: string; confidence: FactConfidence; source: string }[];
+
+  named_contacts: {
+    name: string;
+    title: string;
+    has_linkedin: boolean;
+    has_email: boolean;
+    role_fit: 'champion' | 'economic_buyer' | 'technical' | 'executive' | 'unknown';
+  }[];
+  security_team_visible: boolean;
+  it_org_visible: boolean;
+
+  facts_from_enrichment: number;
+  facts_from_model_knowledge: number;
+  fact_confidence: 'high' | 'medium' | 'low';
+}
+
+export interface SignalEntry {
+  category: SignalCategory;
+  description: string;
+  recency: SignalRecency;
+  source_type: 'enrichment' | 'model_knowledge';
+  source?: string;
+}
+
+export interface SignalDensity {
+  total: number;
+  by_category: Record<SignalCategory, number>;
+  recent_count: number;
+  aged_count: number;
+  model_knowledge_count: number;
+  entries: SignalEntry[];
+}
+
+export interface EnrichmentMetadata {
+  sources_responded: string[];
+  sources_failed: string[];
+  sources_available: string[];
+  field_completeness: {
+    employee_count: boolean;
+    hq_location: boolean;
+    founded_year: boolean;
+    funding_stage: boolean;
+    website: boolean;
+    linkedin_url: boolean;
+  };
+  field_sources: Record<string, string[]>;
+  corroboration_count: number;
+}
+
+export interface ScoringDimensions {
+  icp_fit: number;
+  timing: number;
+  data_confidence: DataConfidenceGrade;
+  data_confidence_score: number;
+  reachability: number;
+  research_completeness: number;
+  signal_density: SignalDensity;
+  verdict: string;
+}
+
+export interface DeterministicScoringResult {
+  fit_score: number;
+  fit_score_label: string;
+  confidence: 'low' | 'medium' | 'high';
+  score_breakdown: ScoreBreakdown;
+  dimensions: ScoringDimensions;
+  fact_sheet: FactSheet;
+  scoring_version: 2;
+  reasoning?: string;
+}
+
 export interface PainHypothesis {
   claim: string;
   why_it_matters: string;
@@ -284,6 +403,9 @@ export interface LeadBriefFull extends Lead {
   competitive_displacement_parsed: CompetitiveDisplacement | null;
   sources_parsed: SourceCitation[] | null;
   why_now_parsed: string[] | null;
+  dimensions_parsed: ScoringDimensions | null;
+  fact_sheet_parsed: FactSheet | null;
+  enrichment_metadata_parsed: EnrichmentMetadata | null;
 }
 
 export interface SearchPattern {
@@ -367,6 +489,7 @@ export interface FunnelStepConfig {
   geographic_focus?: string[];
   funding_stage_filter?: string[];
   recency_months?: number;
+  prefer_recent_signals?: boolean;      // Prioritize companies with recent activity (default true)
   verticals_override?: string[];
   use_org_verticals?: boolean;
   technology_categories?: string[];
@@ -387,6 +510,7 @@ export interface FunnelStepConfig {
   // ── Enrich levers ──
   min_enrichment_sources?: number;      // Require N enrichment sources to pass to score (default 1)
   skip_sources?: string[];              // Sources already run in light enrichment (internal use)
+  required_enrichment_fields?: string[]; // Fields that must be populated to pass (e.g. ['employee_count', 'website'])
 
   // ── Score levers ──
   scoring_weights?: {
@@ -397,6 +521,7 @@ export interface FunnelStepConfig {
     vertical_playbook?: number;
     buyer_access_readiness?: number;
   };
+  composite_weights?: { icp_fit: number; timing: number };  // default 60/40
   min_score_threshold?: number;
   icp_verticals_override?: string[];
   icp_tech_signals_override?: string[];

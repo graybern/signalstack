@@ -132,7 +132,7 @@ export async function generateBrief(
 
   const enrichmentSourceCount = candidate.enrichment_source_count ?? 0;
   const signalCount = candidate.signals.length;
-  const systemPrompt = getBriefPrompt(icpConfig, enrichmentSourceCount, signalCount, stepConfig?.tech_stack_categories, outreachTone);
+  const systemPrompt = getBriefPrompt(icpConfig, enrichmentSourceCount, signalCount, stepConfig?.tech_stack_categories, outreachTone, score.dimensions);
   const valueProps = icpConfig.company_context?.value_props || [];
   const differentiators = icpConfig.company_context?.differentiators || [];
 

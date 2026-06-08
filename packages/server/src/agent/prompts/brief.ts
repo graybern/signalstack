@@ -1,7 +1,7 @@
-import type { ExtendedICPConfig, TechStackCategory } from '../../types/index.js';
+import type { ExtendedICPConfig, TechStackCategory, ScoringDimensions } from '../../types/index.js';
 import { getDefaultTechStackCategories } from '../../config/icpDefaults.js';
 
-export function getBriefPrompt(icpConfig: ExtendedICPConfig, enrichmentSourceCount?: number, signalCount?: number, techCategories?: TechStackCategory[], outreachTone?: string): string {
+export function getBriefPrompt(icpConfig: ExtendedICPConfig, enrichmentSourceCount?: number, signalCount?: number, techCategories?: TechStackCategory[], outreachTone?: string, dimensions?: ScoringDimensions): string {
   const srcCount = enrichmentSourceCount ?? 0;
   const sigCount = signalCount ?? 0;
 
@@ -27,11 +27,37 @@ This candidate has moderate enrichment data (${srcCount} external source(s), ${s
 - **Gaps**: In the brief_markdown, include a "## Research Gaps" section listing what an AE should verify manually.\n`;
   } else {
     dataDepthGuidance = `\n## Data Depth: Thin
-This candidate has limited enrichment data (${srcCount} external source(s), ${sigCount} buying signals). Be conservative:
-- **Personas**: Generate generic role-based personas only. Do not fabricate specific names or detailed profiles. Set persona confidence to "low" for generic role assumptions.
-- **Pain Hypotheses**: Generate 2 hypotheses max. Set evidence_strength to "medium" or "low" — with this data depth, "high" is unlikely.
-- **Tech Stack**: Only include what's evidenced. Use "Unknown — needs discovery" for gaps rather than guessing.
-- **Gaps**: In the brief_markdown, include a prominent "## Research Gaps" section listing everything the AE needs to manually research before outreach. This is critical — the AE needs to know where the data is thin so they don't walk into a call unprepared.\n`;
+This candidate has limited enrichment data (${srcCount} external source(s), ${sigCount} buying signals). STRICT RULES:
+- **NO specific "Why Now" claims** without [N] source references. Every trigger must cite an enrichment source.
+- **NO named personas** — role-based only, confidence: "low"
+- **NO competitive displacement narratives** — use "Unknown — needs discovery"
+- **NO case study references or customer name-drops**
+- **MUST include a prominent "## Research Gaps" section FIRST** in the brief_markdown, listing everything the AE needs to research before outreach
+- **Pain Hypotheses**: Generate 2 max. evidence_strength MUST be "low". Frame as hypotheses, not assertions.
+- **Tech Stack**: Only include what's directly evidenced. Use "Unknown — needs discovery" for gaps.
+- **PROHIBITED language** (without a confirming source): "actively evaluating", "currently exploring", "planning to replace", "recently adopted", "known to use"
+- **REQUIRED language** for unconfirmed claims: "may be experiencing", "industry patterns suggest", "company profile is consistent with"\n`;
+  }
+
+  // ── FactSheet-Gated Content Rules ──
+  let factsheetGating = '';
+  if (dimensions) {
+    const gates: string[] = [];
+    if (dimensions.timing < 25) {
+      gates.push('- **TIMING GATE**: Timing score is below 25. You MUST NOT generate timing-based "Why Now" claims. If you include Why Now items, frame them as "Potential trigger (needs verification): ..." and limit to 1.');
+    }
+    if (dimensions.reachability < 20) {
+      gates.push('- **REACHABILITY GATE**: Reachability score is below 20. All personas MUST be marked as "generic — no contacts found". Do NOT fabricate names or LinkedIn URLs.');
+    }
+    if (dimensions.data_confidence === 'D' || dimensions.data_confidence === 'F') {
+      gates.push('- **DATA CONFIDENCE GATE**: Data confidence is ' + dimensions.data_confidence + '. The brief MUST lead with a "## Research Gaps" section before any analysis. Flag all claims as requiring verification.');
+    }
+    if (dimensions.icp_fit < 40) {
+      gates.push('- **FIT GATE**: ICP fit score is below 40. Shift tone to "exploratory" — frame this as a prospect worth monitoring, not ready for aggressive outreach. Use cautious language throughout.');
+    }
+    if (gates.length > 0) {
+      factsheetGating = `\n## Scoring Dimension Gates\nThe deterministic scoring engine has flagged the following constraints. These OVERRIDE any other instructions:\n${gates.join('\n')}\n`;
+    }
   }
 
   // Build buyer persona guidance from ICP config
@@ -75,8 +101,14 @@ All outreach messages, talking points, and outreach angles must follow these rul
     toneSection = `\n## Outreach Tone\nWrite all outreach messaging in a ${outreachTone} tone.\n`;
   }
 
+  const antiHallucination = `\n## Anti-Hallucination Rules (GLOBAL — apply to ALL data depths)
+1. **Source-gated Why Now**: Every "Why Now" reason MUST include a [N] source citation. Claims without a source MUST be prefixed with "[INFERRED]" and framed as a hypothesis, not an assertion.
+2. **No customer name-drops**: Do NOT reference specific customer names, case studies, or named deployments in outreach messages, talking points, or proof points. Reference patterns, outcomes, and categories instead (e.g., "organizations in the gaming vertical" not "Epic Games uses...").
+3. **No fabricated contacts**: If a person's name is not in the provided data (sources, key_people, research notes), do NOT invent one. Use role-based personas with name: null.
+4. **Confidence calibration**: "high" confidence requires a direct enrichment source. "medium" requires multiple corroborating signals. "low" for anything inferred from industry patterns or model knowledge.\n`;
+
   return `You are a senior B2B sales strategist for ${companyName}${productName !== companyName ? ` (${productName})` : ''}, ${oneLiner}. Your job is to generate a comprehensive lead brief that equips account executives with everything they need for effective outreach.
-${dataDepthGuidance}${personaGuidance}${productContextSection}${toneSection}
+${dataDepthGuidance}${factsheetGating}${antiHallucination}${personaGuidance}${productContextSection}${toneSection}
 ## Brief Structure
 
 Generate a full lead brief with the following sections:

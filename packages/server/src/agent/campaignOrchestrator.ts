@@ -2,7 +2,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { config } from '../config.js';
 import { createAIClient, getAIConfig, resolveModel } from '../config/vertexConfig.js';
 import { getDb } from '../db/schema.js';
-import { scoreCandidate } from './scorer.js';
+import { scoreCandidate, scoreCandidateDeterministic } from './scorer.js';
 import { generateBrief } from './briefWriter.js';
 import { auditBrief, aiAuditBrief } from './briefAuditor.js';
 import { getCampaignResearchPrompt } from './prompts/campaign.js';
@@ -519,8 +519,16 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
         fit_score, fit_score_label, confidence, why_now, score_breakdown,
         pain_hypotheses, tech_stack, competitive_displacement,
         outreach_strategy, source_citations, brief_markdown, signal_count,
-        pipeline_stage, candidate_data, lead_status, scorer_thinking, brief_thinking, linkedin_company_url, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+        pipeline_stage, candidate_data, lead_status, scorer_thinking, brief_thinking, linkedin_company_url,
+        icp_fit_score, timing_score, data_confidence, data_confidence_score,
+        reachability_score, research_completeness, signal_density, scoring_version,
+        enrichment_metadata, fact_sheet, scoring_model,
+        scoring_verdict, employee_count_source, scoring_icp_version,
+        created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+        ?, ?, ?,
+        datetime('now'), datetime('now'))
       ON CONFLICT(id) DO UPDATE SET
         segment = excluded.segment,
         hq_location = excluded.hq_location,
@@ -549,6 +557,20 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
         scorer_thinking = COALESCE(excluded.scorer_thinking, leads.scorer_thinking),
         brief_thinking = COALESCE(excluded.brief_thinking, leads.brief_thinking),
         linkedin_company_url = COALESCE(excluded.linkedin_company_url, leads.linkedin_company_url),
+        icp_fit_score = COALESCE(excluded.icp_fit_score, leads.icp_fit_score),
+        timing_score = COALESCE(excluded.timing_score, leads.timing_score),
+        data_confidence = COALESCE(excluded.data_confidence, leads.data_confidence),
+        data_confidence_score = COALESCE(excluded.data_confidence_score, leads.data_confidence_score),
+        reachability_score = COALESCE(excluded.reachability_score, leads.reachability_score),
+        research_completeness = COALESCE(excluded.research_completeness, leads.research_completeness),
+        signal_density = COALESCE(excluded.signal_density, leads.signal_density),
+        scoring_version = COALESCE(excluded.scoring_version, leads.scoring_version),
+        enrichment_metadata = COALESCE(excluded.enrichment_metadata, leads.enrichment_metadata),
+        fact_sheet = COALESCE(excluded.fact_sheet, leads.fact_sheet),
+        scoring_model = COALESCE(excluded.scoring_model, leads.scoring_model),
+        scoring_verdict = COALESCE(excluded.scoring_verdict, leads.scoring_verdict),
+        employee_count_source = COALESCE(excluded.employee_count_source, leads.employee_count_source),
+        scoring_icp_version = COALESCE(excluded.scoring_icp_version, leads.scoring_icp_version),
         updated_at = datetime('now')`
     );
 
@@ -559,7 +581,7 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
       return leadIdMap.get(companyName)!;
     }
 
-    function persistCandidates(stage: string, candidateList: ResearchCandidate[], scores?: Map<string, ScoringResult>, briefs?: Map<string, BriefResult>, thinkingMap?: Map<string, { scorer?: string; brief?: string }>) {
+    function persistCandidates(stage: string, candidateList: ResearchCandidate[], scores?: Map<string, ScoringResult>, briefs?: Map<string, BriefResult>, thinkingMap?: Map<string, { scorer?: string; brief?: string }>, scoringContext?: { model?: string; icpVersion?: string }) {
       const persistTx = db.transaction(() => {
         for (const c of candidateList) {
           const leadId = getLeadId(c.company_name);
@@ -597,7 +619,22 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
             leadStatus,
             thinking?.scorer || null,
             thinking?.brief || null,
-            c.linkedin_company_url || null
+            c.linkedin_company_url || null,
+            // v2 deterministic scoring dimensions
+            score?.dimensions?.icp_fit ?? null,
+            score?.dimensions?.timing ?? null,
+            score?.dimensions?.data_confidence ?? null,
+            score?.dimensions?.data_confidence_score ?? null,
+            score?.dimensions?.reachability ?? null,
+            score?.dimensions?.research_completeness ?? null,
+            score?.dimensions?.signal_density ? JSON.stringify(score.dimensions.signal_density) : null,
+            score?.scoring_version ?? null,
+            c.enrichment_metadata ? JSON.stringify(c.enrichment_metadata) : null,
+            score?.fact_sheet ? JSON.stringify(score.fact_sheet) : null,
+            scoringContext?.model || null,
+            score?.dimensions?.verdict || null,
+            c.employee_count_source || null,
+            scoringContext?.icpVersion || null,
           );
         }
       });
@@ -637,6 +674,9 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
           sources: candidateData.sources || [],
           notes: candidateData.notes || '',
           linkedin_company_url: l.linkedin_company_url || undefined,
+          enrichment_metadata: l.enrichment_metadata ? JSON.parse(l.enrichment_metadata) : undefined,
+          employee_count_source: l.employee_count_source || undefined,
+          previous_fact_sheet: l.fact_sheet ? JSON.parse(l.fact_sheet) : undefined,
         };
       }) as ResearchCandidate[];
 
@@ -1042,26 +1082,52 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
             }
           }
 
-          // ── Enrichment success gate ──
+          // ── Enrichment quality gates ──
           const minSources = step.min_enrichment_sources ?? 1;
+          const requiredFields = step.required_enrichment_fields;
+          const beforeGates = enrichedCandidates.length;
+          let droppedSources = 0;
+          let droppedFields = 0;
+
+          // Gate 1: minimum enrichment sources
           if (minSources > 0) {
-            const beforeGate = enrichedCandidates.length;
             candidates = enrichedCandidates.filter(c => {
               const count = c.enrichment_source_count || 0;
               if (count < minSources) {
                 logger.thinking('enrich', `Dropping ${c.company_name}: only ${count} enrichment sources (min: ${minSources})`);
+                droppedSources++;
                 return false;
               }
               return true;
             });
-            if (beforeGate !== candidates.length) {
-              logger.phaseComplete('enrich', `Enrichment gate: ${beforeGate - candidates.length} candidates dropped for insufficient data (${candidates.length} remaining)`);
-            } else {
-              logger.phaseComplete('enrich', `Enrichment complete — all ${candidates.length} candidates met data threshold`);
-            }
           } else {
             candidates = enrichedCandidates;
-            logger.phaseComplete('enrich', 'Enrichment complete');
+          }
+
+          // Gate 2: required fields
+          if (requiredFields?.length) {
+            candidates = candidates.filter(c => {
+              for (const field of requiredFields) {
+                const val = (c as any)[field] ?? (c as any)[`${field}_estimate`];
+                if (val == null || val === '') {
+                  logger.thinking('enrich', `Dropping ${c.company_name}: missing required field "${field}"`);
+                  droppedFields++;
+                  return false;
+                }
+              }
+              return true;
+            });
+          }
+
+          // Single consolidated completion log
+          const totalDropped = beforeGates - candidates.length;
+          if (totalDropped > 0) {
+            const parts: string[] = [];
+            if (droppedSources > 0) parts.push(`${droppedSources} insufficient sources`);
+            if (droppedFields > 0) parts.push(`${droppedFields} missing fields`);
+            logger.phaseComplete('enrich', `Enrichment gates: ${totalDropped} dropped (${parts.join(', ')}), ${candidates.length} remaining`);
+          } else {
+            logger.phaseComplete('enrich', `Enrichment complete — all ${candidates.length} candidates passed`);
           }
           if (targetLeadIds?.length) {
             for (const candidate of candidates) {
@@ -1136,20 +1202,26 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
             emitProgress('score', candidate.company_name);
             logger.thinking('score', `Scoring ${candidate.company_name} against ICP criteria...`);
             try {
-              const score = await scoreCandidate(candidate, icpConfig, stepModel, scoreTracker, step.prompt_instructions, step, { runId, campaignId, phase: 'score' }, feedbackCtx);
+              const score = await scoreCandidateDeterministic(candidate, icpConfig, stepModel, scoreTracker, step.prompt_instructions, step, { runId, campaignId, phase: 'score' }, candidate.enrichment_metadata, feedbackCtx, candidate.previous_fact_sheet);
               scoredCandidates.push({ candidate, score });
               if (score.reasoning) {
                 logger.thinking('score', `[${candidate.company_name}] ${score.reasoning.substring(0, 300)}${score.reasoning.length > 300 ? '...' : ''}`);
               }
-              logger.finding('score', candidate.company_name, `Score: ${score.fit_score}/100 — ${score.fit_score_label}`, {
+              const dims = score.dimensions;
+              const dimSummary = dims
+                ? ` | ICP:${dims.icp_fit} TIME:${dims.timing} DATA:${dims.data_confidence} REACH:${dims.reachability}`
+                : '';
+              logger.finding('score', candidate.company_name, `Score: ${score.fit_score}/100 — ${score.fit_score_label}${dimSummary}`, {
                 fit_score: score.fit_score,
                 label: score.fit_score_label,
                 confidence: score.confidence,
+                ...(dims ? { icp_fit: dims.icp_fit, timing: dims.timing, data_confidence: dims.data_confidence, reachability: dims.reachability } : {}),
               });
               persistCandidates('scored', [candidate],
                 new Map([[candidate.company_name, score]]),
                 undefined,
-                new Map([[candidate.company_name, { scorer: score.reasoning || undefined }]])
+                new Map([[candidate.company_name, { scorer: score.reasoning || undefined }]]),
+                { model: stepModel, icpVersion: campaign.updated_at || undefined }
               );
               if (targetLeadIds?.length) {
                 eventBus.emit('lead.stage_rerun', { lead_id: leadId, company_name: candidate.company_name, stage: 'score', status: 'completed', message: `Score: ${score.fit_score}/100 — ${score.fit_score_label}`, run_id: runId });
@@ -1192,7 +1264,7 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
           // Persist ALL scored candidates before filtering — so every score is saved
           const allScoreMap = new Map(scoredCandidates.map(sc => [sc.candidate.company_name, sc.score]));
           const scoreThinkingMap = new Map(scoredCandidates.map(sc => [sc.candidate.company_name, { scorer: sc.score.reasoning || undefined }]));
-          persistCandidates('scored', scoredCandidates.map(sc => sc.candidate), allScoreMap, undefined, scoreThinkingMap);
+          persistCandidates('scored', scoredCandidates.map(sc => sc.candidate), allScoreMap, undefined, scoreThinkingMap, { model: stepModel, icpVersion: campaign.updated_at || undefined });
           // Apply filters to select candidates for brief step
           if (step.min_score_threshold && !options?.skipScoreThreshold) {
             const before = scoredCandidates.length;
@@ -1284,7 +1356,8 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
               persistCandidates('briefed', [candidate],
                 new Map([[candidate.company_name, score]]),
                 new Map([[candidate.company_name, brief]]),
-                new Map([[candidate.company_name, { scorer: score.reasoning || undefined, brief: brief.thinking || undefined }]])
+                new Map([[candidate.company_name, { scorer: score.reasoning || undefined, brief: brief.thinking || undefined }]]),
+                { model: stepModel, icpVersion: campaign.updated_at || undefined }
               );
               if (targetLeadIds?.length) {
                 eventBus.emit('lead.stage_rerun', { lead_id: leadId, company_name: candidate.company_name, stage: 'brief', status: 'completed', message: `Brief ready — ${brief.personas?.length || 0} personas`, run_id: runId });
@@ -1306,7 +1379,7 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
           const briefScoreMap = new Map(briefResults.map(br => [br.candidate.company_name, br.score]));
           const briefMap = new Map(briefResults.map(br => [br.candidate.company_name, br.brief]));
           const briefThinkingMap = new Map(briefResults.map(br => [br.candidate.company_name, { scorer: br.score.reasoning || undefined, brief: br.brief.thinking || undefined }]));
-          persistCandidates('briefed', briefResults.map(br => br.candidate), briefScoreMap, briefMap, briefThinkingMap);
+          persistCandidates('briefed', briefResults.map(br => br.candidate), briefScoreMap, briefMap, briefThinkingMap, { model: stepModel, icpVersion: campaign.updated_at || undefined });
           break;
         }
 
@@ -1345,7 +1418,7 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
                 eventBus.emit('lead.stage_rerun', { lead_id: leadId, company_name: candidate.company_name, stage: 'score', status: 'processing', message: `Recovery: retrying score...`, run_id: runId });
               }
               try {
-                const score = await scoreCandidate(candidate, icpConfig, recoveryScoreModel, recoveryScoreTracker, scoreStep?.prompt_instructions, scoreStep, { runId, campaignId, phase: 'score' }, feedbackCtx);
+                const score = await scoreCandidateDeterministic(candidate, icpConfig, recoveryScoreModel, recoveryScoreTracker, scoreStep?.prompt_instructions, scoreStep, { runId, campaignId, phase: 'score' }, candidate.enrichment_metadata, feedbackCtx, candidate.previous_fact_sheet);
                 // Update the entry in scoredCandidates
                 const idx = scoredCandidates.findIndex(sc => sc.candidate.company_name === candidate.company_name);
                 if (idx !== -1) scoredCandidates[idx] = { candidate, score };
@@ -1435,7 +1508,7 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
               const briefScoreMap = new Map(briefResults.map(br => [br.candidate.company_name, br.score]));
               const briefMap = new Map(briefResults.map(br => [br.candidate.company_name, br.brief]));
               const briefThinkingMap = new Map(briefResults.map(br => [br.candidate.company_name, { scorer: br.score.reasoning || undefined, brief: br.brief.thinking || undefined }]));
-              persistCandidates('briefed', briefResults.map(br => br.candidate), briefScoreMap, briefMap, briefThinkingMap);
+              persistCandidates('briefed', briefResults.map(br => br.candidate), briefScoreMap, briefMap, briefThinkingMap, { model: stepModel, icpVersion: campaign.updated_at || undefined });
             }
 
             const stillFailed = totalRecoveryNeeded - recovered;

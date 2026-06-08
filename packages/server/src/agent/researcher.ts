@@ -4,6 +4,8 @@ import type { ICPConfigParsed, Exclusion } from '../types/index.js';
 import type { FeedbackPattern } from './prompts/research.js';
 import type { TokenTracker } from './tokenTracker.js';
 
+import type { EnrichmentMetadata } from '../types/index.js';
+
 export interface ResearchCandidate {
   company_name: string;
   domain: string;
@@ -21,6 +23,9 @@ export interface ResearchCandidate {
   domain_validated?: boolean;
   linkedin_company_url?: string;
   key_people?: { name: string; title: string; linkedin_url?: string }[];
+  enrichment_metadata?: EnrichmentMetadata;
+  employee_count_source?: string;
+  previous_fact_sheet?: any;
 }
 
 function extractJson(text: string): string {

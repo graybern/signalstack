@@ -15,6 +15,7 @@ interface StreamParams {
   system: string;
   userMessage: string;
   thinking_budget?: number;
+  temperature?: number;
   tracker?: TokenTracker;
   context?: StreamContext;
 }
@@ -47,6 +48,10 @@ export async function streamAICall(params: StreamParams): Promise<StreamResult> 
   }
 
   createParams.max_tokens = maxTokens;
+
+  if (params.temperature !== undefined) {
+    createParams.temperature = params.temperature;
+  }
 
   if (!ctx) {
     const response = await client.messages.create(createParams);

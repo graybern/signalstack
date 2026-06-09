@@ -617,6 +617,49 @@ function initSchema(db: Database.Database) {
     db.exec("ALTER TABLE leads ADD COLUMN scoring_verdict TEXT");
   }
 
+  // Composite v2 — 3-bucket scoring columns
+  const leadColsV2b = db.prepare("PRAGMA table_info(leads)").all() as { name: string }[];
+  if (!leadColsV2b.find(c => c.name === 'potential_score')) {
+    db.exec("ALTER TABLE leads ADD COLUMN potential_score INTEGER");
+  }
+  if (!leadColsV2b.find(c => c.name === 'urgency_score')) {
+    db.exec("ALTER TABLE leads ADD COLUMN urgency_score INTEGER");
+  }
+  if (!leadColsV2b.find(c => c.name === 'signal_quality_score')) {
+    db.exec("ALTER TABLE leads ADD COLUMN signal_quality_score INTEGER");
+  }
+  if (!leadColsV2b.find(c => c.name === 'evidence_modifier')) {
+    db.exec("ALTER TABLE leads ADD COLUMN evidence_modifier REAL");
+  }
+  if (!leadColsV2b.find(c => c.name === 'composite_version')) {
+    db.exec("ALTER TABLE leads ADD COLUMN composite_version INTEGER DEFAULT 1");
+  }
+
+  // Watch list — snooze/wake tracking for high-fit, low-intent leads
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS watch_items (
+      id              TEXT PRIMARY KEY,
+      lead_id         TEXT NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+      campaign_id     TEXT NOT NULL REFERENCES campaigns(id),
+      category        TEXT NOT NULL DEFAULT 'timing_watch'
+                      CHECK(category IN ('timing_watch','data_needs','nurture','manual')),
+      status          TEXT NOT NULL DEFAULT 'active'
+                      CHECK(status IN ('active','woken','dismissed','converted')),
+      snooze_until    TEXT NOT NULL,
+      rerun_on_wake   INTEGER NOT NULL DEFAULT 1,
+      notes           TEXT,
+      created_by      TEXT REFERENCES users(id),
+      score_snapshot  TEXT,
+      wake_delta      TEXT,
+      woken_at        TEXT,
+      created_at      TEXT DEFAULT (datetime('now')),
+      updated_at      TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_watch_items_lead ON watch_items(lead_id);
+    CREATE INDEX IF NOT EXISTS idx_watch_items_status ON watch_items(status, snooze_until);
+    CREATE INDEX IF NOT EXISTS idx_watch_items_campaign ON watch_items(campaign_id);
+  `);
+
   // Run activity log — persistent log of AI thinking/reasoning during runs
   db.exec(`
     CREATE TABLE IF NOT EXISTS run_activity_log (

@@ -16,6 +16,7 @@ import { Inbound } from './pages/Inbound';
 import { ActivityLog } from './pages/ActivityLog';
 import { QuickResearch } from './pages/QuickResearch';
 import { Customers } from './pages/Customers';
+import { WatchList } from './pages/WatchList';
 import React, { createContext, useContext, useState } from 'react';
 import { api } from './api/client';
 import { Zap, Lock } from 'lucide-react';
@@ -125,6 +126,7 @@ export default function App() {
             <Route path="campaigns/:id/edit" element={<CampaignCreate />} />
             <Route path="leads" element={<Leads />} />
             <Route path="leads/:id" element={<LeadDetail />} />
+            <Route path="watch-list" element={<WatchList />} />
             <Route path="runs" element={<RunHistory />} />
             <Route path="runs/:id" element={<RunDetail />} />
             <Route path="research" element={<QuickResearch />} />

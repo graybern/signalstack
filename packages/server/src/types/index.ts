@@ -328,6 +328,12 @@ export interface ScoringDimensions {
   reachability: number;
   research_completeness: number;
   signal_density: SignalDensity;
+  signal_quality: number;
+  potential_score: number;
+  urgency_score: number;
+  evidence_modifier: number;
+  watch_candidate: boolean;
+  watch_reason: string | null;
   verdict: string;
 }
 
@@ -521,7 +527,7 @@ export interface FunnelStepConfig {
     vertical_playbook?: number;
     buyer_access_readiness?: number;
   };
-  composite_weights?: { icp_fit: number; timing: number };  // default 60/40
+  composite_weights?: { icp_fit: number; timing: number } | { version: 2; potential: number; urgency: number };
   min_score_threshold?: number;
   icp_verticals_override?: string[];
   icp_tech_signals_override?: string[];

@@ -524,10 +524,12 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
         reachability_score, research_completeness, signal_density, scoring_version,
         enrichment_metadata, fact_sheet, scoring_model,
         scoring_verdict, employee_count_source, scoring_icp_version,
+        potential_score, urgency_score, signal_quality_score, evidence_modifier, composite_version,
         created_at, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?,
+        ?, ?, ?, ?, ?,
         datetime('now'), datetime('now'))
       ON CONFLICT(id) DO UPDATE SET
         segment = excluded.segment,
@@ -571,6 +573,11 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
         scoring_verdict = COALESCE(excluded.scoring_verdict, leads.scoring_verdict),
         employee_count_source = COALESCE(excluded.employee_count_source, leads.employee_count_source),
         scoring_icp_version = COALESCE(excluded.scoring_icp_version, leads.scoring_icp_version),
+        potential_score = COALESCE(excluded.potential_score, leads.potential_score),
+        urgency_score = COALESCE(excluded.urgency_score, leads.urgency_score),
+        signal_quality_score = COALESCE(excluded.signal_quality_score, leads.signal_quality_score),
+        evidence_modifier = COALESCE(excluded.evidence_modifier, leads.evidence_modifier),
+        composite_version = COALESCE(excluded.composite_version, leads.composite_version),
         updated_at = datetime('now')`
     );
 
@@ -635,6 +642,11 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
             score?.dimensions?.verdict || null,
             c.employee_count_source || null,
             scoringContext?.icpVersion || null,
+            score?.dimensions?.potential_score ?? null,
+            score?.dimensions?.urgency_score ?? null,
+            score?.dimensions?.signal_quality ?? null,
+            score?.dimensions?.evidence_modifier ?? null,
+            score?.scoring_version === 2 ? 2 : null,
           );
         }
       });

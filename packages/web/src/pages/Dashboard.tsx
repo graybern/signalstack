@@ -32,6 +32,7 @@ import {
   X,
   ChevronDown,
   ChevronUp,
+  Eye,
 } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
@@ -178,6 +179,7 @@ export function Dashboard() {
   const [sourceData, setSourceData] = useState<SourceData | null>(null);
   const [verticals, setVerticals] = useState<VerticalData[]>([]);
   const [upcomingRuns, setUpcomingRuns] = useState<UpcomingRun[]>([]);
+  const [watchStats, setWatchStats] = useState<{ total_watching: number; waking_today: number; waking_this_week: number } | null>(null);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [recError, setRecError] = useState<string | null>(null);
@@ -200,8 +202,9 @@ export function Dashboard() {
       api('/analytics/sources').catch(() => null),
       api('/analytics/verticals').catch(() => ({ verticals: [] })),
       api('/runs/upcoming').catch(() => []),
+      api('/watchlist/stats').catch(() => null),
     ])
-      .then(([ov, rn, tr, sg, fb, rc, src, vt, upcoming]) => {
+      .then(([ov, rn, tr, sg, fb, rc, src, vt, upcoming, ws]) => {
         setOverview(ov);
         setRuns(Array.isArray(rn) ? rn : (rn?.runs || []));
         setTrends(tr.leads_by_day || []);
@@ -211,6 +214,7 @@ export function Dashboard() {
         setSourceData(src);
         setVerticals(vt?.verticals || []);
         setUpcomingRuns((Array.isArray(upcoming) ? upcoming : []).slice(0, 3));
+        setWatchStats(ws);
       })
       .catch(err => setError(err.message))
       .finally(() => setLoading(false));
@@ -300,14 +304,31 @@ export function Dashboard() {
 
       {/* ═══ Section 1: Overview Stats — full width, prominent ═══ */}
       {overview && (
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3">
           <OverviewStat icon={<Users className="w-5 h-5 text-brand-600" />} label="Total Leads" value={overview.total_leads} accent="brand" to="/leads" />
           <OverviewStat icon={<Target className="w-5 h-5 text-indigo-600" />} label="Campaigns" value={overview.active_campaigns} accent="indigo" to="/campaigns" />
           <OverviewStat icon={<TrendingUp className="w-5 h-5 text-emerald-600" />} label="Avg Score" value={overview.avg_score ?? '—'} accent="emerald" to="/leads" />
           <OverviewStat icon={<Play className="w-5 h-5 text-blue-600" />} label="Total Runs" value={overview.total_runs} accent="blue" to="/runs" />
           <OverviewStat icon={<CheckCircle2 className="w-5 h-5 text-green-600" />} label="Success Rate" value={`${overview.success_rate}%`} accent="green" to="/runs" />
           <OverviewStat icon={<BarChart3 className="w-5 h-5 text-amber-600" />} label="Feedback Rate" value={`${overview.feedback_rate}%`} accent="amber" to="/leads" />
+          {watchStats && (
+            <OverviewStat icon={<Eye className="w-5 h-5 text-purple-600" />} label="Watching" value={watchStats.total_watching} accent="purple" to="/watch-list" />
+          )}
         </div>
+      )}
+
+      {/* Watch list waking banner */}
+      {watchStats && watchStats.waking_today > 0 && (
+        <Link to="/watch-list" className="flex items-center gap-3 px-4 py-3 bg-red-50 border border-red-200 rounded-xl hover:bg-red-100 transition-colors">
+          <span className="relative flex h-2.5 w-2.5 shrink-0">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
+            <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500" />
+          </span>
+          <span className="text-sm font-medium text-red-700">
+            {watchStats.waking_today} lead{watchStats.waking_today !== 1 ? 's' : ''} waking today
+          </span>
+          <span className="text-xs text-red-500 ml-auto">View watch list &rarr;</span>
+        </Link>
       )}
 
       {/* ═══ Section 2: Operations — Active, Recent, Upcoming ═══ */}
@@ -683,6 +704,7 @@ const ACCENT_STYLES: Record<string, string> = {
   blue: 'border-blue-100 bg-blue-50/40',
   green: 'border-green-100 bg-green-50/40',
   amber: 'border-amber-100 bg-amber-50/40',
+  purple: 'border-purple-100 bg-purple-50/40',
 };
 
 function OverviewStat({ icon, label, value, accent, to }: { icon: React.ReactNode; label: string; value: string | number; accent: string; to?: string }) {

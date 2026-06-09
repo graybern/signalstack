@@ -265,6 +265,8 @@ export function computeIcpFit(fs: FactSheet, icpConfig: ExtendedICPConfig): numb
     score += 10;
   } else if (fs.legacy_solution_indicators.length >= 2) {
     score += 8;
+  } else if (fs.multi_office && (fs.office_count ?? 0) >= 3) {
+    score += 8;
   }
 
   // Vertical Match (0-15)
@@ -288,7 +290,6 @@ export function computeIcpFit(fs: FactSheet, icpConfig: ExtendedICPConfig): numb
     score += 5;
   }
 
-  // Penalties from ICP disqualifiers — only applied when prospect data matches
   const disqualifiers = icpConfig.disqualifiers || [];
   const prospectText = [
     fs.industry, fs.sub_industry, fs.vertical_name,
@@ -296,11 +297,13 @@ export function computeIcpFit(fs: FactSheet, icpConfig: ExtendedICPConfig): numb
     ...fs.vpn_products_detected.map(v => v.product),
     ...fs.competitor_products_detected.map(c => c.product),
   ].filter(Boolean).join(' ').toLowerCase();
+  let penaltyTotal = 0;
   for (const dq of disqualifiers) {
     if (prospectText.includes(dq.signal.toLowerCase())) {
-      score -= dq.severity === 'hard' ? 20 : 5;
+      penaltyTotal += dq.severity === 'hard' ? 20 : 5;
     }
   }
+  score -= Math.min(penaltyTotal, 30);
 
   return clamp(score, 0, 100);
 }
@@ -363,10 +366,9 @@ export function computeTiming(fs: FactSheet): number {
     else if (recentPct >= 0.25) score += 5;
   }
 
-  // Model-knowledge gate: cap contribution from model_knowledge signals at 25%
   const modelKnowledgeEval = fs.active_evaluation_evidence.filter(e => e.confidence === 'model_knowledge');
   if (modelKnowledgeEval.length > 0 && confirmedEval.length === 0 && inferredEval.length === 0) {
-    score = Math.min(score, 25);
+    score = Math.round(score * 0.4);
   }
 
   return clamp(score, 0, 100);
@@ -480,6 +482,47 @@ export function computeSignalDensity(fs: FactSheet): SignalDensity {
   };
 }
 
+const SIGNAL_INTENT_WEIGHTS: Record<string, number> = {
+  vpn_detection: 15, competitor: 12, hiring_vpn: 10,
+  hiring_general: 5, compliance: 6, evaluation: 20,
+  funding: 5, leadership: 3, news: 2,
+};
+const CONFIDENCE_MULT: Record<string, number> = { confirmed: 1.0, inferred: 0.7, model_knowledge: 0.3 };
+const FRESHNESS_MULT: Record<string, number> = { recent: 1.0, aged: 0.5, unknown: 0.7 };
+
+export function computeSignalQuality(fs: FactSheet): number {
+  let total = 0;
+
+  for (const v of fs.vpn_products_detected) {
+    total += SIGNAL_INTENT_WEIGHTS.vpn_detection * (CONFIDENCE_MULT[v.confidence] ?? 0.3) * FRESHNESS_MULT.unknown;
+  }
+  for (const c of fs.competitor_products_detected) {
+    total += SIGNAL_INTENT_WEIGHTS.competitor * (CONFIDENCE_MULT[c.confidence] ?? 0.3) * FRESHNESS_MULT.unknown;
+  }
+  for (const e of fs.active_evaluation_evidence) {
+    total += SIGNAL_INTENT_WEIGHTS.evaluation * (CONFIDENCE_MULT[e.confidence] ?? 0.3) * FRESHNESS_MULT.recent;
+  }
+
+  const vpnKeywords = ['vpn', 'ztna', 'zero trust', 'network access', 'remote access', 'sase'];
+  for (const h of fs.hiring_signals) {
+    const isVpn = h.keywords.some(k => vpnKeywords.some(vk => k.toLowerCase().includes(vk)));
+    const weight = isVpn ? SIGNAL_INTENT_WEIGHTS.hiring_vpn : SIGNAL_INTENT_WEIGHTS.hiring_general;
+    total += weight * CONFIDENCE_MULT.inferred * (FRESHNESS_MULT[h.recency] ?? 0.7);
+  }
+
+  for (const f of fs.funding_events) {
+    total += SIGNAL_INTENT_WEIGHTS.funding * CONFIDENCE_MULT.confirmed * (FRESHNESS_MULT[f.recency] ?? 0.7);
+  }
+  for (const l of fs.leadership_changes) {
+    total += SIGNAL_INTENT_WEIGHTS.leadership * CONFIDENCE_MULT.confirmed * (FRESHNESS_MULT[l.recency] ?? 0.7);
+  }
+  for (const _c of fs.compliance_signals) {
+    total += SIGNAL_INTENT_WEIGHTS.compliance * CONFIDENCE_MULT.inferred * FRESHNESS_MULT.unknown;
+  }
+
+  return clamp(Math.round(total), 0, 100);
+}
+
 export function generateVerdict(dims: ScoringDimensions): string {
   const parts: string[] = [];
 
@@ -487,13 +530,15 @@ export function generateVerdict(dims: ScoringDimensions): string {
   else if (dims.icp_fit >= 50) parts.push('Moderate ICP fit');
   else parts.push('Weak ICP fit');
 
-  if (dims.timing >= 60) parts.push('active buying signals');
+  if (dims.signal_quality >= 60) parts.push('strong buying signals');
+  else if (dims.timing >= 60) parts.push('active buying signals');
   else if (dims.timing >= 30) parts.push('limited timing signals');
   else parts.push('no recent triggers');
 
   if (dims.data_confidence === 'D' || dims.data_confidence === 'F')
     parts.push('needs more research');
   if (dims.reachability < 30) parts.push('hard to reach');
+  if (dims.watch_candidate) parts.push('watch candidate');
 
   return parts.join(', ');
 }
@@ -509,23 +554,44 @@ export function computeAllDimensions(
   const reachability = computeReachability(fs, enrichMeta);
   const research_completeness = computeResearchCompleteness(enrichMeta);
   const signal_density = computeSignalDensity(fs);
+  const signal_quality = computeSignalQuality(fs);
 
-  const dims: ScoringDimensions = {
-    icp_fit,
-    timing,
-    data_confidence,
-    data_confidence_score,
-    reachability,
-    research_completeness,
-    signal_density,
-    verdict: '',
+  const partialDims = {
+    icp_fit, timing, data_confidence, data_confidence_score,
+    reachability, research_completeness, signal_density, signal_quality,
+    potential_score: 0, urgency_score: 0, evidence_modifier: 1, watch_candidate: false, watch_reason: null as string | null, verdict: '',
   };
-  dims.verdict = generateVerdict(dims);
-  return dims;
+  const composite = computeCompositeV2(partialDims);
+  partialDims.potential_score = composite.potential_score;
+  partialDims.urgency_score = composite.urgency_score;
+  partialDims.evidence_modifier = composite.evidence_modifier;
+  partialDims.watch_candidate = composite.potential_score >= 60 && composite.urgency_score < 35;
+  partialDims.watch_reason = partialDims.watch_candidate
+    ? `High fit (${composite.potential_score}) but low intent (${composite.urgency_score})`
+    : null;
+  partialDims.verdict = generateVerdict(partialDims);
+  return partialDims;
 }
 
 export function computeComposite(dims: ScoringDimensions, weightIcp = 60, weightTiming = 40): number {
   return clamp(Math.round(dims.icp_fit * (weightIcp / 100) + dims.timing * (weightTiming / 100)), 0, 100);
+}
+
+export function computeCompositeV2(
+  dims: ScoringDimensions,
+  weightPotential = 55,
+  weightUrgency = 45,
+): { fit_score: number; potential_score: number; urgency_score: number; evidence_modifier: number } {
+  const potential_score = Math.round(dims.icp_fit * 0.70 + dims.reachability * 0.20 + dims.data_confidence_score * 0.10);
+  const urgency_score = Math.round(dims.timing * 0.60 + dims.signal_quality * 0.40);
+  const evidence_modifier = 0.5 + (dims.research_completeness / 200);
+  const raw = (potential_score * (weightPotential / 100) + urgency_score * (weightUrgency / 100)) * evidence_modifier;
+  return {
+    fit_score: clamp(Math.round(raw), 0, 100),
+    potential_score: clamp(potential_score, 0, 100),
+    urgency_score: clamp(urgency_score, 0, 100),
+    evidence_modifier: Math.round(evidence_modifier * 1000) / 1000,
+  };
 }
 
 function dimensionsToLegacyBreakdown(dims: ScoringDimensions, fs: FactSheet): ScoreBreakdown {
@@ -545,6 +611,7 @@ function dimensionsToLegacyBreakdown(dims: ScoringDimensions, fs: FactSheet): Sc
         ...fs.hiring_signals.map(h => `Hiring: ${h.role} [${h.recency}]`),
         ...fs.leadership_changes.map(l => `Leadership: ${l.title} [${l.recency}]`),
         ...(fs.active_evaluation_evidence.length > 0 ? [`Active evaluation: ${fs.active_evaluation_evidence[0].description}`] : []),
+        `Signal quality: ${dims.signal_quality}/100`,
       ],
     },
     remote_access_pain: {
@@ -729,7 +796,10 @@ export async function scoreCandidateDeterministic(
 
     const dimensions = computeAllDimensions(factSheet, effectiveIcp, enrichmentMeta);
     const cw = stepConfig?.composite_weights;
-    const fitScore = computeComposite(dimensions, cw?.icp_fit ?? 60, cw?.timing ?? 40);
+    const isV2 = !cw || ('version' in cw && cw.version === 2);
+    const fitScore = isV2
+      ? computeCompositeV2(dimensions, (cw && 'potential' in cw) ? cw.potential : 55, (cw && 'urgency' in cw) ? cw.urgency : 45).fit_score
+      : computeComposite(dimensions, (cw && 'icp_fit' in cw) ? cw.icp_fit : 60, (cw && 'timing' in cw) ? cw.timing : 40);
     const label = scoreToLabel(fitScore);
     const breakdown = dimensionsToLegacyBreakdown(dimensions, factSheet);
     breakdown.total = fitScore;

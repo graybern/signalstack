@@ -57,7 +57,7 @@ interface FunnelStepConfig {
     vertical_playbook?: number;
     buyer_access_readiness?: number;
   };
-  composite_weights?: { icp_fit: number; timing: number };
+  composite_weights?: { icp_fit: number; timing: number } | { version: 2; potential: number; urgency: number };
   min_score_threshold?: number;
   icp_verticals_override?: string[];
   icp_tech_signals_override?: string[];
@@ -1869,10 +1869,16 @@ function CompositeFormulaControl({ step, updateStep }: {
   step: FunnelStepConfig;
   updateStep: (id: string, u: Partial<FunnelStepConfig>) => void;
 }) {
-  const icpWeight = step.composite_weights?.icp_fit ?? 60;
-  const timingWeight = step.composite_weights?.timing ?? 40;
+  const weights = step.composite_weights;
+  const isV2 = weights && 'version' in weights && weights.version === 2;
 
-  const setWeights = (icp: number) => {
+  const v1IcpWeight = (!weights || 'icp_fit' in weights) ? ((weights as any)?.icp_fit ?? 60) : 60;
+  const v1TimingWeight = (!weights || 'timing' in weights) ? ((weights as any)?.timing ?? 40) : 40;
+
+  const v2PotentialWeight = isV2 ? (weights as any).potential ?? 55 : 55;
+  const v2UrgencyWeight = isV2 ? (weights as any).urgency ?? 45 : 45;
+
+  const setV1Weights = (icp: number) => {
     const t = 100 - icp;
     if (icp === 60 && t === 40) {
       updateStep(step.id, { composite_weights: undefined });
@@ -1881,35 +1887,141 @@ function CompositeFormulaControl({ step, updateStep }: {
     }
   };
 
+  const setV2Weights = (pot: number) => {
+    const urg = 100 - pot;
+    updateStep(step.id, { composite_weights: { version: 2, potential: pot, urgency: urg } });
+  };
+
+  const toggleVersion = () => {
+    if (isV2) {
+      updateStep(step.id, { composite_weights: undefined });
+    } else {
+      updateStep(step.id, { composite_weights: { version: 2, potential: 55, urgency: 45 } });
+    }
+  };
+
   return (
     <div>
-      <label className="text-xs font-medium text-gray-700 mb-1.5 block">Composite score formula</label>
-      <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 space-y-2.5">
-        <div className="flex items-center gap-3 text-xs">
-          <span className="font-mono text-gray-500">fit_score =</span>
-          <span className="font-mono text-sky-700">ICP Fit × {icpWeight}%</span>
-          <span className="text-gray-400">+</span>
-          <span className="font-mono text-amber-700">Timing × {timingWeight}%</span>
-        </div>
-        <div className="flex items-center gap-3">
-          <span className="text-[10px] text-sky-600 w-12 text-right">ICP {icpWeight}%</span>
-          <input
-            type="range"
-            min={10}
-            max={90}
-            step={5}
-            value={icpWeight}
-            onChange={e => setWeights(parseInt(e.target.value))}
-            className="flex-1 h-1.5 bg-gradient-to-r from-sky-200 to-amber-200 rounded-lg appearance-none cursor-pointer accent-gray-600"
-          />
-          <span className="text-[10px] text-amber-600 w-16">Timing {timingWeight}%</span>
-        </div>
-        {step.composite_weights && (
-          <button onClick={() => updateStep(step.id, { composite_weights: undefined })} className="text-[10px] text-red-500 hover:text-red-600">
-            Reset to default (60/40)
-          </button>
-        )}
+      <div className="flex items-center justify-between mb-1.5">
+        <label className="text-xs font-medium text-gray-700">Composite score formula</label>
+        <button
+          onClick={toggleVersion}
+          className="flex items-center gap-1.5 text-[10px] font-medium text-gray-500 hover:text-gray-700 transition-colors"
+        >
+          <span className={`px-1.5 py-0.5 rounded ${!isV2 ? 'bg-gray-200 text-gray-700' : 'text-gray-400'}`}>v1</span>
+          <span className={`px-1.5 py-0.5 rounded ${isV2 ? 'bg-sky-100 text-sky-700' : 'text-gray-400'}`}>v2</span>
+        </button>
       </div>
+
+      {!isV2 ? (
+        <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 space-y-2.5">
+          <div className="flex items-center gap-3 text-xs">
+            <span className="font-mono text-gray-500">fit_score =</span>
+            <span className="font-mono text-sky-700">ICP Fit × {v1IcpWeight}%</span>
+            <span className="text-gray-400">+</span>
+            <span className="font-mono text-amber-700">Timing × {v1TimingWeight}%</span>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="text-[10px] text-sky-600 w-12 text-right">ICP {v1IcpWeight}%</span>
+            <input
+              type="range" min={10} max={90} step={5}
+              value={v1IcpWeight}
+              onChange={e => setV1Weights(parseInt(e.target.value))}
+              className="flex-1 h-1.5 bg-gradient-to-r from-sky-200 to-amber-200 rounded-lg appearance-none cursor-pointer accent-gray-600"
+            />
+            <span className="text-[10px] text-amber-600 w-16">Timing {v1TimingWeight}%</span>
+          </div>
+          {weights && (
+            <button onClick={() => updateStep(step.id, { composite_weights: undefined })} className="text-[10px] text-red-500 hover:text-red-600">
+              Reset to default (60/40)
+            </button>
+          )}
+        </div>
+      ) : (
+        <div className="bg-gray-900 border border-gray-700 rounded-lg p-3 space-y-3">
+          <div className="text-[10px] font-mono text-gray-400 leading-relaxed">
+            <span className="text-gray-500">fit_score</span> = (<span className="text-sky-400">Fit</span> × {v2PotentialWeight}% + <span className="text-amber-400">Intent</span> × {v2UrgencyWeight}%) × <span className="text-slate-400">Evidence</span>
+          </div>
+
+          {/* Three-bucket visual breakdown */}
+          <div className="grid grid-cols-3 gap-2">
+            <div className="bg-sky-950/50 border border-sky-800/40 rounded-md p-2">
+              <div className="text-[9px] font-semibold uppercase tracking-wider text-sky-400 mb-1">Fit · {v2PotentialWeight}%</div>
+              <div className="space-y-0.5">
+                {[{ l: 'ICP Fit', w: 70 }, { l: 'Reach', w: 20 }, { l: 'Data', w: 10 }].map(sub => (
+                  <div key={sub.l} className="flex items-center justify-between">
+                    <span className="text-[8px] text-sky-300/60">{sub.l}</span>
+                    <span className="text-[8px] text-sky-400/80 font-mono">{sub.w}%</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="bg-amber-950/50 border border-amber-800/40 rounded-md p-2">
+              <div className="text-[9px] font-semibold uppercase tracking-wider text-amber-400 mb-1">Intent · {v2UrgencyWeight}%</div>
+              <div className="space-y-0.5">
+                {[{ l: 'Timing', w: 60 }, { l: 'Sig Qual', w: 40 }].map(sub => (
+                  <div key={sub.l} className="flex items-center justify-between">
+                    <span className="text-[8px] text-amber-300/60">{sub.l}</span>
+                    <span className="text-[8px] text-amber-400/80 font-mono">{sub.w}%</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="bg-slate-800/50 border border-slate-600/40 rounded-md p-2">
+              <div className="text-[9px] font-semibold uppercase tracking-wider text-slate-400 mb-1">Evidence</div>
+              <div className="space-y-0.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-[8px] text-slate-400/60">Research</span>
+                  <span className="text-[8px] text-slate-400/80 font-mono">0.5–1.0×</span>
+                </div>
+                <p className="text-[8px] text-slate-500 mt-0.5">Scales composite by research coverage</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Fit ↔ Intent balance slider */}
+          <div className="flex items-center gap-3">
+            <span className="text-[10px] text-sky-400 w-12 text-right">Fit {v2PotentialWeight}%</span>
+            <input
+              type="range" min={30} max={70} step={5}
+              value={v2PotentialWeight}
+              onChange={e => setV2Weights(parseInt(e.target.value))}
+              className="flex-1 h-1.5 bg-gradient-to-r from-sky-800 to-amber-800 rounded-lg appearance-none cursor-pointer accent-gray-400"
+            />
+            <span className="text-[10px] text-amber-400 w-16">Intent {v2UrgencyWeight}%</span>
+          </div>
+
+          {/* Live formula preview */}
+          <div className="rounded-md bg-white/[0.04] border border-white/[0.06] px-3 py-2">
+            <div className="text-[9px] uppercase tracking-wider text-gray-500 mb-1.5">Example calculation</div>
+            {(() => {
+              const exFit = 72, exInt = 45, exEv = 0.82;
+              const composite = Math.round((exFit * v2PotentialWeight / 100 + exInt * v2UrgencyWeight / 100) * exEv);
+              return (
+                <div className="flex items-center gap-2 text-[11px] font-mono tabular-nums">
+                  <span className="text-sky-400">FIT {exFit}</span>
+                  <span className="text-gray-600">×</span>
+                  <span className="text-sky-300">{v2PotentialWeight}%</span>
+                  <span className="text-gray-600">+</span>
+                  <span className="text-amber-400">INT {exInt}</span>
+                  <span className="text-gray-600">×</span>
+                  <span className="text-amber-300">{v2UrgencyWeight}%</span>
+                  <span className="text-gray-600">×</span>
+                  <span className="text-slate-400">EV {Math.round(exEv * 100)}%</span>
+                  <span className="text-gray-600">=</span>
+                  <span className={`font-bold ${composite >= 60 ? 'text-emerald-400' : composite >= 40 ? 'text-amber-400' : 'text-red-400'}`}>
+                    {composite}
+                  </span>
+                </div>
+              );
+            })()}
+          </div>
+
+          <button onClick={() => setV2Weights(55)} className="text-[10px] text-gray-500 hover:text-gray-400">
+            Reset to default (55/45)
+          </button>
+        </div>
+      )}
     </div>
   );
 }

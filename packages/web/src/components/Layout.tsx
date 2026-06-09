@@ -13,6 +13,7 @@ import {
   Search,
   Building2,
   Link2,
+  Eye,
 } from 'lucide-react';
 import { permissions } from '../utils/permissions';
 
@@ -39,6 +40,7 @@ export function Layout() {
         { to: '/', icon: LayoutDashboard, label: 'Dashboard', end: true },
         { to: '/campaigns', icon: Target, label: 'Campaigns' },
         { to: '/leads', icon: Users, label: 'Leads' },
+        { to: '/watch-list', icon: Eye, label: 'Watch List' },
         { to: '/runs', icon: History, label: 'Run History' },
         ...(permissions.canRunResearch(role) ? [{ to: '/research', icon: Search, label: 'Research' }] : []),
         ...(permissions.canViewActivity(role) ? [{ to: '/activity', icon: ClipboardList, label: 'Activity Log' }] : []),

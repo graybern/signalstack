@@ -21,8 +21,10 @@ import activityRoutes from './routes/activity.js';
 import configTransferRoutes from './routes/configTransfer.js';
 import apiKeyRoutes from './routes/apikeys.js';
 import researchRoutes from './routes/research.js';
+import watchlistRoutes from './routes/watchlist.js';
 import { initScheduler } from './scheduler/cron.js';
 import { initCampaignScheduler } from './scheduler/campaignScheduler.js';
+import { initWatchlistScheduler } from './scheduler/watchlistScheduler.js';
 import { initWebhookDispatcher } from './events/webhookDispatcher.js';
 import { initNotificationDispatcher } from './services/notificationDispatcher.js';
 import { apiVersionHeader } from './middleware/apiVersion.js';
@@ -58,6 +60,7 @@ const mountRoutes = (prefix: string) => {
   app.use(`${prefix}/config-transfer`, configTransferRoutes);
   app.use(`${prefix}/api-keys`, apiKeyRoutes);
   app.use(`${prefix}/research`, researchRoutes);
+  app.use(`${prefix}/watchlist`, watchlistRoutes);
 };
 
 mountRoutes('/api');
@@ -182,6 +185,7 @@ initWebhookDispatcher();
 initNotificationDispatcher();
 initScheduler();
 initCampaignScheduler();
+initWatchlistScheduler();
 
 const server = app.listen(config.port, () => {
   console.log(`SignalStack server running on port ${config.port}`);

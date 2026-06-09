@@ -185,6 +185,25 @@ export interface EventPayloads {
     delta: string;
     done: boolean;
   };
+  'watch.created': {
+    watch_id: string;
+    lead_id: string;
+    company_name: string;
+    category: string;
+    snooze_until: string;
+  };
+  'watch.woken': {
+    watch_id: string;
+    lead_id: string;
+    company_name: string;
+    delta: { fit_score_change: number; potential_change: number; urgency_change: number } | null;
+  };
+  'watch.dismissed': {
+    watch_id: string;
+    lead_id: string;
+    company_name: string;
+    reason: string;
+  };
 }
 
 export type EventType = keyof EventPayloads;
@@ -280,6 +299,9 @@ export class EventBus {
       'convergence.detected',
       'run.activity',
       'run.ai_stream',
+      'watch.created',
+      'watch.woken',
+      'watch.dismissed',
     ];
   }
 }

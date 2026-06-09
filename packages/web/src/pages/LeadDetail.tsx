@@ -5,13 +5,14 @@ import { useAuthContext } from '../App';
 import { permissions } from '../utils/permissions';
 import { useEventStream } from '../hooks/useEventStream';
 import { formatDate, formatDateTimeFull } from '../utils/dates';
-import { ScoreBadge, ScoreLabel, ConfidenceBadge, SegmentBadge, ScoreRing, GradeBadge, DimensionRail, SourceDot } from '../components/ScoreBadge';
+import { ScoreBadge, ScoreLabel, ConfidenceBadge, SegmentBadge, ScoreRing, GradeBadge, DimensionRail, SourceDot, ThreeBucketStrip, ActionCard, WatchBadge } from '../components/ScoreBadge';
 import { renderInlineMarkdown } from '../utils/inlineMarkdown';
 import {
   ArrowLeft, ExternalLink, Building2, Users, MapPin, Globe, Calendar,
   Briefcase, Linkedin, MessageSquare, Shield, Server, ChevronDown, ChevronUp,
   Signal, Trash2, AlertTriangle, Brain, FileText, Download, Layers,
   ClipboardCheck, RefreshCw, Sparkles, Check, Circle, XCircle, ArrowRight, SlidersHorizontal,
+  Target, Clock, Mail, BarChart3, Search, Radio, Crosshair,
 } from 'lucide-react';
 import FeedbackPanel from '../components/FeedbackPanel';
 
@@ -353,7 +354,7 @@ export function LeadDetail() {
         <div className="p-6">
           <div className="flex items-start gap-4">
             {lead.scoring_version === 2 && lead.dimensions_parsed ? (
-              <ScoreRing score={lead.fit_score} size={72} grade={lead.dimensions_parsed.data_confidence} />
+              <ScoreRing score={lead.fit_score} size={80} grade={lead.dimensions_parsed.data_confidence} />
             ) : (
               <ScoreBadge score={lead.fit_score} size="lg" />
             )}
@@ -424,16 +425,16 @@ export function LeadDetail() {
           </div>
         </div>
 
-        {/* Zone 2 — Dimension Rail (v2 only) */}
+        {/* Zone 2 — Three-Bucket Strip (v2) or Dimension Rail (v1) */}
         {lead.scoring_version === 2 && lead.dimensions_parsed && (
-          <div className="px-6 py-3 bg-gray-50 border-t border-gray-100">
-            <DimensionRail dimensions={lead.dimensions_parsed} />
+          <div className="px-6 py-4 bg-gray-50 border-t border-gray-200/60">
+            <ThreeBucketStrip dimensions={lead.dimensions_parsed} />
           </div>
         )}
 
         {/* Zone 3 — Context Bar */}
         <div className="px-6 py-2 border-t border-gray-100 flex items-center gap-4 text-[11px] text-gray-400">
-          {lead.scoring_version === 2 && <span>Scoring v2 deterministic</span>}
+          {lead.scoring_version === 2 && <span className="font-medium text-gray-500">Deterministic scoring</span>}
           {lead.scoring_model && <span>{lead.scoring_model}</span>}
           {lead.ai_audit && (
             <span className={lead.ai_audit.verdict === 'pass' ? 'text-emerald-500' : lead.ai_audit.verdict === 'fail' ? 'text-red-400' : 'text-amber-400'}>
@@ -443,6 +444,12 @@ export function LeadDetail() {
           {lead.enrichment_metadata_parsed && (
             <span>
               Sources: {lead.enrichment_metadata_parsed.sources_responded?.length ?? 0}/{lead.enrichment_metadata_parsed.sources_available?.length ?? 0} checked
+            </span>
+          )}
+          {lead.scored_at && (
+            <span className="flex items-center gap-1">
+              <Clock className="w-3 h-3" />
+              Scored {formatDate(lead.scored_at)}
             </span>
           )}
           {(lead as any).cross_campaign?.length > 0 && (() => {
@@ -799,6 +806,31 @@ export function LeadDetail() {
 
         {/* Sidebar */}
         <div className="space-y-4">
+          {lead.scoring_version === 2 && lead.dimensions_parsed && (() => {
+            const champion = lead.personas?.find((p: any) => p.role_type === 'technical_champion' || p.role_type === 'champion');
+            return (
+              <ActionCard
+                dimensions={lead.dimensions_parsed}
+                leadId={lead.id}
+                isWatching={lead.watch_status === 'active'}
+                watchWakeDate={lead.watch_wake_date}
+                watchCategory={lead.watch_category}
+                championName={champion?.name}
+                championTitle={champion?.title}
+                championLinkedIn={champion?.linkedin_url}
+                onAction={(action) => {
+                  if (action === 'engage' && champion?.linkedin_url) {
+                    window.open(champion.linkedin_url, '_blank');
+                  } else if (action === 'research') {
+                    handleRerun();
+                  } else if (action === 'watching') {
+                    navigate('/watch-list');
+                  }
+                }}
+                onWatchAdded={refreshLead}
+              />
+            );
+          })()}
           <FeedbackPanel
             leadId={lead.id}
             companyName={lead.company_name}
@@ -844,13 +876,13 @@ export function LeadDetail() {
           {/* Score Breakdown — v2 Dimensions Panel or v1 Legacy */}
           {lead.scoring_version === 2 && lead.dimensions_parsed ? (() => {
             const dims = lead.dimensions_parsed;
-            const DIM_META: { key: string; label: string; color: string; icon: string; getValue: () => string }[] = [
-              { key: 'icp_fit', label: 'ICP Fit', color: 'sky', icon: '🎯', getValue: () => `${dims.icp_fit}/100` },
-              { key: 'timing', label: 'Timing', color: 'amber', icon: '⏱', getValue: () => `${dims.timing}/100` },
-              { key: 'data_confidence', label: 'Data Confidence', color: 'emerald', icon: '📊', getValue: () => `${dims.data_confidence} (${dims.data_confidence_score}/100)` },
-              { key: 'reachability', label: 'Reachability', color: 'violet', icon: '📬', getValue: () => `${dims.reachability}/100` },
-              { key: 'research_completeness', label: 'Research', color: 'slate', icon: '🔍', getValue: () => `${dims.research_completeness}%` },
-              { key: 'signal_density', label: 'Signals', color: 'indigo', icon: '📡', getValue: () => `${dims.signal_density?.total_signals ?? 0}` },
+            const DIM_META: { key: string; label: string; color: string; icon: typeof Target; getValue: () => string }[] = [
+              { key: 'icp_fit', label: 'ICP Fit', color: 'sky', icon: Target, getValue: () => `${dims.icp_fit}/100` },
+              { key: 'timing', label: 'Timing', color: 'amber', icon: Clock, getValue: () => `${dims.timing}/100` },
+              { key: 'data_confidence', label: 'Data Confidence', color: 'emerald', icon: BarChart3, getValue: () => `${dims.data_confidence} (${dims.data_confidence_score}/100)` },
+              { key: 'reachability', label: 'Reachability', color: 'violet', icon: Crosshair, getValue: () => `${dims.reachability}/100` },
+              { key: 'research_completeness', label: 'Research', color: 'slate', icon: Search, getValue: () => `${dims.research_completeness}%` },
+              { key: 'signal_density', label: 'Signals', color: 'indigo', icon: Radio, getValue: () => `${dims.signal_density?.total_signals ?? 0}` },
             ];
             const factSheet = lead.fact_sheet_parsed;
 
@@ -881,13 +913,14 @@ export function LeadDetail() {
                       const isExpanded = expandedSignalCat === dim.key;
                       const hasDetail = dim.key !== 'signal_density' && dim.key !== 'research_completeness';
 
+                      const DimIcon = dim.icon;
                       return (
                         <div key={dim.key}>
                           <button
                             onClick={() => hasDetail && setExpandedSignalCat(isExpanded ? null : dim.key)}
                             className={`w-full flex items-center gap-2 py-1.5 rounded -mx-1 px-1 ${hasDetail ? 'hover:bg-gray-50 cursor-pointer' : 'cursor-default'}`}
                           >
-                            <span className="w-2 text-xs">{dim.icon}</span>
+                            <DimIcon className={`w-3.5 h-3.5 text-${dim.color}-500 shrink-0`} />
                             <span className={`w-28 text-xs font-medium text-${dim.color}-700 text-left truncate shrink-0`}>{dim.label}</span>
                             <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
                               <div className={`h-full ${barColor} rounded-full transition-all`} style={{ width: `${Math.round(pct * 100)}%` }} />

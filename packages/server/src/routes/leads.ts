@@ -1,10 +1,12 @@
 import { Router, Response } from 'express';
 import { v4 as uuid } from 'uuid';
 import { getDb } from '../db/schema.js';
-import { authenticate, AuthRequest, requireOperator, requireAdmin, requireMember } from '../auth/middleware.js';
+import { authenticate, AuthRequest, requireOperator, requireAdmin, requireMember, requireSuperAdmin } from '../auth/middleware.js';
 import { logActivity } from '../services/activityLog.js';
 import { analyzeCampaignFeedback, getCampaignFeedbackCount } from '../agent/feedbackAnalyzer.js';
-import type { Lead, Persona, LeadFeedback, FeedbackVerdict } from '../types/index.js';
+import { computeAllDimensions, computeCompositeV2, generateVerdict } from '../agent/scorer.js';
+import { loadCampaignConfig } from '../agent/campaignOrchestrator.js';
+import type { Lead, Persona, LeadFeedback, FeedbackVerdict, FactSheet, EnrichmentMetadata } from '../types/index.js';
 
 const router = Router();
 
@@ -283,7 +285,14 @@ router.get('/:id', authenticate, (req: AuthRequest, res: Response) => {
        ))
        FROM lead_feedback f
        LEFT JOIN feedback_outcome_details od ON od.feedback_id = f.id
-       WHERE f.lead_id = l.id ORDER BY f.created_at DESC) as feedback_json
+       WHERE f.lead_id = l.id ORDER BY f.created_at DESC) as feedback_json,
+      (SELECT json_group_array(json_object(
+         'id',w.id,'category',w.category,'status',w.status,
+         'snooze_until',w.snooze_until,'rerun_on_wake',w.rerun_on_wake,
+         'notes',w.notes,'score_snapshot',w.score_snapshot,
+         'wake_delta',w.wake_delta,'woken_at',w.woken_at,'created_at',w.created_at
+       ))
+       FROM watch_items w WHERE w.lead_id = l.id ORDER BY w.created_at DESC) as watch_items_json
      FROM leads l
      LEFT JOIN campaigns c ON c.id = l.campaign_id
      WHERE l.id = ?`
@@ -736,6 +745,151 @@ router.delete('/:id', authenticate, requireOperator, (req: AuthRequest, res: Res
   res.json({ success: true, deleted: 1 });
 });
 
+// ── Admin: Backfill v2 composite scores from stored FactSheets ─
+
+function parseCampaignForBackfill(row: any) {
+  return {
+    ...row,
+    example_companies: JSON.parse(row.example_companies || '[]'),
+    target_signals: JSON.parse(row.target_signals || '[]'),
+    anti_patterns: JSON.parse(row.anti_patterns || '[]'),
+    target_categories: JSON.parse(row.target_categories || '[]'),
+    search_patterns: JSON.parse(row.search_patterns || '[]'),
+    icp_overrides: row.icp_overrides ? JSON.parse(row.icp_overrides) : null,
+    pipeline_overrides: row.pipeline_overrides ? JSON.parse(row.pipeline_overrides) : null,
+    prompt_overrides: row.prompt_overrides ? JSON.parse(row.prompt_overrides) : null,
+    source_overrides: row.source_overrides ? JSON.parse(row.source_overrides) : null,
+    exclusion_config: row.exclusion_config ? JSON.parse(row.exclusion_config) : null,
+    funnel_config: row.funnel_config ? JSON.parse(row.funnel_config) : null,
+    schedule_cron: row.schedule_cron || null,
+    schedule_enabled: row.schedule_enabled || 0,
+    rss_enabled: row.rss_enabled || 0,
+    notification_destinations: [],
+    notification_base_url: null,
+  };
+}
+
+router.post('/backfill-composite', authenticate, requireSuperAdmin, (req: AuthRequest, res: Response) => {
+  const db = getDb();
+  const campaignId = req.query.campaign_id as string | undefined;
+  const dryRun = req.query.dry_run === 'true';
+
+  let whereClause = 'fact_sheet IS NOT NULL AND (composite_version IS NULL OR composite_version = 1)';
+  const params: any[] = [];
+  if (campaignId) {
+    whereClause += ' AND campaign_id = ?';
+    params.push(campaignId);
+  }
+
+  const leads = db.prepare(
+    `SELECT id, company_name, campaign_id, fit_score, fact_sheet, enrichment_metadata, scoring_version
+     FROM leads WHERE ${whereClause}`
+  ).all(...params) as any[];
+
+  const campaignCache = new Map<string, any>();
+  const results: any[] = [];
+  let skipped = 0;
+
+  const updateStmt = dryRun ? null : db.prepare(`
+    UPDATE leads SET
+      icp_fit_score = ?,
+      timing_score = ?,
+      data_confidence = ?,
+      data_confidence_score = ?,
+      reachability_score = ?,
+      research_completeness = ?,
+      signal_density = ?,
+      signal_quality_score = ?,
+      potential_score = ?,
+      urgency_score = ?,
+      evidence_modifier = ?,
+      fit_score = ?,
+      scoring_version = 2,
+      composite_version = 2,
+      scoring_verdict = ?,
+      updated_at = datetime('now')
+    WHERE id = ?
+  `);
+
+  for (const lead of leads) {
+    let factSheet: FactSheet;
+    let enrichMeta: EnrichmentMetadata | undefined;
+    try {
+      factSheet = JSON.parse(lead.fact_sheet);
+    } catch {
+      skipped++;
+      continue;
+    }
+    try {
+      enrichMeta = lead.enrichment_metadata ? JSON.parse(lead.enrichment_metadata) : undefined;
+    } catch {
+      enrichMeta = undefined;
+    }
+
+    let icpConfig;
+    try {
+      if (!campaignCache.has(lead.campaign_id)) {
+        const campaignRow = db.prepare('SELECT * FROM campaigns WHERE id = ?').get(lead.campaign_id);
+        if (campaignRow) {
+          const parsed = parseCampaignForBackfill(campaignRow);
+          const config = loadCampaignConfig(parsed);
+          campaignCache.set(lead.campaign_id, config.icpConfig);
+        }
+      }
+      icpConfig = campaignCache.get(lead.campaign_id);
+    } catch {
+      icpConfig = undefined;
+    }
+
+    if (!icpConfig) {
+      skipped++;
+      continue;
+    }
+
+    const dimensions = computeAllDimensions(factSheet, icpConfig, enrichMeta);
+    const composite = computeCompositeV2(dimensions);
+    const verdict = generateVerdict(dimensions);
+
+    if (!dryRun && updateStmt) {
+      updateStmt.run(
+        dimensions.icp_fit,
+        dimensions.timing,
+        dimensions.data_confidence,
+        dimensions.data_confidence_score,
+        dimensions.reachability,
+        dimensions.research_completeness,
+        JSON.stringify(dimensions.signal_density),
+        dimensions.signal_quality,
+        composite.potential_score,
+        composite.urgency_score,
+        composite.evidence_modifier,
+        composite.fit_score,
+        verdict,
+        lead.id,
+      );
+    }
+
+    results.push({
+      lead_id: lead.id,
+      company_name: lead.company_name,
+      old_score: lead.fit_score,
+      new_score: composite.fit_score,
+      potential: composite.potential_score,
+      urgency: composite.urgency_score,
+      evidence_modifier: composite.evidence_modifier,
+      watch_candidate: composite.potential_score >= 60 && composite.urgency_score < 35,
+      verdict,
+    });
+  }
+
+  res.json({
+    dry_run: dryRun,
+    total_processed: results.length,
+    total_skipped: skipped,
+    results,
+  });
+});
+
 function parseLead(row: any) {
   const lead = { ...row };
   try { lead.personas = JSON.parse(row.personas_json || '[]').filter((p: any) => p.id !== null); } catch { lead.personas = []; }
@@ -756,6 +910,8 @@ function parseLead(row: any) {
   try { lead.enrichment_metadata_parsed = JSON.parse(row.enrichment_metadata); } catch { lead.enrichment_metadata_parsed = null; }
 
   if (row.scoring_version === 2 && row.icp_fit_score != null) {
+    const potential = row.potential_score ?? null;
+    const urgency = row.urgency_score ?? null;
     lead.dimensions_parsed = {
       icp_fit: row.icp_fit_score,
       timing: row.timing_score,
@@ -764,6 +920,14 @@ function parseLead(row: any) {
       reachability: row.reachability_score,
       research_completeness: row.research_completeness,
       signal_density: lead.signal_density_parsed,
+      signal_quality: row.signal_quality_score ?? null,
+      potential_score: potential,
+      urgency_score: urgency,
+      evidence_modifier: row.evidence_modifier ?? null,
+      watch_candidate: potential != null && urgency != null && potential >= 60 && urgency < 35,
+      watch_reason: (potential != null && urgency != null && potential >= 60 && urgency < 35)
+        ? `High fit (${potential}) but low intent (${urgency})`
+        : null,
       verdict: row.scoring_verdict || null,
     };
   } else {
@@ -780,8 +944,12 @@ function parseLead(row: any) {
     try { p.buying_signals_parsed = JSON.parse(p.buying_signals); } catch { p.buying_signals_parsed = null; }
     return p;
   });
+  try { lead.watch_items = JSON.parse(row.watch_items_json || '[]').filter((w: any) => w.id !== null); }
+  catch { lead.watch_items = []; }
+
   delete lead.personas_json;
   delete lead.feedback_json;
+  delete lead.watch_items_json;
   return lead;
 }
 

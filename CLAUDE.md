@@ -14,7 +14,7 @@ packages/
 ### Server Key Paths
 - `src/agent/campaignOrchestrator.ts` — **Main pipeline engine.** Runs the progressive funnel.
 - `src/agent/prompts/` — All Claude prompt templates (campaign.ts, research.ts, scoring.ts, brief.ts)
-- `src/agent/scorer.ts` — ICP scoring (100-point rubric)
+- `src/agent/scorer.ts` — Deterministic rules engine (v2) + legacy AI scoring (v1)
 - `src/agent/briefWriter.ts` — Outreach brief generation
 - `src/agent/tokenTracker.ts` — Token/cost tracking, MultiModelTokenTracker for funnel
 - `src/agent/runRegistry.ts` — In-memory AbortController registry for run cancellation
@@ -107,17 +107,67 @@ This app generates leads for **Twingate**, a modern Zero Trust Network Access (Z
 - **Adjacent products**: MDM (Jamf, Intune), EDR (CrowdStrike, SentinelOne), IdP (Okta, Entra), SIEM (Splunk, Datadog)
 - **Conference signals**: KubeCon, GDC, RSA, AWS re:Invent, Black Hat
 
-### Scoring Rubric (100 points)
-| Category | Max Points | What it measures |
-|----------|-----------|-----------------|
-| Segment & Scale Fit | 20 | Evidence of being in target segment |
-| Why Now Triggers | 15 | Fresh signals (hiring, funding, incidents, expansion) |
-| Remote Access Pain | 20 | Distributed workforce + internal access complexity |
-| Displacement Wedge | 20 | Evidence of legacy VPN or competitor usage |
-| Vertical Playbook | 15 | Match to gaming, BYOC, developer-first playbooks |
-| Buyer Access & Readiness | 10 | Named targets found with public artifacts |
+### Scoring Architecture — Deterministic vs AI
 
-**Star mapping**: 90–100 = 5★ Extremely High, 75–89 = 4★ High, 60–74 = 3★ Medium, 40–59 = 2★ Low, <40 = 1★ Very Low
+The scoring system uses a **3-layer architecture** where AI handles qualitative extraction and narrative, but all numbers come from deterministic code:
+
+```
+Layer 1: AI Fact Extraction (Sonnet)
+  Input:  enrichment data, signals, notes, key_people
+  Output: structured FactSheet (industry, VPN products, hiring signals, etc.)
+  Role:   Extract and classify facts — NO number assignment
+
+Layer 2: Deterministic Rules Engine (code)
+  Input:  FactSheet + ICP config + enrichment metadata
+  Output: all dimension scores
+  Role:   Apply configurable scoring rules — 100% reproducible
+
+Layer 3: AI Narrative Generation (Opus)
+  Input:  FactSheet + dimension scores + enrichment data
+  Output: briefs, pain hypotheses, outreach messages
+  Role:   Write the story — constrained by the rules engine's numbers
+```
+
+**Key invariant**: Same enrichment data + same ICP config = same scores, every run. AI is used for qualitative analysis (fact extraction, narrative writing) but never assigns point values.
+
+### Scoring Dimensions (v2 — Deterministic)
+
+| Dimension | Range | Bucket | What it measures |
+|-----------|-------|--------|-----------------|
+| ICP Fit | 0-100 | Fit | Segment, remote pain, displacement wedge, vertical, buyer access |
+| Reachability | 0-100 | Fit | Named contacts, LinkedIn URLs, org visibility |
+| Timing | 0-100 | Intent | Active evaluation, recent triggers, hiring signals, compound growth |
+| Signal Quality | 0-100 | Intent | Weighted buying-intent strength × confidence × freshness |
+| Data Confidence | A-F (0-100) | Evidence | Source count, field completeness, corroboration |
+| Research Completeness | 0-100% | Evidence | Sources checked vs available |
+| Signal Density | Count | Evidence | Categorized signal counts with freshness decay |
+
+### Composite Formula
+
+```
+Fit (Potential)  = icp_fit × 0.70 + reachability × 0.20 + data_confidence × 0.10
+Intent (Urgency) = timing × 0.60 + signal_quality × 0.40
+Evidence Modifier = 0.5 + (research_completeness / 200)
+
+fit_score = round((Fit × 55% + Intent × 45%) × Evidence Modifier)
+```
+
+Weights configurable per-campaign via `composite_weights` in funnel config. Watch candidate auto-detection: `Fit >= 60 AND Intent < 35`.
+
+### Legacy Scoring (v1)
+
+v1 leads use AI-scored 100-point rubric (6 categories: Segment & Scale 20pts, Why Now 15pts, Remote Access Pain 20pts, Displacement 20pts, Vertical 15pts, Buyer Access 10pts). Still supported for backward compatibility but no longer the default.
+
+**Star mapping**: 90–100 = 5★, 75–89 = 4★, 60–74 = 3★, 40–59 = 2★, <40 = 1★
+
+### Watch List
+
+Leads with high Fit but low Intent (the "great fit, bad timing" pattern) can be added to a **watch list** with a snooze date. When the snooze expires, the system automatically re-enriches and re-scores the lead, then surfaces it with a delta comparison showing what changed since the snooze.
+
+- **Categories**: `timing_watch` (waiting for buying signals), `data_needs` (insufficient enrichment data), `nurture` (long-term monitoring), `manual`
+- **Action Card**: Top of LeadDetail sidebar — tells salespeople what to do: Engage / Watch / Research / Pass
+- **Watch List page**: Timeline view grouped by wake date (waking today, this week, watching)
+- **Scheduler**: Daily cron via `watchlistScheduler.ts`, piggybacks on existing `node-cron` infra
 
 ### Persona Pyramid (for outreach briefs)
 1. **Champion** (REQUIRED) — Director/Sr. Manager/Team Lead (IT, Security, Platform). Feels VPN pain daily, drives evaluations.

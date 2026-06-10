@@ -58,6 +58,12 @@ interface FunnelStepConfig {
     buyer_access_readiness?: number;
   };
   composite_weights?: { icp_fit: number; timing: number } | { version: 2; potential: number; urgency: number };
+  scoring_signals?: {
+    pain_signals?: Array<'remote_workforce' | 'byoc' | 'multi_office' | 'developer_experience'>;
+    displacement_signals?: Array<'vpn_detected' | 'competitor_detected' | 'byoc' | 'private_networking' | 'legacy_indicators' | 'distributed_team'>;
+    credit_role_fit_without_urls?: boolean;
+    signal_intent_weights?: Partial<Record<string, number>>;
+  };
   min_score_threshold?: number;
   icp_verticals_override?: string[];
   icp_tech_signals_override?: string[];
@@ -1253,6 +1259,9 @@ function ScoreConfig({ step, updateStep, orgICP }: {
       {/* Composite formula */}
       <CompositeFormulaControl step={step} updateStep={updateStep} />
 
+      {/* Scoring Signals — campaign-aware dimension overrides */}
+      <ScoringSignalsPanel step={step} updateStep={updateStep} />
+
       {/* Score threshold + confidence */}
       <div className="grid grid-cols-2 gap-3">
         <NumberInput label="Min score to pass to brief" value={step.min_score_threshold} onChange={v => updateStep(step.id, { min_score_threshold: v })} placeholder="e.g. 50" />
@@ -1859,6 +1868,225 @@ function SourceStrategyExplainer({ strategy }: { strategy: string }) {
     <div className={`mt-2 px-2.5 py-2 border rounded-lg ${ex.color}`}>
       <p className="text-[10px] leading-relaxed">{ex.flow}</p>
       <p className="text-[10px] font-medium mt-1 opacity-75">{ex.tradeoff}</p>
+    </div>
+  );
+}
+
+// ── Scoring Signals Panel ──────────────────────────────────────
+
+const PAIN_SIGNAL_OPTIONS = [
+  { value: 'remote_workforce' as const, label: 'Remote Workforce', desc: 'Remote/hybrid teams needing secure access' },
+  { value: 'byoc' as const, label: 'BYOC / Customer-Managed', desc: 'Customer-managed deployments, private networking' },
+  { value: 'multi_office' as const, label: 'Multi-Office', desc: 'Distributed offices (any count, not just 3+)' },
+  { value: 'developer_experience' as const, label: 'Developer Experience', desc: 'DevEx initiatives signal access tooling need' },
+];
+
+const DISPLACEMENT_SIGNAL_OPTIONS = [
+  { value: 'vpn_detected' as const, label: 'VPN Detected', desc: 'Confirmed or inferred VPN product in use' },
+  { value: 'competitor_detected' as const, label: 'Competitor Detected', desc: 'Known ZTNA/access competitor product' },
+  { value: 'byoc' as const, label: 'BYOC / Private Networking', desc: 'Customer-managed deployments as displacement wedge' },
+  { value: 'private_networking' as const, label: 'Private Tunnels', desc: 'Private networking needs without legacy VPN' },
+  { value: 'legacy_indicators' as const, label: 'Legacy Indicators', desc: 'Multiple legacy solution references detected' },
+  { value: 'distributed_team' as const, label: 'Distributed Team', desc: 'Multi-office presence implies access needs' },
+];
+
+const SIGNAL_WEIGHT_META = [
+  { key: 'evaluation',     label: 'Active Evaluation',   desc: 'Evidence of vendor evaluation in progress', defaultVal: 20 },
+  { key: 'vpn_detection',  label: 'VPN Detection',       desc: 'VPN product found in tech stack',           defaultVal: 15 },
+  { key: 'competitor',     label: 'Competitor Product',   desc: 'Known competitor tool detected',            defaultVal: 12 },
+  { key: 'hiring_vpn',     label: 'VPN-Related Hiring',   desc: 'Job posts mentioning VPN/ZTNA keywords',   defaultVal: 10 },
+  { key: 'compliance',     label: 'Compliance Signal',    desc: 'Regulatory framework adoption',             defaultVal: 6 },
+  { key: 'hiring_general', label: 'General Hiring',       desc: 'IT/security hiring without VPN keywords',   defaultVal: 5 },
+  { key: 'funding',        label: 'Funding Event',        desc: 'Recent funding round or financial event',   defaultVal: 5 },
+  { key: 'leadership',     label: 'Leadership Change',    desc: 'New CTO/CISO/VP hire',                     defaultVal: 3 },
+  { key: 'news',           label: 'Industry News',        desc: 'Relevant news mention',                     defaultVal: 2 },
+];
+
+function ScoringSignalsPanel({ step, updateStep }: {
+  step: FunnelStepConfig;
+  updateStep: (id: string, u: Partial<FunnelStepConfig>) => void;
+}) {
+  const cw = step.composite_weights;
+  const isV2 = !cw || ('version' in cw && cw.version === 2);
+  if (!isV2) return null;
+
+  const signals = step.scoring_signals || {};
+  const painSigs = signals.pain_signals || [];
+  const dispSigs = signals.displacement_signals || [];
+
+  const updateSignals = (patch: Partial<NonNullable<FunnelStepConfig['scoring_signals']>>) => {
+    updateStep(step.id, { scoring_signals: { ...signals, ...patch } });
+  };
+
+  const togglePain = (val: typeof PAIN_SIGNAL_OPTIONS[number]['value']) => {
+    const next = painSigs.includes(val) ? painSigs.filter(s => s !== val) : [...painSigs, val];
+    updateSignals({ pain_signals: next.length ? next : undefined });
+  };
+
+  const toggleDisp = (val: typeof DISPLACEMENT_SIGNAL_OPTIONS[number]['value']) => {
+    const next = dispSigs.includes(val) ? dispSigs.filter(s => s !== val) : [...dispSigs, val];
+    updateSignals({ displacement_signals: next.length ? next : undefined });
+  };
+
+  const hasCustomWeights = Object.keys(signals.signal_intent_weights || {}).length > 0;
+  const hasCustomSignals = painSigs.length > 0 || dispSigs.length > 0 || signals.credit_role_fit_without_urls || hasCustomWeights;
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <label className="text-xs font-semibold text-gray-800">Scoring Signals</label>
+        {hasCustomSignals && (
+          <button
+            onClick={() => updateStep(step.id, { scoring_signals: undefined })}
+            className="text-[11px] text-red-500 hover:text-red-600"
+          >Reset to defaults</button>
+        )}
+      </div>
+      <p className="text-[10px] text-gray-400 -mt-2">
+        Configure which signals the deterministic engine uses for each dimension. When none are selected, default rules apply.
+      </p>
+
+      {/* Pain Signals */}
+      <div className="border border-gray-100 rounded-lg p-2.5 space-y-1.5">
+        <label className="text-[11px] font-medium text-gray-700">Pain Signals</label>
+        <p className="text-[10px] text-gray-400">What counts as "remote access pain" for this campaign</p>
+        <div className="grid grid-cols-2 gap-1.5 mt-1">
+          {PAIN_SIGNAL_OPTIONS.map(opt => (
+            <label key={opt.value} className={`flex items-start gap-2 px-2 py-1.5 rounded-md cursor-pointer transition-colors ${painSigs.includes(opt.value) ? 'bg-sky-50 border border-sky-200' : 'bg-gray-50 border border-gray-100 hover:bg-gray-100'}`}>
+              <input
+                type="checkbox"
+                checked={painSigs.includes(opt.value)}
+                onChange={() => togglePain(opt.value)}
+                className="mt-0.5 rounded border-gray-300 text-sky-600 focus:ring-sky-500"
+              />
+              <div>
+                <span className="text-[11px] font-medium text-gray-700">{opt.label}</span>
+                <p className="text-[9px] text-gray-400 leading-tight">{opt.desc}</p>
+              </div>
+            </label>
+          ))}
+        </div>
+      </div>
+
+      {/* Displacement Signals */}
+      <div className="border border-gray-100 rounded-lg p-2.5 space-y-1.5">
+        <label className="text-[11px] font-medium text-gray-700">Displacement Signals</label>
+        <p className="text-[10px] text-gray-400">What counts as a "displacement wedge" — evidence the prospect would switch</p>
+        <div className="grid grid-cols-2 gap-1.5 mt-1">
+          {DISPLACEMENT_SIGNAL_OPTIONS.map(opt => (
+            <label key={opt.value} className={`flex items-start gap-2 px-2 py-1.5 rounded-md cursor-pointer transition-colors ${dispSigs.includes(opt.value) ? 'bg-amber-50 border border-amber-200' : 'bg-gray-50 border border-gray-100 hover:bg-gray-100'}`}>
+              <input
+                type="checkbox"
+                checked={dispSigs.includes(opt.value)}
+                onChange={() => toggleDisp(opt.value)}
+                className="mt-0.5 rounded border-gray-300 text-amber-600 focus:ring-amber-500"
+              />
+              <div>
+                <span className="text-[11px] font-medium text-gray-700">{opt.label}</span>
+                <p className="text-[9px] text-gray-400 leading-tight">{opt.desc}</p>
+              </div>
+            </label>
+          ))}
+        </div>
+      </div>
+
+      {/* Contact Credit Toggle */}
+      <div className="border border-gray-100 rounded-lg p-2.5">
+        <label className="flex items-start gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={signals.credit_role_fit_without_urls ?? false}
+            onChange={e => updateSignals({ credit_role_fit_without_urls: e.target.checked || undefined })}
+            className="mt-0.5 rounded border-gray-300 text-violet-600 focus:ring-violet-500"
+          />
+          <div>
+            <span className="text-[11px] font-medium text-gray-700">Credit contacts by role fit</span>
+            <p className="text-[10px] text-gray-400 leading-tight">
+              Award reachability points when champions and economic buyers are identified by name/title, even without LinkedIn or email URLs
+            </p>
+          </div>
+        </label>
+      </div>
+
+      {/* Signal Intent Weights */}
+      <SignalIntentWeightsEditor signals={signals} updateSignals={updateSignals} />
+    </div>
+  );
+}
+
+function SignalIntentWeightsEditor({ signals, updateSignals }: {
+  signals: NonNullable<FunnelStepConfig['scoring_signals']>;
+  updateSignals: (patch: Partial<NonNullable<FunnelStepConfig['scoring_signals']>>) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const weights = signals.signal_intent_weights || {};
+  const customCount = Object.keys(weights).length;
+
+  const setWeight = (key: string, defaultVal: number, raw: string) => {
+    const val = raw ? parseInt(raw) : undefined;
+    const next = { ...weights };
+    if (val === undefined || val === defaultVal) {
+      delete next[key];
+    } else {
+      next[key] = val;
+    }
+    updateSignals({ signal_intent_weights: Object.keys(next).length ? next : undefined });
+  };
+
+  return (
+    <div className="border border-gray-100 rounded-lg overflow-hidden">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full flex items-center justify-between px-2.5 py-2 hover:bg-gray-50 transition-colors"
+      >
+        <div className="flex items-center gap-1.5">
+          <span className="text-[11px] font-medium text-gray-700">Signal Intent Weights</span>
+          {customCount > 0 && (
+            <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-indigo-50 text-indigo-600 font-medium">
+              {customCount} customized
+            </span>
+          )}
+        </div>
+        <ChevronDown className={`w-3.5 h-3.5 text-gray-400 transition-transform ${expanded ? 'rotate-180' : ''}`} />
+      </button>
+      {expanded && (
+        <div className="px-2.5 pb-2.5 space-y-2">
+          <p className="text-[10px] text-gray-400">
+            How much each signal type contributes to Signal Quality. Higher = stronger buying intent.
+          </p>
+          <div className="grid grid-cols-2 gap-x-3 gap-y-1.5">
+            {SIGNAL_WEIGHT_META.map(meta => {
+              const current = weights[meta.key];
+              const isCustom = current !== undefined;
+              return (
+                <div key={meta.key} className={`rounded-md px-2 py-1.5 ${isCustom ? 'bg-indigo-50/60 border border-indigo-100' : 'bg-gray-50/60'}`}>
+                  <div className="flex items-center justify-between mb-0.5">
+                    <span className="text-[10px] font-medium text-gray-700">{meta.label}</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={50}
+                      value={current ?? ''}
+                      placeholder={String(meta.defaultVal)}
+                      onChange={e => setWeight(meta.key, meta.defaultVal, e.target.value)}
+                      className={`w-12 text-right text-[11px] font-semibold tabular-nums border rounded px-1.5 py-0.5 ${
+                        isCustom ? 'border-indigo-200 bg-white text-indigo-700' : 'border-gray-200 bg-white text-gray-500'
+                      } focus:outline-none focus:ring-1 focus:ring-indigo-300`}
+                    />
+                  </div>
+                  <p className="text-[9px] text-gray-400 leading-tight">{meta.desc}</p>
+                </div>
+              );
+            })}
+          </div>
+          {customCount > 0 && (
+            <button
+              onClick={() => updateSignals({ signal_intent_weights: undefined })}
+              className="text-[10px] text-red-500 hover:text-red-600 mt-1"
+            >Reset all weights to defaults</button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

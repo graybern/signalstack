@@ -5,7 +5,7 @@ import { useAuthContext } from '../App';
 import { permissions } from '../utils/permissions';
 import { useEventStream } from '../hooks/useEventStream';
 import { formatDate, formatDateTimeFull } from '../utils/dates';
-import { ScoreBadge, ScoreLabel, ConfidenceBadge, SegmentBadge, ScoreRing, GradeBadge, DimensionRail, SourceDot, ThreeBucketStrip, ActionCard, WatchBadge } from '../components/ScoreBadge';
+import { ScoreBadge, ScoreLabel, ConfidenceBadge, SegmentBadge, ScoreRing, GradeBadge, GradeTooltip, DimensionRail, SourceDot, ThreeBucketStrip, ActionCard, WatchBadge, buildBuckets } from '../components/ScoreBadge';
 import { renderInlineMarkdown } from '../utils/inlineMarkdown';
 import {
   ArrowLeft, ExternalLink, Building2, Users, MapPin, Globe, Calendar,
@@ -35,7 +35,12 @@ export function LeadDetail() {
   const [deleting, setDeleting] = useState(false);
   const [showBriefMenu, setShowBriefMenu] = useState(false);
   const [expandedSignalCat, setExpandedSignalCat] = useState<string | null>(null);
+  const [expandedSource, setExpandedSource] = useState<string | null>(null);
+  const [showRerunMenu, setShowRerunMenu] = useState(false);
+  const [rerunCampaign, setRerunCampaign] = useState<{ leadId: string; campaignName: string; campaignId: string } | null>(null);
+  const [rerunMode, setRerunMode] = useState<'full' | 'brief'>('full');
   const briefMenuRef = useRef<HTMLDivElement>(null);
+  const rerunMenuRef = useRef<HTMLDivElement>(null);
 
   const handleDeleteLead = async () => {
     setDeleting(true);
@@ -72,23 +77,62 @@ export function LeadDetail() {
       if (briefMenuRef.current && !briefMenuRef.current.contains(e.target as Node)) {
         setShowBriefMenu(false);
       }
+      if (rerunMenuRef.current && !rerunMenuRef.current.contains(e.target as Node)) {
+        setShowRerunMenu(false);
+      }
     }
-    if (showBriefMenu) document.addEventListener('mousedown', handleClickOutside);
+    if (showBriefMenu || showRerunMenu) document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [showBriefMenu]);
+  }, [showBriefMenu, showRerunMenu]);
 
-  const fetchLead = useCallback(() => api(`/leads/${id}`).then(setLead), [id]);
+  const fetchLead = useCallback(() => api(`/leads/${id}`).then((data: any) => {
+    setLead(data);
+    return data;
+  }), [id]);
   useEffect(() => {
-    fetchLead().finally(() => setLoading(false));
+    fetchLead().then((data: any) => {
+      if (data?.active_run) {
+        const run = data.active_run;
+        if (run.status === 'running' || run.status === 'pending') {
+          setRerunning(true);
+          setRerunVisible(true);
+          setRerunRunId(run.id);
+          const steps: string[] = run.steps_run ? JSON.parse(run.steps_run) : ['enrich', 'score', 'brief', 'audit'];
+          const currentPhase = run.progress?.phase || run.progress?.current_step;
+          // Map pipeline_stage to the rerun step names
+          const STAGE_TO_STEP: Record<string, string[]> = {
+            enriched: ['enrich'], scored: ['enrich', 'score'],
+            briefed: ['enrich', 'score', 'brief'], audited: ['enrich', 'score', 'brief', 'audit'],
+          };
+          const leadStage = data.pipeline_stage;
+          const doneFromLead = new Set<string>((STAGE_TO_STEP[leadStage] || []).filter((s: string) => steps.includes(s)));
+          // If the run reports a current phase, mark everything before it as done
+          if (currentPhase && steps.includes(currentPhase)) {
+            const idx = steps.indexOf(currentPhase);
+            for (let i = 0; i < idx; i++) doneFromLead.add(steps[i]);
+            setRerunStage(currentPhase);
+          }
+          setCompletedStages(doneFromLead);
+        } else if (run.status === 'completed' && run.completed_at) {
+          const completedMs = new Date(run.completed_at).getTime();
+          if (Date.now() - completedMs < 60_000) {
+            setRerunVisible(true);
+            setCompletedStages(new Set(['enrich', 'score', 'brief', 'audit']));
+            setTimeout(() => setRerunVisible(false), 5000);
+          }
+        }
+      }
+    }).finally(() => setLoading(false));
   }, [id]);
 
-  // SSE subscription for stage rerun progress
-  const { subscribe } = useEventStream({ types: ['lead.brief_rerun', 'lead.stage_rerun'], enabled: rerunning });
+  // SSE subscription for stage rerun progress — also enabled when banner is visible (hydrated from active_run)
+  const { subscribe } = useEventStream({ types: ['lead.brief_rerun', 'lead.stage_rerun'], enabled: rerunning || rerunVisible });
   useEffect(() => {
-    if (!rerunning) return;
+    if (!rerunning && !rerunVisible) return;
     const unsubs: (() => void)[] = [];
+    const crossIds = new Set([id, ...(lead?.cross_campaign?.map((cc: any) => cc.lead_id) || [])]);
     const handleStageEvent = (event: any) => {
-      if (event.data?.lead_id !== id) return;
+      if (!crossIds.has(event.data?.lead_id)) return;
       const { status, message, stage, run_id } = event.data;
       if (run_id && !rerunRunId) setRerunRunId(run_id);
       if (stage) {
@@ -104,13 +148,17 @@ export function LeadDetail() {
       setRerunStatus(message || status);
     };
     const handleBriefEvent = (event: any) => {
-      if (event.data?.lead_id !== id) return;
+      if (!crossIds.has(event.data?.lead_id)) return;
       const { status, message } = event.data;
       setRerunStatus(message || status);
       if (status === 'completed') {
         fetchLead().finally(() => {
           setRerunning(false);
-          setCompletedStages(new Set(['enrich', 'score', 'brief', 'audit']));
+          setCompletedStages(prev => {
+            const all = new Set(prev);
+            ['enrich', 'score', 'brief', 'audit'].forEach(s => all.add(s));
+            return all;
+          });
           setTimeout(() => setRerunVisible(false), 5000);
         });
       } else if (status === 'failed') {
@@ -121,9 +169,11 @@ export function LeadDetail() {
     unsubs.push(subscribe('lead.stage_rerun', handleStageEvent));
     unsubs.push(subscribe('lead.brief_rerun', handleBriefEvent));
     return () => unsubs.forEach(fn => fn());
-  }, [rerunning, id, subscribe, fetchLead, rerunRunId]);
+  }, [rerunning, rerunVisible, id, subscribe, fetchLead, rerunRunId, lead]);
 
-  const handleRerun = async () => {
+  const handleRerun = async (targetLeadId?: string, mode?: 'full' | 'brief') => {
+    const lid = targetLeadId || id;
+    const isBriefOnly = (mode || rerunMode) === 'brief';
     setRerunning(true);
     setRerunVisible(true);
     setRerunStatus('Starting rerun...');
@@ -132,8 +182,12 @@ export function LeadDetail() {
     setCompletedStages(new Set());
     setFailedStage(null);
     setRerunRunId(null);
+    setShowRerunMenu(false);
     try {
-      await api(`/leads/${id}/rerun-brief`, { method: 'POST' });
+      await api(`/leads/${lid}/rerun-brief`, {
+        method: 'POST',
+        ...(isBriefOnly ? { body: JSON.stringify({ force_brief: true }) } : {}),
+      });
     } catch (err: any) {
       console.error('Rerun failed:', err);
       setRerunning(false);
@@ -230,18 +284,100 @@ export function LeadDetail() {
         </Link>
         <div className="flex items-center gap-2">
           {permissions.canAccessSettings(user?.role) && lead?.campaign_id && (
-            <button
-              onClick={handleRerun}
-              disabled={rerunning}
-              className={`flex items-center gap-1.5 px-3 py-1.5 text-sm border rounded-lg disabled:opacity-50 transition-colors ${
-                rerunError ? 'border-red-300 text-red-700 bg-red-50' :
-                rerunning ? 'border-amber-300 text-amber-700 bg-amber-50' :
-                'border-amber-300 text-amber-700 hover:bg-amber-50'
-              }`}
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${rerunning ? 'animate-spin' : ''}`} />
-              {rerunError ? 'Failed' : rerunning ? 'Rerunning...' : 'Rerun'}
-            </button>
+            <div className="relative" ref={rerunMenuRef}>
+              <button
+                onClick={() => {
+                  if ((lead as any).cross_campaign?.length > 0) {
+                    setShowRerunMenu(!showRerunMenu);
+                    if (!rerunCampaign) setRerunCampaign({ leadId: id!, campaignName: lead.campaign_name, campaignId: lead.campaign_id });
+                  } else {
+                    handleRerun();
+                  }
+                }}
+                disabled={rerunning}
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-sm border rounded-lg disabled:opacity-50 transition-colors ${
+                  rerunError ? 'border-red-300 text-red-700 bg-red-50' :
+                  rerunning ? 'border-amber-300 text-amber-700 bg-amber-50' :
+                  'border-amber-300 text-amber-700 hover:bg-amber-50'
+                }`}
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${rerunning ? 'animate-spin' : ''}`} />
+                {rerunError ? 'Failed' : rerunning ? 'Rerunning...' : 'Rerun'}
+                {(lead as any).cross_campaign?.length > 0 && !rerunning && (
+                  <ChevronDown className="w-3 h-3" />
+                )}
+              </button>
+              {showRerunMenu && (
+                <div className="absolute right-0 top-full mt-1 w-72 bg-white border border-gray-200 rounded-xl shadow-lg z-20 py-2">
+                  <div className="px-3 pb-2 mb-1 border-b border-gray-100">
+                    <p className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold">Campaign</p>
+                  </div>
+                  {/* Current campaign */}
+                  <button
+                    onClick={() => setRerunCampaign({ leadId: id!, campaignName: lead.campaign_name, campaignId: lead.campaign_id })}
+                    className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 transition-colors ${
+                      rerunCampaign?.campaignId === lead.campaign_id
+                        ? 'bg-brand-50 border-l-2 border-brand-400'
+                        : 'hover:bg-gray-50'
+                    }`}
+                  >
+                    <Target className="w-3.5 h-3.5 text-brand-500 shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <span className="font-medium text-gray-900 truncate block">{lead.campaign_name}</span>
+                      <span className="text-[10px] text-gray-400">Current · {lead.fit_score}/100</span>
+                    </div>
+                  </button>
+                  {/* Other campaigns */}
+                  {(lead as any).cross_campaign?.map((cc: any) => (
+                    <button
+                      key={cc.lead_id}
+                      onClick={() => setRerunCampaign({ leadId: cc.lead_id, campaignName: cc.campaign_name, campaignId: cc.campaign_id })}
+                      className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 transition-colors ${
+                        rerunCampaign?.campaignId === cc.campaign_id
+                          ? 'bg-brand-50 border-l-2 border-brand-400'
+                          : 'hover:bg-gray-50'
+                      }`}
+                    >
+                      <Layers className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <span className="font-medium text-gray-700 truncate block">{cc.campaign_name}</span>
+                        <span className="text-[10px] text-gray-400">{cc.fit_score}/100{cc.feedback ? ` · ${cc.feedback.replace(/_/g, ' ')}` : ''}</span>
+                      </div>
+                    </button>
+                  ))}
+                  {/* Mode toggle */}
+                  <div className="px-3 pt-2 mt-1 border-t border-gray-100">
+                    <p className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1.5">Mode</p>
+                    <div className="flex gap-1.5 mb-2">
+                      <button
+                        onClick={() => setRerunMode('full')}
+                        className={`flex-1 px-2 py-1.5 rounded-md text-[11px] font-medium transition-colors ${
+                          rerunMode === 'full' ? 'bg-amber-100 text-amber-800 border border-amber-300' : 'bg-gray-50 text-gray-500 border border-gray-200 hover:bg-gray-100'
+                        }`}
+                      >
+                        Full rerun
+                        <span className="block text-[9px] opacity-60 mt-0.5">Enrich + Score + Brief</span>
+                      </button>
+                      <button
+                        onClick={() => setRerunMode('brief')}
+                        className={`flex-1 px-2 py-1.5 rounded-md text-[11px] font-medium transition-colors ${
+                          rerunMode === 'brief' ? 'bg-amber-100 text-amber-800 border border-amber-300' : 'bg-gray-50 text-gray-500 border border-gray-200 hover:bg-gray-100'
+                        }`}
+                      >
+                        Brief only
+                        <span className="block text-[9px] opacity-60 mt-0.5">Regenerate brief</span>
+                      </button>
+                    </div>
+                    <button
+                      onClick={() => handleRerun(rerunCampaign?.leadId, rerunMode)}
+                      className="w-full py-1.5 rounded-lg text-xs font-semibold bg-amber-500 hover:bg-amber-400 text-amber-950 transition-colors"
+                    >
+                      Start {rerunMode === 'full' ? 'full rerun' : 'brief generation'}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
           )}
           {lead?.brief_markdown && (
             <div className="relative" ref={briefMenuRef}>
@@ -361,9 +497,15 @@ export function LeadDetail() {
             <div className="flex-1">
               <div className="flex items-center gap-3 mb-1">
                 <h1 className="text-2xl font-bold">{lead.company_name}</h1>
-                <SegmentBadge segment={lead.segment} />
+                <span className="inline-flex items-center gap-1.5">
+                  <SegmentBadge segment={lead.segment} />
+                  <span className="text-xs text-gray-500">{lead.segment === 'ENT' ? 'Enterprise' : lead.segment === 'MM' ? 'Mid-Market' : 'Small Business'}</span>
+                </span>
                 {lead.scoring_version === 2 && lead.dimensions_parsed?.data_confidence ? (
-                  <GradeBadge grade={lead.dimensions_parsed.data_confidence} />
+                  <span className="inline-flex items-center gap-1">
+                    <span className="text-[10px] text-gray-400 uppercase tracking-wide">Data</span>
+                    <GradeTooltip grade={lead.dimensions_parsed.data_confidence} />
+                  </span>
                 ) : (
                   <ConfidenceBadge confidence={lead.confidence || 'medium'} />
                 )}
@@ -379,7 +521,7 @@ export function LeadDetail() {
                 {signalCount > 0 && (
                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-50 text-indigo-700 border border-indigo-200">
                     <Signal className="w-3 h-3" />
-                    {signalCount}
+                    {signalCount} {signalCount === 1 ? 'signal' : 'signals'}
                   </span>
                 )}
               </div>
@@ -395,10 +537,16 @@ export function LeadDetail() {
               )}
               {/* Metadata strip */}
               <div className="flex flex-wrap gap-4 text-sm text-gray-600">
-                <span className={`flex items-center gap-1 ${lead.hq_location ? '' : 'text-gray-300'}`}><MapPin className="w-4 h-4" />{lead.hq_location || 'Needs discovery'}</span>
+                {lead.campaign_name && (
+                  <Link to={`/campaigns/${lead.campaign_id}`} className="flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-brand-50 text-brand-700 border border-brand-200 hover:bg-brand-100 transition-colors">
+                    <Target className="w-3 h-3" />
+                    {lead.campaign_name}
+                  </Link>
+                )}
+                <span className={`flex items-center gap-1 ${lead.hq_location ? '' : 'text-gray-300'}`}><MapPin className="w-4 h-4" />{lead.hq_location || '—'}</span>
                 <span className={`flex items-center gap-1 ${lead.employee_count ? '' : 'text-gray-300'}`}>
                   <Users className="w-4 h-4" />
-                  {lead.employee_count ? `~${lead.employee_count.toLocaleString()} employees` : 'Needs discovery'}
+                  {lead.employee_count ? `~${lead.employee_count.toLocaleString()} employees` : '—'}
                   {(() => {
                     const src = lead.employee_count_source;
                     const notes: string = lead.candidate_data_parsed?.notes || '';
@@ -415,12 +563,21 @@ export function LeadDetail() {
                     );
                   })()}
                 </span>
-                <span className={`flex items-center gap-1 ${lead.founded_year ? '' : 'text-gray-300'}`}><Calendar className="w-4 h-4" />{lead.founded_year ? `Founded ${lead.founded_year}` : 'Needs discovery'}</span>
-                <span className={`flex items-center gap-1 ${lead.funding_stage ? '' : 'text-gray-300'}`}><Building2 className="w-4 h-4" />{lead.funding_stage ? `${lead.funding_stage}${lead.total_funding ? ` (${lead.total_funding})` : ''}` : 'Needs discovery'}</span>
+                <span className={`flex items-center gap-1 ${lead.founded_year ? '' : 'text-gray-300'}`}><Calendar className="w-4 h-4" />{lead.founded_year ? `Founded ${lead.founded_year}` : '—'}</span>
+                {lead.funding_stage && <span className="flex items-center gap-1"><Building2 className="w-4 h-4" />{lead.funding_stage}{lead.total_funding ? ` (${lead.total_funding})` : ''}</span>}
                 {lead.updated_at && <span className="flex items-center gap-1"><RefreshCw className="w-4 h-4" />Updated {formatDateTimeFull(lead.updated_at)}</span>}
                 <a href={`https://${(lead.website || lead.domain || '').replace(/^https?:\/\//, '')}`} target="_blank" rel="noopener" className="flex items-center gap-1 text-brand-600 hover:underline"><Globe className="w-4 h-4" />{(lead.website || lead.domain || '').replace(/^https?:\/\//, '')}</a>
                 {lead.linkedin_company_url ? <a href={lead.linkedin_company_url} target="_blank" rel="noopener" className="flex items-center gap-1 text-blue-600 hover:underline"><Linkedin className="w-4 h-4" />LinkedIn</a> : <span className="flex items-center gap-1 text-gray-300 text-xs italic border-b border-dashed border-gray-300"><Linkedin className="w-4 h-4" />Find on LinkedIn</span>}
               </div>
+              {(!lead.hq_location || !lead.employee_count || !lead.founded_year) && lead.campaign_id && !rerunning && (
+                <button
+                  onClick={() => handleRerun()}
+                  className="mt-2 flex items-center gap-1 text-[11px] text-gray-400 hover:text-brand-600 transition-colors"
+                >
+                  <RefreshCw className="w-3 h-3" />
+                  Re-enrich missing data
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -491,44 +648,38 @@ export function LeadDetail() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* Main content */}
         <div className="lg:col-span-2 space-y-4">
-          {/* Brief skipped callout */}
+          {/* Brief skipped callout — compact inline bar */}
           {!lead.brief_markdown && lead.fit_score != null && lead.score_breakdown && (
-            <div className="bg-gray-50 rounded-xl border border-gray-200 p-5">
-              <div className="flex items-start gap-3">
-                <div className="w-8 h-8 rounded-lg bg-gray-200 flex items-center justify-center shrink-0 mt-0.5">
-                  <FileText className="w-4 h-4 text-gray-500" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-gray-800">No outreach brief generated</p>
-                  <p className="text-sm text-gray-500 mt-1">
-                    {lead.brief_threshold ? (
-                      <>This lead scored <span className="font-medium text-gray-700">{lead.fit_score}</span> — below the <span className="font-medium text-gray-700">{lead.brief_threshold}-point threshold</span> set for <span className="font-medium text-gray-700">{lead.campaign_name || 'this campaign'}</span>. Only leads meeting the threshold receive outreach briefs.</>
-                    ) : lead.brief_candidate_limit ? (
-                      <>This lead scored <span className="font-medium text-gray-700">{lead.fit_score}</span> and wasn't among the top {lead.brief_candidate_limit} candidates in <span className="font-medium text-gray-700">{lead.campaign_name || 'this campaign'}</span>. Briefs are generated for the highest-scoring leads first.</>
-                    ) : (
-                      <>This lead scored <span className="font-medium text-gray-700">{lead.fit_score}</span> and wasn't selected for outreach brief generation in <span className="font-medium text-gray-700">{lead.campaign_name || 'this campaign'}</span>.</>
-                    )}
-                  </p>
-                  <div className="flex items-center gap-3 mt-3">
-                    <button
-                      onClick={handleForceBrief}
-                      disabled={rerunning}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-brand-600 hover:bg-brand-700 rounded-lg transition-colors disabled:opacity-50"
-                    >
-                      <FileText className="w-3 h-3" />
-                      Generate brief anyway
-                    </button>
-                    {lead.campaign_id && (
-                      <Link
-                        to={`/campaigns/${lead.campaign_id}`}
-                        className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-500 hover:text-brand-600 transition-colors"
-                      >
-                        <SlidersHorizontal className="w-3 h-3" />
-                        Adjust threshold
-                      </Link>
-                    )}
-                  </div>
-                </div>
+            <div className="bg-gray-50 rounded-lg border border-gray-200 px-4 py-3 flex items-center justify-between gap-4">
+              <p className="text-sm text-gray-500">
+                <span className="font-medium text-gray-700">No brief generated</span>
+                {' — '}
+                {lead.brief_threshold ? (
+                  <>scored {lead.fit_score}, below {lead.brief_threshold}-pt threshold</>
+                ) : lead.brief_candidate_limit ? (
+                  <>not in top {lead.brief_candidate_limit} candidates</>
+                ) : (
+                  <>not selected for brief generation</>
+                )}
+              </p>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  onClick={handleForceBrief}
+                  disabled={rerunning}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-brand-600 hover:bg-brand-700 rounded-lg transition-colors disabled:opacity-50"
+                >
+                  <FileText className="w-3 h-3" />
+                  Generate anyway
+                </button>
+                {lead.campaign_id && (
+                  <Link
+                    to={`/campaigns/${lead.campaign_id}`}
+                    className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-500 hover:text-brand-600 transition-colors"
+                  >
+                    <SlidersHorizontal className="w-3 h-3" />
+                    Threshold
+                  </Link>
+                )}
               </div>
             </div>
           )}
@@ -812,9 +963,10 @@ export function LeadDetail() {
               <ActionCard
                 dimensions={lead.dimensions_parsed}
                 leadId={lead.id}
-                isWatching={lead.watch_status === 'active'}
-                watchWakeDate={lead.watch_wake_date}
-                watchCategory={lead.watch_category}
+                isWatching={lead.watch_items?.some((w: any) => w.status === 'active')}
+                watchWakeDate={lead.watch_items?.find((w: any) => w.status === 'active')?.snooze_until ?? null}
+                watchCategory={lead.watch_items?.find((w: any) => w.status === 'active')?.category ?? null}
+                watchItemId={lead.watch_items?.find((w: any) => w.status === 'active')?.id ?? null}
                 championName={champion?.name}
                 championTitle={champion?.title}
                 championLinkedIn={champion?.linkedin_url}
@@ -838,63 +990,37 @@ export function LeadDetail() {
             onFeedbackSubmitted={refreshLead}
           />
 
-          {/* Tech Stack */}
-          {techStack && (
-            <div className="bg-white rounded-xl border border-gray-200 p-4">
-              <h3 className="font-medium text-gray-900 mb-3 flex items-center gap-2"><Server className="w-4 h-4" /> Tech Stack Intel</h3>
-              <div className="space-y-3 text-sm">
-                {(() => {
-                  // Build unified category map: prefer new `categories` field, fall back to legacy fields
-                  const cats: Record<string, any[]> = {};
-                  if (techStack.categories && Object.keys(techStack.categories).length > 0) {
-                    for (const [k, items] of Object.entries(techStack.categories)) {
-                      if (Array.isArray(items) && items.length > 0) cats[k] = items;
-                    }
-                  } else {
-                    if (techStack.vpn_product) cats['vpn'] = [techStack.vpn_product];
-                    if (techStack.pam_product) cats['pam'] = [techStack.pam_product];
-                    if (techStack.cloud_infra?.length > 0) cats['cloud'] = techStack.cloud_infra;
-                    if (techStack.dev_tools?.length > 0) cats['devops'] = techStack.dev_tools;
-                  }
-                  const LABELS: Record<string, string> = {
-                    vpn: 'VPN', pam: 'PAM', mdm: 'MDM', edr: 'EDR', idp: 'IdP',
-                    cloud: 'Cloud', siem: 'SIEM', devops: 'DevOps',
-                  };
-                  return Object.entries(cats).map(([catId, items]) => (
-                    <div key={catId}>
-                      <p className="text-xs text-gray-500 uppercase">{LABELS[catId] || catId}</p>
-                      <div className="flex flex-wrap gap-1.5 mt-1">
-                        {items.map((item: any, i: number) => <TechTag key={i} item={item} />)}
-                      </div>
-                    </div>
-                  ));
-                })()}
-              </div>
-            </div>
-          )}
-
           {/* Score Breakdown — v2 Dimensions Panel or v1 Legacy */}
           {lead.scoring_version === 2 && lead.dimensions_parsed ? (() => {
             const dims = lead.dimensions_parsed;
-            const DIM_META: { key: string; label: string; color: string; icon: typeof Target; getValue: () => string }[] = [
-              { key: 'icp_fit', label: 'ICP Fit', color: 'sky', icon: Target, getValue: () => `${dims.icp_fit}/100` },
-              { key: 'timing', label: 'Timing', color: 'amber', icon: Clock, getValue: () => `${dims.timing}/100` },
-              { key: 'data_confidence', label: 'Data Confidence', color: 'emerald', icon: BarChart3, getValue: () => `${dims.data_confidence} (${dims.data_confidence_score}/100)` },
-              { key: 'reachability', label: 'Reachability', color: 'violet', icon: Crosshair, getValue: () => `${dims.reachability}/100` },
-              { key: 'research_completeness', label: 'Research', color: 'slate', icon: Search, getValue: () => `${dims.research_completeness}%` },
-              { key: 'signal_density', label: 'Signals', color: 'indigo', icon: Radio, getValue: () => `${dims.signal_density?.total_signals ?? 0}` },
-            ];
             const factSheet = lead.fact_sheet_parsed;
+            const buckets = buildBuckets(dims);
+
+            const DIMENSION_ROWS: Record<string, { key: string; friendly: string; technical: string; icon: typeof Target; getValue: () => string; isGrade?: boolean }[]> = {
+              FIT: [
+                { key: 'icp_fit', friendly: 'How well do they fit?', technical: 'ICP Fit', icon: Target, getValue: () => `${dims.icp_fit}` },
+                { key: 'reachability', friendly: 'Can we reach them?', technical: 'Reachability', icon: Crosshair, getValue: () => `${dims.reachability}` },
+              ],
+              INTENT: [
+                { key: 'timing', friendly: 'Is the timing right?', technical: 'Timing', icon: Clock, getValue: () => `${dims.timing}` },
+                { key: 'signal_quality', friendly: 'Are they looking?', technical: 'Signal Quality', icon: Signal, getValue: () => `${dims.signal_quality ?? 0}` },
+              ],
+              EVIDENCE: [
+                { key: 'data_confidence', friendly: 'How sure are we?', technical: 'Data Confidence', icon: BarChart3, getValue: () => `${dims.data_confidence_score ?? 0}`, isGrade: true },
+                { key: 'research_completeness', friendly: 'How much do we know?', technical: 'Research', icon: Search, getValue: () => `${dims.research_completeness}%` },
+                { key: 'signal_density', friendly: 'How many signals?', technical: 'Signal Density', icon: Radio, getValue: () => `${dims.signal_density?.total_signals ?? 0}` },
+              ],
+            };
 
             return (
               <>
-                {/* Dimensions Panel */}
+                {/* Dimensions Panel — Bucket-Grouped */}
                 <div className="bg-white rounded-xl border border-gray-200 p-4">
-                  <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center justify-between mb-4">
                     <h3 className="font-medium text-gray-900 flex items-center gap-2">
                       <Signal className="w-4 h-4" /> Scoring Dimensions
                     </h3>
-                    <span className={`text-sm font-bold px-2 py-0.5 rounded-full ${
+                    <span className={`text-sm font-bold px-2 py-0.5 rounded-full tabular-nums ${
                       lead.fit_score >= 75 ? 'bg-emerald-100 text-emerald-700' :
                       lead.fit_score >= 60 ? 'bg-amber-100 text-amber-700' :
                       'bg-red-100 text-red-700'
@@ -902,97 +1028,172 @@ export function LeadDetail() {
                       {lead.fit_score}/100
                     </span>
                   </div>
-                  <div className="space-y-1">
-                    {DIM_META.map((dim) => {
-                      const rawValue = dim.key === 'data_confidence' ? (dims.data_confidence_score ?? 0)
-                        : dim.key === 'signal_density' ? (dims.signal_density?.total_signals ?? 0)
-                        : (dims as any)[dim.key] ?? 0;
-                      const maxVal = dim.key === 'signal_density' ? 20 : 100;
-                      const pct = Math.min(rawValue / maxVal, 1);
-                      const barColor = pct >= 0.7 ? `bg-${dim.color}-500` : pct >= 0.4 ? `bg-${dim.color}-400` : 'bg-gray-300';
-                      const isExpanded = expandedSignalCat === dim.key;
-                      const hasDetail = dim.key !== 'signal_density' && dim.key !== 'research_completeness';
 
-                      const DimIcon = dim.icon;
+                  <div className="space-y-3">
+                    {buckets.map((bucket) => {
+                      const { colorScheme: c } = bucket;
+                      const BucketIcon = bucket.icon;
+                      const weak = bucket.score < 35;
+                      const dimRows = DIMENSION_ROWS[bucket.label] || [];
+                      const isEvidence = bucket.label === 'EVIDENCE';
+                      const displayScore = isEvidence ? `${Math.round(bucket.score)}%` : String(bucket.score);
+
                       return (
-                        <div key={dim.key}>
-                          <button
-                            onClick={() => hasDetail && setExpandedSignalCat(isExpanded ? null : dim.key)}
-                            className={`w-full flex items-center gap-2 py-1.5 rounded -mx-1 px-1 ${hasDetail ? 'hover:bg-gray-50 cursor-pointer' : 'cursor-default'}`}
-                          >
-                            <DimIcon className={`w-3.5 h-3.5 text-${dim.color}-500 shrink-0`} />
-                            <span className={`w-28 text-xs font-medium text-${dim.color}-700 text-left truncate shrink-0`}>{dim.label}</span>
-                            <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
-                              <div className={`h-full ${barColor} rounded-full transition-all`} style={{ width: `${Math.round(pct * 100)}%` }} />
+                        <div key={bucket.label} className={`rounded-lg border-l-[3px] ${c.accentBorder} ${c.bg} border border-r-gray-200/40 border-t-gray-200/40 border-b-gray-200/40 overflow-hidden`}>
+                          {/* Bucket Header */}
+                          <div className="px-3 pt-2.5 pb-2">
+                            <div className="flex items-center justify-between mb-1">
+                              <div className="flex items-center gap-1.5">
+                                <BucketIcon className={`w-3.5 h-3.5 ${c.label}`} />
+                                <span className={`text-[10px] font-semibold uppercase tracking-wider ${c.label}`}>{bucket.label}</span>
+                                <span className={`text-[9px] ${c.label} opacity-50`}>{bucket.question}</span>
+                              </div>
+                              <span className={`text-lg font-bold tabular-nums ${weak ? 'text-gray-400' : c.score}`}>{displayScore}</span>
                             </div>
-                            <span className="w-16 text-right text-[11px] text-gray-500 shrink-0">{dim.getValue()}</span>
-                            {hasDetail ? (
-                              <ChevronDown className={`w-3 h-3 text-gray-400 transition-transform shrink-0 ${isExpanded ? 'rotate-180' : ''}`} />
-                            ) : (
-                              <span className="w-3 h-3 shrink-0" />
-                            )}
-                          </button>
-                          {isExpanded && factSheet && dim.key === 'icp_fit' && (
-                            <div className="ml-6 mt-1 mb-2 space-y-0.5 text-[11px] text-gray-500">
-                              <div>Industry: {factSheet.industry || 'Unknown'}{factSheet.sub_industry ? ` / ${factSheet.sub_industry}` : ''}</div>
-                              <div>Employee range: {factSheet.employee_count_range} {factSheet.employee_count_confirmed ? '(confirmed)' : '(unconfirmed)'}</div>
-                              <div>Remote workforce: {factSheet.remote_workforce_evidence}</div>
-                              <div>Multi-office: {factSheet.multi_office ? `Yes (${factSheet.office_count ?? '?'} offices)` : 'No/Unknown'}</div>
-                              <div>Vertical: {factSheet.vertical_match} {factSheet.vertical_name ? `— ${factSheet.vertical_name}` : ''}</div>
-                              {factSheet.vpn_products_detected?.length > 0 && (
-                                <div>VPN: {factSheet.vpn_products_detected.map((v: any) => `${v.product} (${v.confidence})`).join(', ')}</div>
-                              )}
-                              {factSheet.competitor_products_detected?.length > 0 && (
-                                <div>Competitors: {factSheet.competitor_products_detected.map((c: any) => `${c.product} (${c.confidence})`).join(', ')}</div>
-                              )}
+                            <div className={`h-[4px] rounded-full overflow-hidden ${c.barTrack}`}>
+                              <div className={`h-full rounded-full transition-all duration-500 ${weak ? 'bg-gray-300' : c.bar}`}
+                                style={{ width: `${Math.min(bucket.score, 100)}%` }} />
                             </div>
-                          )}
-                          {isExpanded && factSheet && dim.key === 'timing' && (
-                            <div className="ml-6 mt-1 mb-2 space-y-0.5 text-[11px] text-gray-500">
-                              {factSheet.active_evaluation_evidence?.length > 0 && (
-                                <div className="text-amber-700 font-medium">Active evaluation: {factSheet.active_evaluation_evidence.map((e: any) => `${e.description} (${e.confidence})`).join('; ')}</div>
-                              )}
-                              {factSheet.funding_events?.length > 0 && (
-                                <div>Funding: {factSheet.funding_events.map((f: any) => `${f.type}${f.amount ? ` ${f.amount}` : ''} (${f.recency})`).join(', ')}</div>
-                              )}
-                              {factSheet.hiring_signals?.length > 0 && (
-                                <div>Hiring: {factSheet.hiring_signals.map((h: any) => `${h.role} (${h.recency})`).join(', ')}</div>
-                              )}
-                              {factSheet.leadership_changes?.length > 0 && (
-                                <div>Leadership: {factSheet.leadership_changes.map((l: any) => `${l.title} (${l.recency})`).join(', ')}</div>
-                              )}
-                              {factSheet.compliance_signals?.length > 0 && (
-                                <div>Compliance: {factSheet.compliance_signals.map((c: any) => `${c.regulation}: ${c.evidence}`).join('; ')}</div>
-                              )}
-                            </div>
-                          )}
-                          {isExpanded && factSheet && dim.key === 'data_confidence' && (
-                            <div className="ml-6 mt-1 mb-2 space-y-0.5 text-[11px] text-gray-500">
-                              <div>Facts from enrichment: {factSheet.facts_from_enrichment ?? 0}</div>
-                              <div>Facts from model knowledge: {factSheet.facts_from_model_knowledge ?? 0}</div>
-                              <div>Fact confidence: {factSheet.fact_confidence ?? 'unknown'}</div>
-                              {lead.enrichment_metadata_parsed && (
-                                <>
-                                  <div>Sources responded: {lead.enrichment_metadata_parsed.sources_responded?.length ?? 0}</div>
-                                  <div>Sources failed: {lead.enrichment_metadata_parsed.sources_failed?.length ?? 0}</div>
-                                  <div>Corroboration: {lead.enrichment_metadata_parsed.corroboration_count ?? 0} fields confirmed by 2+ sources</div>
-                                </>
-                              )}
-                            </div>
-                          )}
-                          {isExpanded && factSheet && dim.key === 'reachability' && (
-                            <div className="ml-6 mt-1 mb-2 space-y-0.5 text-[11px] text-gray-500">
-                              {factSheet.named_contacts?.length > 0 ? factSheet.named_contacts.map((c: any, i: number) => (
-                                <div key={i}>
-                                  {c.name || 'Unnamed'} — {c.title} ({c.role_fit})
-                                  {c.has_linkedin && <span className="text-blue-500 ml-1">LinkedIn</span>}
-                                  {c.has_email && <span className="text-emerald-500 ml-1">Email</span>}
+                          </div>
+
+                          {/* Dimension Rows */}
+                          <div className="px-2 pb-2 space-y-px">
+                            {dimRows.map((dim) => {
+                              const rawValue = dim.key === 'data_confidence' ? (dims.data_confidence_score ?? 0)
+                                : dim.key === 'signal_density' ? Math.min((dims.signal_density?.total_signals ?? 0) * 5, 100)
+                                : (dims as any)[dim.key] ?? 0;
+                              const pct = Math.min(rawValue / 100, 1);
+                              const dimWeak = rawValue < 35;
+                              const isExpanded = expandedSignalCat === dim.key;
+                              const hasDetail = dim.key !== 'signal_density' && dim.key !== 'research_completeness';
+                              const DimIcon = dim.icon;
+
+                              return (
+                                <div key={dim.key}>
+                                  <button
+                                    onClick={() => hasDetail && setExpandedSignalCat(isExpanded ? null : dim.key)}
+                                    className={`w-full flex items-center gap-2 py-1.5 px-1.5 rounded-md transition-colors ${
+                                      hasDetail ? 'hover:bg-white/60 cursor-pointer' : 'cursor-default'
+                                    } ${dimWeak ? 'opacity-60' : ''}`}
+                                  >
+                                    <DimIcon className={`w-3 h-3 ${dimWeak ? 'text-gray-400' : c.subLabel} shrink-0`} />
+                                    <div className="flex-1 min-w-0 text-left">
+                                      <div className={`text-[11px] font-medium leading-tight ${dimWeak ? 'text-gray-500' : 'text-gray-700'}`}>{dim.friendly}</div>
+                                      <div className="text-[9px] text-gray-400 leading-tight">{dim.technical}</div>
+                                    </div>
+                                    <div className="flex items-center gap-1.5 shrink-0">
+                                      {dim.isGrade && dims.data_confidence && (
+                                        <GradeTooltip grade={dims.data_confidence} />
+                                      )}
+                                      <span className={`text-xs font-semibold tabular-nums ${dimWeak ? 'text-gray-400' : c.score}`}>{dim.getValue()}</span>
+                                      {hasDetail && (
+                                        <ChevronDown className={`w-3 h-3 text-gray-400 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                                      )}
+                                    </div>
+                                  </button>
+
+                                  {/* Gauge */}
+                                  <div className="px-1.5 pb-1">
+                                    <div className={`h-[3px] rounded-full overflow-hidden ${c.barTrack}`}>
+                                      <div className={`h-full rounded-full transition-all duration-300 ${dimWeak ? 'bg-gray-300' : c.subBar}`}
+                                        style={{ width: `${Math.round(pct * 100)}%` }} />
+                                    </div>
+                                  </div>
+
+                                  {/* Expandable Evidence */}
+                                  {isExpanded && factSheet && dim.key === 'icp_fit' && (
+                                    <div className="mx-1.5 mb-2 p-2 rounded-md bg-white/80 border border-gray-100 space-y-0.5 text-[11px] text-gray-500">
+                                      <div>Industry: <span className="text-gray-700">{factSheet.industry || 'Unknown'}{factSheet.sub_industry ? ` / ${factSheet.sub_industry}` : ''}</span></div>
+                                      <div>Employees: <span className="text-gray-700">{factSheet.employee_count_range}</span> {factSheet.employee_count_confirmed ? <span className="text-emerald-600 text-[9px]">confirmed</span> : <span className="text-amber-500 text-[9px]">unconfirmed</span>}</div>
+                                      <div>Remote workforce: <span className="text-gray-700">{factSheet.remote_workforce_evidence}</span></div>
+                                      <div>Multi-office: <span className="text-gray-700">{factSheet.multi_office ? `Yes (${factSheet.office_count ?? '?'} offices)` : 'No/Unknown'}</span></div>
+                                      <div>Vertical: <span className="text-gray-700">{factSheet.vertical_match}</span> {factSheet.vertical_name ? <span className="text-gray-400">— {factSheet.vertical_name}</span> : ''}</div>
+                                      {factSheet.vpn_products_detected?.length > 0 && (
+                                        <div>VPN: {factSheet.vpn_products_detected.map((v: any, i: number) => (
+                                          <span key={i} className="inline-flex items-center gap-0.5 mr-1">
+                                            <span className="text-gray-700">{v.product}</span>
+                                            <span className={`text-[9px] ${v.confidence === 'confirmed' ? 'text-emerald-600' : 'text-amber-500'}`}>({v.confidence})</span>
+                                            {v.source && <span className="text-[9px] text-gray-400">via {v.source}</span>}
+                                          </span>
+                                        ))}</div>
+                                      )}
+                                      {factSheet.competitor_products_detected?.length > 0 && (
+                                        <div>Competitors: {factSheet.competitor_products_detected.map((cp: any, i: number) => (
+                                          <span key={i} className="inline-flex items-center gap-0.5 mr-1">
+                                            <span className="text-gray-700">{cp.product}</span>
+                                            <span className={`text-[9px] ${cp.confidence === 'confirmed' ? 'text-emerald-600' : 'text-amber-500'}`}>({cp.confidence})</span>
+                                            {cp.source && <span className="text-[9px] text-gray-400">via {cp.source}</span>}
+                                          </span>
+                                        ))}</div>
+                                      )}
+                                    </div>
+                                  )}
+                                  {isExpanded && factSheet && dim.key === 'timing' && (
+                                    <div className="mx-1.5 mb-2 p-2 rounded-md bg-white/80 border border-gray-100 space-y-0.5 text-[11px] text-gray-500">
+                                      {factSheet.active_evaluation_evidence?.length > 0 && (
+                                        <div className="text-amber-700 font-medium">Active evaluation: {factSheet.active_evaluation_evidence.map((e: any) => `${e.description} (${e.confidence})`).join('; ')}</div>
+                                      )}
+                                      {factSheet.funding_events?.length > 0 && (
+                                        <div>Funding: {factSheet.funding_events.map((f: any) => `${f.type}${f.amount ? ` ${f.amount}` : ''} (${f.recency})`).join(', ')}</div>
+                                      )}
+                                      {factSheet.hiring_signals?.length > 0 && (
+                                        <div>Hiring: {factSheet.hiring_signals.map((h: any) => `${h.role} (${h.recency})`).join(', ')}</div>
+                                      )}
+                                      {factSheet.leadership_changes?.length > 0 && (
+                                        <div>Leadership: {factSheet.leadership_changes.map((l: any) => `${l.title} (${l.recency})`).join(', ')}</div>
+                                      )}
+                                      {factSheet.compliance_signals?.length > 0 && (
+                                        <div>Compliance: {factSheet.compliance_signals.map((c: any) => `${c.regulation}: ${c.evidence}`).join('; ')}</div>
+                                      )}
+                                    </div>
+                                  )}
+                                  {isExpanded && factSheet && dim.key === 'signal_quality' && (
+                                    <div className="mx-1.5 mb-2 p-2 rounded-md bg-white/80 border border-gray-100 text-[11px] text-gray-500">
+                                      <div className="text-gray-400 italic">Signal strength derived from weighted buying signals — see Signal Breakdown below for detail.</div>
+                                    </div>
+                                  )}
+                                  {isExpanded && factSheet && dim.key === 'data_confidence' && (
+                                    <div className="mx-1.5 mb-2 p-2 rounded-md bg-white/80 border border-gray-100 space-y-0.5 text-[11px] text-gray-500">
+                                      <div>Enrichment facts: <span className="text-gray-700 font-medium">{factSheet.facts_from_enrichment ?? 0}</span></div>
+                                      <div>Model knowledge facts: <span className="text-gray-700">{factSheet.facts_from_model_knowledge ?? 0}</span></div>
+                                      <div>Overall confidence: <span className="text-gray-700">{factSheet.fact_confidence ?? 'unknown'}</span></div>
+                                      {lead.enrichment_metadata_parsed && (
+                                        <>
+                                          <div className="border-t border-gray-100 pt-1 mt-1">Sources: <span className="text-emerald-600 font-medium">{lead.enrichment_metadata_parsed.sources_responded?.length ?? 0} responded</span> · <span className="text-red-500">{lead.enrichment_metadata_parsed.sources_failed?.length ?? 0} failed</span></div>
+                                          {(lead.enrichment_metadata_parsed.corroboration_count ?? 0) > 0 && (
+                                            <div className="flex items-center gap-1">
+                                              <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 text-[9px] font-medium border border-emerald-200">{lead.enrichment_metadata_parsed.corroboration_count} fields corroborated</span>
+                                            </div>
+                                          )}
+                                        </>
+                                      )}
+                                    </div>
+                                  )}
+                                  {isExpanded && factSheet && dim.key === 'reachability' && (
+                                    <div className="mx-1.5 mb-2 p-2 rounded-md bg-white/80 border border-gray-100 space-y-0.5 text-[11px] text-gray-500">
+                                      {factSheet.named_contacts?.length > 0 ? factSheet.named_contacts.map((ct: any, i: number) => (
+                                        <div key={i} className="flex items-center gap-1 flex-wrap">
+                                          <span className="text-gray-700 font-medium">{ct.name || 'Unnamed'}</span>
+                                          <span className="text-gray-400">— {ct.title}</span>
+                                          <span className={`text-[9px] px-1 py-px rounded ${
+                                            ct.role_fit === 'champion' ? 'bg-sky-50 text-sky-700' :
+                                            ct.role_fit === 'economic_buyer' ? 'bg-amber-50 text-amber-700' :
+                                            'bg-gray-100 text-gray-500'
+                                          }`}>{ct.role_fit}</span>
+                                          {ct.has_linkedin && <span className="text-[9px] text-blue-500">LinkedIn</span>}
+                                          {ct.has_email && <span className="text-[9px] text-emerald-500">Email</span>}
+                                        </div>
+                                      )) : <div className="text-gray-400 italic">No named contacts found</div>}
+                                      <div className="border-t border-gray-100 pt-1 mt-1 flex gap-3">
+                                        <span>Security team: <span className={factSheet.security_team_visible ? 'text-emerald-600' : 'text-gray-400'}>{factSheet.security_team_visible ? 'Visible' : 'No'}</span></span>
+                                        <span>IT org: <span className={factSheet.it_org_visible ? 'text-emerald-600' : 'text-gray-400'}>{factSheet.it_org_visible ? 'Visible' : 'No'}</span></span>
+                                      </div>
+                                    </div>
+                                  )}
                                 </div>
-                              )) : <div>No named contacts found</div>}
-                              <div>Security team visible: {factSheet.security_team_visible ? 'Yes' : 'No'}</div>
-                              <div>IT org visible: {factSheet.it_org_visible ? 'Yes' : 'No'}</div>
-                            </div>
-                          )}
+                              );
+                            })}
+                          </div>
                         </div>
                       );
                     })}
@@ -1033,28 +1234,6 @@ export function LeadDetail() {
                           </div>
                         </div>
                       ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* Source Status Grid */}
-                {lead.enrichment_metadata_parsed && (
-                  <div className="bg-white rounded-xl border border-gray-200 p-4">
-                    <h3 className="font-medium text-gray-900 flex items-center gap-2 mb-3">
-                      <Globe className="w-4 h-4" /> Enrichment Sources
-                    </h3>
-                    <div className="grid grid-cols-2 gap-1.5">
-                      {(lead.enrichment_metadata_parsed.sources_available || []).map((src: string) => {
-                        const responded = (lead.enrichment_metadata_parsed.sources_responded || []).includes(src);
-                        const failed = (lead.enrichment_metadata_parsed.sources_failed || []).includes(src);
-                        const status = responded ? 'responded' : failed ? 'failed' : 'unchecked';
-                        return (
-                          <div key={src} className="flex items-center gap-1.5 text-[11px] text-gray-600">
-                            <SourceDot status={status} />
-                            <span className={failed ? 'line-through text-gray-400' : ''}>{src}</span>
-                          </div>
-                        );
-                      })}
                     </div>
                   </div>
                 )}
@@ -1196,6 +1375,149 @@ export function LeadDetail() {
                     ))}
                   </div>
                 )}
+              </div>
+            );
+          })()}
+
+          {/* Tech Stack */}
+          {techStack && (
+            <div className="bg-white rounded-xl border border-gray-200 p-4">
+              <h3 className="font-medium text-gray-900 mb-3 flex items-center gap-2"><Server className="w-4 h-4" /> Tech Stack Intel</h3>
+              <div className="space-y-3 text-sm">
+                {(() => {
+                  const cats: Record<string, any[]> = {};
+                  if (techStack.categories && Object.keys(techStack.categories).length > 0) {
+                    for (const [k, items] of Object.entries(techStack.categories)) {
+                      if (Array.isArray(items) && items.length > 0) cats[k] = items;
+                    }
+                  } else {
+                    if (techStack.vpn_product) cats['vpn'] = [techStack.vpn_product];
+                    if (techStack.pam_product) cats['pam'] = [techStack.pam_product];
+                    if (techStack.cloud_infra?.length > 0) cats['cloud'] = techStack.cloud_infra;
+                    if (techStack.dev_tools?.length > 0) cats['devops'] = techStack.dev_tools;
+                  }
+                  const LABELS: Record<string, string> = {
+                    vpn: 'VPN', pam: 'PAM', mdm: 'MDM', edr: 'EDR', idp: 'IdP',
+                    cloud: 'Cloud', siem: 'SIEM', devops: 'DevOps',
+                  };
+                  return Object.entries(cats).map(([catId, items]) => (
+                    <div key={catId}>
+                      <p className="text-xs text-gray-500 uppercase">{LABELS[catId] || catId}</p>
+                      <div className="flex flex-wrap gap-1.5 mt-1">
+                        {items.map((item: any, i: number) => <TechTag key={i} item={item} />)}
+                      </div>
+                    </div>
+                  ));
+                })()}
+              </div>
+            </div>
+          )}
+
+          {/* Data Sources — Auditability Panel */}
+          {lead.enrichment_metadata_parsed && (() => {
+            const em = lead.enrichment_metadata_parsed;
+            const available = em.sources_available || [];
+            const responded = new Set(em.sources_responded || []);
+            const failed = new Set(em.sources_failed || []);
+            const fieldSources = em.field_sources as Record<string, string[]> | undefined;
+            const corroborationCount = em.corroboration_count ?? 0;
+            const respondedCount = responded.size;
+            const totalCount = available.length;
+
+            const getSourceFields = (src: string): string[] => {
+              if (!fieldSources) return [];
+              return Object.entries(fieldSources)
+                .filter(([, sources]) => sources.includes(src))
+                .map(([field]) => field);
+            };
+
+            const getFieldSourceCount = (field: string): number => {
+              return fieldSources?.[field]?.length ?? 0;
+            };
+
+            return (
+              <div className="bg-white rounded-xl border border-gray-200 p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="font-medium text-gray-900 flex items-center gap-2">
+                    <Globe className="w-4 h-4" /> Data Sources
+                  </h3>
+                  <div className="flex items-center gap-2">
+                    {corroborationCount > 0 && (
+                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 text-[9px] font-semibold border border-emerald-200 tracking-wide">
+                        {corroborationCount} corroborated
+                      </span>
+                    )}
+                    <span className="text-[10px] text-gray-400 tabular-nums font-medium">{respondedCount}/{totalCount}</span>
+                  </div>
+                </div>
+
+                {/* Coverage bar */}
+                <div className="mb-3">
+                  <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                    <div className="h-full bg-emerald-400 rounded-full transition-all duration-500"
+                      style={{ width: `${totalCount > 0 ? Math.round((respondedCount / totalCount) * 100) : 0}%` }} />
+                  </div>
+                </div>
+
+                {/* Source Grid */}
+                <div className="space-y-1">
+                  {available.map((src: string) => {
+                    const isResponded = responded.has(src);
+                    const isFailed = failed.has(src);
+                    const isExpandable = isResponded && fieldSources && getSourceFields(src).length > 0;
+                    const isExpanded = expandedSource === src;
+
+                    return (
+                      <div key={src}>
+                        <button
+                          onClick={() => isExpandable && setExpandedSource(isExpanded ? null : src)}
+                          className={`w-full flex items-center gap-2 py-1 px-1.5 rounded-md transition-colors ${
+                            isExpandable ? 'hover:bg-gray-50 cursor-pointer' : 'cursor-default'
+                          } ${isExpanded ? 'bg-gray-50' : ''}`}
+                        >
+                          {isResponded ? (
+                            <Check className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                          ) : isFailed ? (
+                            <XCircle className="w-3.5 h-3.5 text-red-400 shrink-0" />
+                          ) : (
+                            <Circle className="w-3.5 h-3.5 text-gray-300 shrink-0" />
+                          )}
+                          <span className={`text-[11px] flex-1 text-left capitalize ${
+                            isFailed ? 'line-through text-gray-400' :
+                            isResponded ? 'text-gray-700 font-medium' :
+                            'text-gray-400'
+                          }`}>
+                            {src.replace(/_/g, ' ')}
+                          </span>
+                          {isExpandable && (
+                            <ChevronDown className={`w-3 h-3 text-gray-300 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                          )}
+                        </button>
+                        {isExpanded && (() => {
+                          const fields = getSourceFields(src);
+                          return (
+                            <div className="ml-6 mr-1 mb-1.5 mt-0.5 p-2 rounded-md bg-gray-50/80 border border-gray-100">
+                              <div className="text-[9px] uppercase text-gray-400 font-semibold tracking-wider mb-1">Fields contributed</div>
+                              <div className="flex flex-wrap gap-1">
+                                {fields.map((field: string) => {
+                                  const sourceCount = getFieldSourceCount(field);
+                                  return (
+                                    <span key={field} className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded bg-white border border-gray-200 text-gray-600">
+                                      {field.replace(/_/g, ' ')}
+                                      {sourceCount >= 2 && (
+                                        <span className="text-[8px] px-1 py-px rounded-full bg-emerald-100 text-emerald-700 font-bold ml-0.5">{sourceCount}x</span>
+                                      )}
+                                    </span>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          );
+                        })()}
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             );
           })()}

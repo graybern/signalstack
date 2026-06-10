@@ -133,6 +133,30 @@ export function LeadCard({ lead }: LeadCardProps) {
               )}
             </div>
           )}
+          {isV2 && lead.dimensions_parsed && (
+            <div className="flex items-center gap-2.5 mb-2">
+              {lead.dimensions_parsed.icp_fit != null ? (
+                <MiniGauge label="ICP" value={lead.dimensions_parsed.icp_fit} color="sky" />
+              ) : (
+                <span className="text-[9px] text-gray-300 font-medium">ICP —</span>
+              )}
+              {lead.dimensions_parsed.timing != null ? (
+                <MiniGauge label="TIME" value={lead.dimensions_parsed.timing} color="amber" />
+              ) : (
+                <span className="text-[9px] text-gray-300 font-medium">TIME —</span>
+              )}
+              {lead.dimensions_parsed.reachability != null ? (
+                <MiniGauge label="REACH" value={lead.dimensions_parsed.reachability} color="violet" />
+              ) : (
+                <span className="text-[9px] text-gray-300 font-medium">REACH —</span>
+              )}
+              {lead.dimensions_parsed.signal_quality != null ? (
+                <MiniGauge label="SIG" value={lead.dimensions_parsed.signal_quality} color="indigo" />
+              ) : (
+                <span className="text-[9px] text-gray-300 font-medium">SIG —</span>
+              )}
+            </div>
+          )}
 
           {/* Row 2/3: Metadata + secondary badges */}
           <div className="flex items-center gap-3 text-xs text-gray-500 mb-2">

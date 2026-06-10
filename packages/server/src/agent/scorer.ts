@@ -5,7 +5,7 @@ import { withRetry } from './retry.js';
 import type {
   ExtendedICPConfig, ScoreBreakdown, FunnelStepConfig,
   FactSheet, ScoringDimensions, DataConfidenceGrade, SignalDensity,
-  SignalEntry, SignalCategory, EnrichmentMetadata,
+  SignalEntry, SignalCategory, EnrichmentMetadata, ScoringSignals,
 } from '../types/index.js';
 import type { ResearchCandidate } from './researcher.js';
 import type { TokenTracker } from './tokenTracker.js';
@@ -222,8 +222,10 @@ function clamp(v: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, v));
 }
 
-export function computeIcpFit(fs: FactSheet, icpConfig: ExtendedICPConfig): number {
+export function computeIcpFit(fs: FactSheet, icpConfig: ExtendedICPConfig, scoringSignals?: ScoringSignals): number {
   let score = 0;
+  const painSigs = scoringSignals?.pain_signals;
+  const dispSigs = scoringSignals?.displacement_signals;
 
   // Segment & Scale (0-20)
   let segScore = 0;
@@ -238,15 +240,25 @@ export function computeIcpFit(fs: FactSheet, icpConfig: ExtendedICPConfig): numb
 
   // Remote Access Pain (0-20)
   let rapScore = 0;
-  if (fs.remote_workforce_evidence === 'confirmed' && fs.byod_byoc_evidence) {
+  if (painSigs?.includes('byoc') && fs.byod_byoc_evidence) {
+    rapScore += 20;
+  } else if (fs.remote_workforce_evidence === 'confirmed' && fs.byod_byoc_evidence) {
     rapScore += 20;
   } else if (fs.remote_workforce_evidence === 'confirmed') {
     rapScore += 14;
   } else if (fs.remote_workforce_evidence === 'inferred') {
     rapScore += 8;
   }
-  if (fs.multi_office && (fs.office_count ?? 0) >= 3) rapScore += 4;
-  if (fs.developer_experience_initiative) rapScore += 3;
+  if (painSigs?.includes('multi_office') && fs.multi_office) {
+    rapScore += 4;
+  } else if (fs.multi_office && (fs.office_count ?? 0) >= 3) {
+    rapScore += 4;
+  }
+  if (painSigs?.includes('developer_experience') && fs.developer_experience_initiative) {
+    rapScore += 5;
+  } else if (fs.developer_experience_initiative) {
+    rapScore += 3;
+  }
   score += Math.min(20, rapScore);
 
   // Displacement Wedge (0-20)
@@ -259,11 +271,17 @@ export function computeIcpFit(fs: FactSheet, icpConfig: ExtendedICPConfig): numb
     score += 20;
   } else if (confirmedComp.length > 0) {
     score += 16;
+  } else if (dispSigs?.includes('byoc') && fs.byod_byoc_evidence) {
+    score += 14;
   } else if (inferredVpn.length > 0) {
     score += 14;
+  } else if (dispSigs?.includes('private_networking') && fs.byod_byoc_evidence) {
+    score += 12;
   } else if (inferredComp.length > 0) {
     score += 10;
   } else if (fs.legacy_solution_indicators.length >= 2) {
+    score += 8;
+  } else if (dispSigs?.includes('distributed_team') && fs.multi_office) {
     score += 8;
   } else if (fs.multi_office && (fs.office_count ?? 0) >= 3) {
     score += 8;
@@ -380,6 +398,7 @@ export function computeDataConfidence(fs: FactSheet, enrichMeta?: EnrichmentMeta
   // Source count (0-30): 6pts per source
   const sourceCount = enrichMeta?.sources_responded.length ?? 0;
   raw += Math.min(30, sourceCount * 6);
+  if (sourceCount >= 8) raw += 5;
 
   // Field completeness (0-25)
   const fields = enrichMeta?.field_completeness;
@@ -416,17 +435,28 @@ export function computeDataConfidence(fs: FactSheet, enrichMeta?: EnrichmentMeta
   return { grade, score: raw };
 }
 
-export function computeReachability(fs: FactSheet, enrichMeta?: EnrichmentMetadata): number {
+export function computeReachability(fs: FactSheet, enrichMeta?: EnrichmentMetadata, scoringSignals?: ScoringSignals): number {
   let score = 0;
+  const creditRoleFit = scoringSignals?.credit_role_fit_without_urls ?? false;
 
   const champions = fs.named_contacts.filter(c => c.role_fit === 'champion');
   const econBuyers = fs.named_contacts.filter(c => c.role_fit === 'economic_buyer');
   const others = fs.named_contacts.filter(c => !['champion', 'economic_buyer'].includes(c.role_fit));
 
   // Champions with LinkedIn: 30pts each (max 30)
-  score += Math.min(30, champions.filter(c => c.has_linkedin).length * 30);
+  const champLinked = champions.filter(c => c.has_linkedin).length;
+  score += Math.min(30, champLinked * 30);
+  // Champions without LinkedIn but with role fit: 15pts each (max 15)
+  if (creditRoleFit && champLinked === 0 && champions.length > 0) {
+    score += Math.min(15, champions.length * 15);
+  }
   // Economic buyers with LinkedIn: 20pts each (max 20)
-  score += Math.min(20, econBuyers.filter(c => c.has_linkedin).length * 20);
+  const econLinked = econBuyers.filter(c => c.has_linkedin).length;
+  score += Math.min(20, econLinked * 20);
+  // Economic buyers without LinkedIn but with role fit: 10pts each (max 10)
+  if (creditRoleFit && econLinked === 0 && econBuyers.length > 0) {
+    score += Math.min(10, econBuyers.length * 10);
+  }
   // Other contacts with LinkedIn: 10pts each (max 20)
   score += Math.min(20, others.filter(c => c.has_linkedin).length * 10);
   // Company LinkedIn URL: 10pts (inferred from it_org_visible as proxy)
@@ -490,34 +520,35 @@ const SIGNAL_INTENT_WEIGHTS: Record<string, number> = {
 const CONFIDENCE_MULT: Record<string, number> = { confirmed: 1.0, inferred: 0.7, model_knowledge: 0.3 };
 const FRESHNESS_MULT: Record<string, number> = { recent: 1.0, aged: 0.5, unknown: 0.7 };
 
-export function computeSignalQuality(fs: FactSheet): number {
+export function computeSignalQuality(fs: FactSheet, scoringSignals?: ScoringSignals): number {
   let total = 0;
+  const weights = { ...SIGNAL_INTENT_WEIGHTS, ...scoringSignals?.signal_intent_weights } as Record<string, number>;
 
   for (const v of fs.vpn_products_detected) {
-    total += SIGNAL_INTENT_WEIGHTS.vpn_detection * (CONFIDENCE_MULT[v.confidence] ?? 0.3) * FRESHNESS_MULT.unknown;
+    total += weights.vpn_detection * (CONFIDENCE_MULT[v.confidence] ?? 0.3) * FRESHNESS_MULT.unknown;
   }
   for (const c of fs.competitor_products_detected) {
-    total += SIGNAL_INTENT_WEIGHTS.competitor * (CONFIDENCE_MULT[c.confidence] ?? 0.3) * FRESHNESS_MULT.unknown;
+    total += weights.competitor * (CONFIDENCE_MULT[c.confidence] ?? 0.3) * FRESHNESS_MULT.unknown;
   }
   for (const e of fs.active_evaluation_evidence) {
-    total += SIGNAL_INTENT_WEIGHTS.evaluation * (CONFIDENCE_MULT[e.confidence] ?? 0.3) * FRESHNESS_MULT.recent;
+    total += weights.evaluation * (CONFIDENCE_MULT[e.confidence] ?? 0.3) * FRESHNESS_MULT.recent;
   }
 
   const vpnKeywords = ['vpn', 'ztna', 'zero trust', 'network access', 'remote access', 'sase'];
   for (const h of fs.hiring_signals) {
     const isVpn = h.keywords.some(k => vpnKeywords.some(vk => k.toLowerCase().includes(vk)));
-    const weight = isVpn ? SIGNAL_INTENT_WEIGHTS.hiring_vpn : SIGNAL_INTENT_WEIGHTS.hiring_general;
+    const weight = isVpn ? weights.hiring_vpn : weights.hiring_general;
     total += weight * CONFIDENCE_MULT.inferred * (FRESHNESS_MULT[h.recency] ?? 0.7);
   }
 
   for (const f of fs.funding_events) {
-    total += SIGNAL_INTENT_WEIGHTS.funding * CONFIDENCE_MULT.confirmed * (FRESHNESS_MULT[f.recency] ?? 0.7);
+    total += weights.funding * CONFIDENCE_MULT.confirmed * (FRESHNESS_MULT[f.recency] ?? 0.7);
   }
   for (const l of fs.leadership_changes) {
-    total += SIGNAL_INTENT_WEIGHTS.leadership * CONFIDENCE_MULT.confirmed * (FRESHNESS_MULT[l.recency] ?? 0.7);
+    total += weights.leadership * CONFIDENCE_MULT.confirmed * (FRESHNESS_MULT[l.recency] ?? 0.7);
   }
   for (const _c of fs.compliance_signals) {
-    total += SIGNAL_INTENT_WEIGHTS.compliance * CONFIDENCE_MULT.inferred * FRESHNESS_MULT.unknown;
+    total += weights.compliance * CONFIDENCE_MULT.inferred * FRESHNESS_MULT.unknown;
   }
 
   return clamp(Math.round(total), 0, 100);
@@ -547,14 +578,15 @@ export function computeAllDimensions(
   fs: FactSheet,
   icpConfig: ExtendedICPConfig,
   enrichMeta?: EnrichmentMetadata,
+  scoringSignals?: ScoringSignals,
 ): ScoringDimensions {
-  const icp_fit = computeIcpFit(fs, icpConfig);
+  const icp_fit = computeIcpFit(fs, icpConfig, scoringSignals);
   const timing = computeTiming(fs);
   const { grade: data_confidence, score: data_confidence_score } = computeDataConfidence(fs, enrichMeta);
-  const reachability = computeReachability(fs, enrichMeta);
+  const reachability = computeReachability(fs, enrichMeta, scoringSignals);
   const research_completeness = computeResearchCompleteness(enrichMeta);
   const signal_density = computeSignalDensity(fs);
-  const signal_quality = computeSignalQuality(fs);
+  const signal_quality = computeSignalQuality(fs, scoringSignals);
 
   const partialDims = {
     icp_fit, timing, data_confidence, data_confidence_score,
@@ -594,7 +626,7 @@ export function computeCompositeV2(
   };
 }
 
-function dimensionsToLegacyBreakdown(dims: ScoringDimensions, fs: FactSheet): ScoreBreakdown {
+export function dimensionsToLegacyBreakdown(dims: ScoringDimensions, fs: FactSheet): ScoreBreakdown {
   return {
     segment_scale_fit: {
       points: Math.round(dims.icp_fit * 0.2),
@@ -794,7 +826,7 @@ export async function scoreCandidateDeterministic(
       }
     }
 
-    const dimensions = computeAllDimensions(factSheet, effectiveIcp, enrichmentMeta);
+    const dimensions = computeAllDimensions(factSheet, effectiveIcp, enrichmentMeta, stepConfig?.scoring_signals);
     const cw = stepConfig?.composite_weights;
     const isV2 = !cw || ('version' in cw && cw.version === 2);
     const fitScore = isV2

@@ -93,6 +93,12 @@ export interface Lead {
   scoring_model: string | null;
   scoring_icp_version: string | null;
   fact_sheet: string | null;
+  scoring_verdict: string | null;
+  potential_score: number | null;
+  urgency_score: number | null;
+  signal_quality_score: number | null;
+  evidence_modifier: number | null;
+  composite_version: number;
 }
 
 export interface Persona {
@@ -466,6 +472,16 @@ export interface AuditResult {
   checks: Record<string, { passed: boolean; score: number; details?: string }>;
 }
 
+export type PainSignal = 'remote_workforce' | 'byoc' | 'multi_office' | 'developer_experience';
+export type DisplacementSignal = 'vpn_detected' | 'competitor_detected' | 'byoc' | 'private_networking' | 'legacy_indicators' | 'distributed_team';
+
+export interface ScoringSignals {
+  pain_signals?: PainSignal[];
+  displacement_signals?: DisplacementSignal[];
+  credit_role_fit_without_urls?: boolean;
+  signal_intent_weights?: Partial<Record<string, number>>;
+}
+
 export interface FunnelStepConfig {
   id: FunnelStepId;
   enabled: boolean;
@@ -528,6 +544,7 @@ export interface FunnelStepConfig {
     buyer_access_readiness?: number;
   };
   composite_weights?: { icp_fit: number; timing: number } | { version: 2; potential: number; urgency: number };
+  scoring_signals?: ScoringSignals;
   min_score_threshold?: number;
   icp_verticals_override?: string[];
   icp_tech_signals_override?: string[];

@@ -27,6 +27,7 @@ packages/
 
 ### Web Key Paths
 - `src/pages/CampaignDetail.tsx` — Campaign view + settings tabs (Pipeline, Schedule, Exclusions, Feed)
+- `src/pages/Leads.tsx` — Lead list with dimension filters, presets, saved filters, bulk actions (watch/feedback/export/rerun/delete)
 - `src/pages/Dashboard.tsx` — Overview analytics + active run indicators
 - `src/components/FunnelConfigurator.tsx` — **Single pane of glass** for all pipeline config (models, prompts, sources, limits)
 - `src/components/ActivityPanel.tsx` — Real-time pipeline activity feed
@@ -128,7 +129,25 @@ Layer 3: AI Narrative Generation (Opus)
   Role:   Write the story — constrained by the rules engine's numbers
 ```
 
-**Key invariant**: Same enrichment data + same ICP config = same scores, every run. AI is used for qualitative analysis (fact extraction, narrative writing) but never assigns point values.
+**Key invariant**: Same enrichment data + same ICP config + same scoring_signals = same scores, every run. AI is used for qualitative analysis (fact extraction, narrative writing) but never assigns point values.
+
+### Campaign-Aware Scoring Signals
+
+The deterministic engine accepts optional `scoring_signals` on the funnel score step, letting each campaign declare what signals matter for its use case:
+
+```typescript
+scoring_signals?: {
+  pain_signals?: Array<'remote_workforce' | 'byoc' | 'multi_office' | 'developer_experience'>;
+  displacement_signals?: Array<'vpn_detected' | 'competitor_detected' | 'byoc' | 'private_networking' | 'legacy_indicators' | 'distributed_team'>;
+  credit_role_fit_without_urls?: boolean;
+}
+```
+
+- **Pain signals**: What counts as "remote access pain." Default rules require confirmed remote workforce for full credit. BYOC campaigns can add `'byoc'` so that BYOC evidence alone earns full pain points.
+- **Displacement signals**: What counts as a "displacement wedge." Default rules only credit VPN/competitor detection. BYOC campaigns can add `'byoc'` to credit customer-managed deployment evidence as displacement.
+- **Contact credit**: When `credit_role_fit_without_urls` is true, champions/economic buyers identified by name+title get partial reachability credit even without LinkedIn/email URLs.
+
+When `scoring_signals` is absent, all dimension scoring uses the original default rules.
 
 ### Scoring Dimensions (v2 — Deterministic)
 
@@ -141,6 +160,32 @@ Layer 3: AI Narrative Generation (Opus)
 | Data Confidence | A-F (0-100) | Evidence | Source count, field completeness, corroboration |
 | Research Completeness | 0-100% | Evidence | Sources checked vs available |
 | Signal Density | Count | Evidence | Categorized signal counts with freshness decay |
+
+### Data Confidence Grades
+
+| Grade | Description |
+|-------|-------------|
+| A | Excellent. Multiple sources confirm key facts. |
+| B | Good. Strong enrichment coverage. |
+| C | Moderate. Key fields unconfirmed. |
+| D | Limited. Few sources or sparse data. |
+| F | Insufficient. Can't verify basics. |
+
+### Friendly Dimension Labels (UI)
+
+Used throughout Leads table filters, LeadDetail breakdown, and tooltips:
+
+| Dimension | Friendly Label | Bucket Color |
+|-----------|---------------|--------------|
+| Potential (composite) | "Would they buy?" | sky |
+| Urgency (composite) | "Want to buy now?" | amber |
+| ICP Fit | "How well do they fit?" | sky |
+| Reachability | "Can we reach them?" | sky |
+| Timing | "Is the timing right?" | amber |
+| Signal Quality | "Are they looking?" | amber |
+| Data Confidence | "How sure are we?" | slate |
+| Research Completeness | "How much do we know?" | slate |
+| Signal Density | "How many signals?" | slate |
 
 ### Composite Formula
 
@@ -168,6 +213,40 @@ Leads with high Fit but low Intent (the "great fit, bad timing" pattern) can be 
 - **Action Card**: Top of LeadDetail sidebar — tells salespeople what to do: Engage / Watch / Research / Pass
 - **Watch List page**: Timeline view grouped by wake date (waking today, this week, watching)
 - **Scheduler**: Daily cron via `watchlistScheduler.ts`, piggybacks on existing `node-cron` infra
+
+### Bulk Actions (Leads Page)
+
+The Leads page floating bar supports bulk operations on selected leads (up to 100):
+- **Rerun** (max 15) — Re-enrich + re-score selected leads through their campaign pipeline
+- **Watch** — Add to watch list with snooze date (30/60/90d presets), category, notes, re-enrich toggle
+- **Feedback** — Set feedback verdict (bad_fit, good_fit_booked, etc.) on all selected leads
+- **Export** — Download CSV of selected leads with dimension scores
+- **Delete** — Remove selected leads permanently (operator+ role required)
+
+Backend: `POST /leads/bulk-action` with `{lead_ids, action, params}`. Safety cap: 100 leads per operation. Export returns CSV directly; other actions return JSON with affected counts.
+
+### Dimension Filters (Leads Page)
+
+Advanced filtering by v2 scoring dimensions with URL persistence and localStorage fallback:
+- **Dimension ranges**: min/max for Potential, Urgency, ICP Fit, Signal Quality, Reachability
+- **Data Confidence**: A-F grade toggle pills
+- **Composite Version**: v1/v2/All toggle
+- **System presets**: Engage, Watch, Research, Pass — derived from `deriveActionState()` thresholds
+- **Saved filters**: User-created filter combinations via CRUD (`saved_filters` table)
+- **Match count preview**: Debounced count endpoint shows matching leads as filters change
+- **V1/V2 mixed state**: Banner when most leads lack dimension scores
+
+Backend: `GET /leads/count`, `GET/POST/DELETE /leads/saved-filters`, dimension params on `GET /leads`.
+
+### Data Sources Panel (LeadDetail)
+
+Sidebar section on LeadDetail showing enrichment source provenance:
+- **Source checklist**: Grid of all `enrichment_metadata.sources_available` with status icons (check/x) for responded/failed
+- **Coverage bar**: Percentage of sources that returned data
+- **Per-source field detail**: Expandable view showing which fields each source contributed
+- **Corroboration badges**: Fields confirmed by 2+ independent sources are flagged
+
+Parsed from `lead.enrichment_metadata_parsed`. Part of the v2 scoring Evidence bucket.
 
 ### Persona Pyramid (for outreach briefs)
 1. **Champion** (REQUIRED) — Director/Sr. Manager/Team Lead (IT, Security, Platform). Feels VPN pain daily, drives evaluations.

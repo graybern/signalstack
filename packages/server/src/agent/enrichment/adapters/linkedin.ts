@@ -55,6 +55,15 @@ export class LinkedInAdapter implements DataSourceAdapter {
         result.employee_count_type = 'total_headcount';
       }
 
+      const hq = this.extractHeadquarters(html);
+      if (hq) result.hq_location = hq;
+
+      const founded = this.extractFoundedYear(html);
+      if (founded) result.founded_year = founded;
+
+      const industry = this.extractIndustry(html);
+      if (industry) result.industry = industry;
+
       if (!result.linkedin_url) {
         result.linkedin_url = `https://www.linkedin.com/company/${slug}`;
       }
@@ -64,6 +73,67 @@ export class LinkedInAdapter implements DataSourceAdapter {
       console.log(`[linkedin] Fetch failed for ${companyName}: ${err instanceof Error ? err.message : String(err)}`);
       return {};
     }
+  }
+
+  private extractHeadquarters(html: string): string | null {
+    const testId = html.match(/data-test-id="about-us__headquarters"[^]*?<dd[^>]*>\s*([^<]+?)\s*<\/dd>\s*<\/div>/);
+    if (testId) return testId[1].trim();
+
+    const jsonLd = html.match(/"address"\s*:\s*\{[^}]*"addressLocality"\s*:\s*"([^"]+)"[^}]*"addressRegion"\s*:\s*"([^"]+)"/);
+    if (jsonLd) return `${jsonLd[1]}, ${jsonLd[2]}`;
+    const jsonLdAlt = html.match(/"addressLocality"\s*:\s*"([^"]+)"[^}]*"addressRegion"\s*:\s*"([^"]+)"/);
+    if (jsonLdAlt) return `${jsonLdAlt[1]}, ${jsonLdAlt[2]}`;
+
+    // Embedded data: "headquarters":"City, State" or "headquarter":"..."
+    const hqField = html.match(/"headquarter(?:s)?"\s*:\s*"([^"]+)"/);
+    if (hqField) return hqField[1];
+
+    // "Located in City, State" pattern
+    const located = html.match(/Located\s+in\s+([A-Z][a-zA-Z\s]+,\s*[A-Z]{2})/);
+    if (located) return located[1];
+
+    return null;
+  }
+
+  private extractFoundedYear(html: string): number | null {
+    const testId = html.match(/data-test-id="about-us__foundedOn"[^]*?<dd[^>]*>\s*(\d{4})\s*<\/dd>\s*<\/div>/);
+    if (testId) return parseInt(testId[1], 10);
+
+    const jsonLdObj = html.match(/"foundingDate"\s*:\s*\{\s*"year"\s*:\s*(\d{4})/);
+    if (jsonLdObj) return parseInt(jsonLdObj[1], 10);
+    const jsonLdStr = html.match(/"foundingDate"\s*:\s*"(\d{4})(?:-|\b)/);
+    if (jsonLdStr) return parseInt(jsonLdStr[1], 10);
+
+    // Embedded data: "foundedOn":{"year":2019}
+    const foundedOn = html.match(/"foundedOn"\s*:\s*\{\s*"year"\s*:\s*(\d{4})/);
+    if (foundedOn) return parseInt(foundedOn[1], 10);
+
+    // Text pattern: "Founded 2019" or "Founded in 2019"
+    const text = html.match(/Founded\s+(?:in\s+)?(\d{4})/i);
+    if (text) {
+      const year = parseInt(text[1], 10);
+      if (year >= 1800 && year <= new Date().getFullYear()) return year;
+    }
+
+    return null;
+  }
+
+  private extractIndustry(html: string): string | null {
+    const testId = html.match(/data-test-id="about-us__industry"[^]*?<dd[^>]*>\s*([^<]+?)\s*<\/dd>\s*<\/div>/);
+    if (testId) return testId[1].trim();
+
+    const jsonLd = html.match(/"industry"\s*:\s*"([^"]+)"/);
+    if (jsonLd) return jsonLd[1];
+
+    // Embedded data: "localizedIndustry":"Information Technology & Services"
+    const localized = html.match(/"localizedIndustry"\s*:\s*"([^"]+)"/);
+    if (localized) return localized[1];
+
+    // "companyIndustries":["Computer Software"]
+    const arr = html.match(/"companyIndustries"\s*:\s*\["([^"]+)"/);
+    if (arr) return arr[1];
+
+    return null;
   }
 
   private extractEmployeeCount(html: string): number | null {

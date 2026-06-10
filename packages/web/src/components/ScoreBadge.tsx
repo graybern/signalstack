@@ -116,6 +116,27 @@ export function GradeBadge({ grade, size = 'md' }: { grade: string; size?: 'sm' 
   );
 }
 
+const GRADE_DESCRIPTIONS: Record<string, string> = {
+  A: 'Excellent. Multiple sources confirm key facts.',
+  B: 'Good. Strong enrichment coverage.',
+  C: 'Moderate. Key fields unconfirmed.',
+  D: 'Limited. Few sources or sparse data.',
+  F: 'Insufficient. Can\'t verify basics.',
+};
+
+export function GradeTooltip({ grade }: { grade: string }) {
+  const desc = GRADE_DESCRIPTIONS[grade] || GRADE_DESCRIPTIONS.F;
+  return (
+    <span className="relative group">
+      <GradeBadge grade={grade} />
+      <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2.5 py-1.5 text-[10px] leading-snug text-white bg-gray-900 rounded-lg whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10 shadow-lg">
+        <span className="font-semibold">Grade {grade}</span> — {desc}
+        <span className="absolute top-full left-1/2 -translate-x-1/2 -mt-px border-4 border-transparent border-t-gray-900" />
+      </span>
+    </span>
+  );
+}
+
 const DIMENSION_META: Record<string, { label: string; abbr: string; color: string; barColor: string }> = {
   icp_fit:     { label: 'ICP Fit',     abbr: 'ICP',  color: 'text-sky-700',     barColor: 'bg-sky-500' },
   timing:      { label: 'Timing',      abbr: 'TIME', color: 'text-amber-700',   barColor: 'bg-amber-500' },
@@ -310,6 +331,7 @@ interface ActionCardProps {
   isWatching?: boolean;
   watchWakeDate?: string | null;
   watchCategory?: string | null;
+  watchItemId?: string | null;
   championName?: string | null;
   championTitle?: string | null;
   championLinkedIn?: string | null;
@@ -331,7 +353,7 @@ const WATCH_CATEGORIES = [
   { id: 'manual', label: 'Manual', desc: 'Custom watch' },
 ];
 
-export function ActionCard({ dimensions, leadId, isWatching, watchWakeDate, watchCategory, championName, championTitle, championLinkedIn, onAction, onWatchAdded }: ActionCardProps) {
+export function ActionCard({ dimensions, leadId, isWatching, watchWakeDate, watchCategory, watchItemId, championName, championTitle, championLinkedIn, onAction, onWatchAdded }: ActionCardProps) {
   const state = deriveActionState(dimensions, isWatching);
   const config = ACTION_CONFIG[state];
   const Icon = config.icon;
@@ -342,6 +364,8 @@ export function ActionCard({ dimensions, leadId, isWatching, watchWakeDate, watc
   const [watchNotes, setWatchNotes] = useState('');
   const [watchReenrich, setWatchReenrich] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [watchConfirmed, setWatchConfirmed] = useState(false);
+  const [dismissing, setDismissing] = useState(false);
 
   const rationale = state === 'engage'
     ? `Fit ${dimensions.potential_score ?? 0} + Intent ${dimensions.urgency_score ?? 0} — strong on both axes`
@@ -382,11 +406,27 @@ export function ActionCard({ dimensions, leadId, isWatching, watchWakeDate, watc
         }),
       });
       setShowWatchForm(false);
+      setWatchConfirmed(true);
+      setTimeout(() => setWatchConfirmed(false), 3000);
       onWatchAdded?.();
     } catch (err) {
       console.error('Failed to add to watch list:', err);
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleDismissWatch = async () => {
+    if (!watchItemId) return;
+    setDismissing(true);
+    try {
+      const { api } = await import('../api/client');
+      await api(`/watchlist/${watchItemId}/dismiss`, { method: 'POST' });
+      onWatchAdded?.();
+    } catch (err) {
+      console.error('Failed to dismiss watch:', err);
+    } finally {
+      setDismissing(false);
     }
   };
 
@@ -434,6 +474,12 @@ export function ActionCard({ dimensions, leadId, isWatching, watchWakeDate, watc
               </span>
             </div>
           )}
+          {watchConfirmed && (
+            <div className="flex items-center gap-1.5 mb-2 px-2 py-1.5 rounded-lg bg-emerald-500/20 text-emerald-300 text-[11px] font-medium">
+              <svg className="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>
+              Added to watch list
+            </div>
+          )}
           <button
             onClick={handleButtonClick}
             className={clsx(
@@ -443,6 +489,15 @@ export function ActionCard({ dimensions, leadId, isWatching, watchWakeDate, watc
           >
             {showWatchForm ? 'Cancel' : btnLabel}
           </button>
+          {state === 'watching' && watchItemId && (
+            <button
+              onClick={handleDismissWatch}
+              disabled={dismissing}
+              className="w-full mt-1.5 py-1 text-[10px] text-violet-300/70 hover:text-violet-200 transition-colors disabled:opacity-40"
+            >
+              {dismissing ? 'Removing...' : 'Remove from watch list'}
+            </button>
+          )}
           {state === 'engage' && championName && championLinkedIn && (
             <a
               href={championLinkedIn}
@@ -561,7 +616,7 @@ export function ActionCard({ dimensions, leadId, isWatching, watchWakeDate, watc
 
 // ── Three-Bucket Strip ──────────────────────────────────────────
 
-interface BucketData {
+export interface BucketData {
   label: string;
   question: string;
   score: number;
@@ -581,7 +636,7 @@ interface BucketData {
   subDimensions: { label: string; value: number; weight: number }[];
 }
 
-function buildBuckets(dims: {
+export function buildBuckets(dims: {
   icp_fit: number;
   timing: number;
   data_confidence_score?: number;
@@ -735,7 +790,7 @@ interface ThreeBucketStripProps {
 }
 
 export function ThreeBucketStrip({ dimensions }: ThreeBucketStripProps) {
-  const [expanded, setExpanded] = useState<number | null>(null);
+  const [expanded, setExpanded] = useState<Set<number>>(new Set([0, 1, 2]));
   const buckets = buildBuckets(dimensions);
 
   return (
@@ -744,8 +799,12 @@ export function ThreeBucketStrip({ dimensions }: ThreeBucketStripProps) {
         <BucketPanel
           key={bucket.label}
           bucket={bucket}
-          expanded={expanded === i}
-          onToggle={() => setExpanded(expanded === i ? null : i)}
+          expanded={expanded.has(i)}
+          onToggle={() => setExpanded(prev => {
+            const next = new Set(prev);
+            next.has(i) ? next.delete(i) : next.add(i);
+            return next;
+          })}
         />
       ))}
     </div>
@@ -862,6 +921,54 @@ export function DualBars({ potential, urgency, evidenceModifier }: DualBarsProps
             {evPct}%
           </span>
         </>
+      )}
+    </div>
+  );
+}
+
+// ── Inline Score Strip (Leads table) ──────────────────────────────
+
+interface InlineScoreStripProps {
+  score: number;
+  potential?: number | null;
+  urgency?: number | null;
+  evidenceModifier?: number | null;
+  compositeVersion?: number;
+}
+
+function dimColor(val: number): string {
+  if (val >= 60) return 'text-emerald-700 bg-emerald-50';
+  if (val >= 35) return 'text-amber-700 bg-amber-50';
+  return 'text-gray-500 bg-gray-50';
+}
+
+export function InlineScoreStrip({ score, potential, urgency, evidenceModifier, compositeVersion }: InlineScoreStripProps) {
+  const hasV2 = compositeVersion === 2 && potential != null && urgency != null;
+  const evPct = evidenceModifier != null ? Math.round(evidenceModifier * 100) : null;
+
+  return (
+    <div className="flex items-center gap-1.5">
+      <ScoreBadge score={score} size="sm" />
+      {hasV2 ? (
+        <div className="flex items-center gap-1 text-[11px] font-semibold tabular-nums">
+          <span className={clsx('px-1.5 py-0.5 rounded', dimColor(potential!))}>
+            <span className="text-[9px] font-medium opacity-60 mr-0.5">F</span>{potential}
+          </span>
+          <span className={clsx('px-1.5 py-0.5 rounded', dimColor(urgency!))}>
+            <span className="text-[9px] font-medium opacity-60 mr-0.5">I</span>{urgency}
+          </span>
+          {evPct !== null && (
+            <span className={clsx('px-1.5 py-0.5 rounded text-[10px]',
+              evPct >= 80 ? 'text-slate-600 bg-slate-50' :
+              evPct >= 60 ? 'text-amber-600 bg-amber-50' :
+              'text-red-500 bg-red-50',
+            )}>
+              {evPct}%
+            </span>
+          )}
+        </div>
+      ) : (
+        <span className="text-[9px] font-medium text-gray-400 bg-gray-50 px-1.5 py-0.5 rounded">v1</span>
       )}
     </div>
   );

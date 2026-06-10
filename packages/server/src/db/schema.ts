@@ -635,6 +635,13 @@ function initSchema(db: Database.Database) {
     db.exec("ALTER TABLE leads ADD COLUMN composite_version INTEGER DEFAULT 1");
   }
 
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_leads_potential ON leads(potential_score DESC);
+    CREATE INDEX IF NOT EXISTS idx_leads_urgency ON leads(urgency_score DESC);
+    CREATE INDEX IF NOT EXISTS idx_leads_icp_fit ON leads(icp_fit_score DESC);
+    CREATE INDEX IF NOT EXISTS idx_leads_composite_version ON leads(composite_version);
+  `);
+
   // Watch list — snooze/wake tracking for high-fit, low-intent leads
   db.exec(`
     CREATE TABLE IF NOT EXISTS watch_items (
@@ -1016,6 +1023,19 @@ function initSchema(db: Database.Database) {
     // Table already has new role types but missing confidence column
     try { db.exec("ALTER TABLE personas ADD COLUMN confidence TEXT DEFAULT 'medium' CHECK(confidence IN ('high','medium','low'))"); } catch (_) {}
   }
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS saved_filters (
+      id            TEXT PRIMARY KEY,
+      user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      name          TEXT NOT NULL,
+      filter_config TEXT NOT NULL,
+      is_default    INTEGER DEFAULT 0,
+      created_at    TEXT DEFAULT (datetime('now')),
+      updated_at    TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_saved_filters_user ON saved_filters(user_id);
+  `);
 
   seedIcpDefaults(db);
 }

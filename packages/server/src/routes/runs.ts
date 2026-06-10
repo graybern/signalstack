@@ -168,11 +168,34 @@ router.get('/:id', authenticate, (req: AuthRequest, res: Response) => {
     run.resumed_by_status = resumedByRun.status;
   }
 
-  const leads = db.prepare(
-    `SELECT id, company_name, domain, segment, fit_score, fit_score_label,
-            confidence, employee_count, hq_location, lead_status, current_feedback, created_at
-     FROM leads WHERE run_id = ? ORDER BY fit_score DESC`
-  ).all(req.params.id);
+  let leads: any[];
+  if (run.run_type === 'stage_rerun' && run.target_lead_ids) {
+    try {
+      const ids: string[] = JSON.parse(run.target_lead_ids);
+      if (ids.length > 0) {
+        const placeholders = ids.map(() => '?').join(',');
+        leads = db.prepare(
+          `SELECT id, company_name, domain, segment, fit_score, fit_score_label,
+                  confidence, employee_count, hq_location, lead_status, current_feedback,
+                  potential_score, urgency_score, evidence_modifier, scoring_version, why_now,
+                  created_at
+           FROM leads WHERE id IN (${placeholders}) ORDER BY fit_score DESC`
+        ).all(...ids);
+      } else {
+        leads = [];
+      }
+    } catch {
+      leads = [];
+    }
+  } else {
+    leads = db.prepare(
+      `SELECT id, company_name, domain, segment, fit_score, fit_score_label,
+              confidence, employee_count, hq_location, lead_status, current_feedback,
+              potential_score, urgency_score, evidence_modifier, scoring_version, why_now,
+              created_at
+       FROM leads WHERE run_id = ? ORDER BY fit_score DESC`
+    ).all(req.params.id);
+  }
 
   res.json({ run, leads });
 });

@@ -4,7 +4,7 @@ import { getDb } from '../db/schema.js';
 import { authenticate, AuthRequest, requireOperator, requireAdmin, requireMember, requireSuperAdmin } from '../auth/middleware.js';
 import { logActivity } from '../services/activityLog.js';
 import { analyzeCampaignFeedback, getCampaignFeedbackCount } from '../agent/feedbackAnalyzer.js';
-import { computeAllDimensions, computeCompositeV2, generateVerdict } from '../agent/scorer.js';
+import { computeAllDimensions, computeCompositeV2, generateVerdict, dimensionsToLegacyBreakdown } from '../agent/scorer.js';
 import { loadCampaignConfig } from '../agent/campaignOrchestrator.js';
 import type { Lead, Persona, LeadFeedback, FeedbackVerdict, FactSheet, EnrichmentMetadata } from '../types/index.js';
 
@@ -46,39 +46,80 @@ const VERDICT_TO_LEAD_STATUS: Record<string, string> = {
   good_fit_no_response: 'contacted',
 };
 
-router.get('/', authenticate, (req: AuthRequest, res: Response) => {
-  const {
-    run_id, segment, campaign_id, source_type, lead_status, feedback,
-    needs_reoutreach, min_score, max_score, min_signals, date_from, date_to,
-    search,
-    page = '1', limit = '50', sort = 'fit_score', order = 'desc',
-  } = req.query;
-  const db = getDb();
+function buildLeadFilterConditions(query: Record<string, any>): { conditions: string[]; params: any[] } {
   const conditions: string[] = [];
   const params: any[] = [];
 
-  if (run_id) { conditions.push('l.run_id = ?'); params.push(run_id); }
-  if (segment) { conditions.push('l.segment = ?'); params.push(segment); }
-  if (campaign_id) { conditions.push('l.campaign_id = ?'); params.push(campaign_id); }
-  if (source_type) { conditions.push('l.source_type = ?'); params.push(source_type); }
-  if (lead_status) { conditions.push('l.lead_status = ?'); params.push(lead_status); }
-  if (feedback) { conditions.push('l.current_feedback = ?'); params.push(feedback); }
-  if (needs_reoutreach === 'true') {
+  if (query.run_id) { conditions.push('l.run_id = ?'); params.push(query.run_id); }
+  if (query.segment) { conditions.push('l.segment = ?'); params.push(query.segment); }
+  if (query.campaign_id) { conditions.push('l.campaign_id = ?'); params.push(query.campaign_id); }
+  if (query.source_type) { conditions.push('l.source_type = ?'); params.push(query.source_type); }
+  if (query.lead_status) { conditions.push('l.lead_status = ?'); params.push(query.lead_status); }
+  if (query.feedback) { conditions.push('l.current_feedback = ?'); params.push(query.feedback); }
+  if (query.needs_reoutreach === 'true') {
     conditions.push("l.current_feedback = 'good_fit_try_again' AND l.next_outreach_date <= date('now')");
   }
-  if (min_score) { conditions.push('l.fit_score >= ?'); params.push(parseInt(min_score as string)); }
-  if (max_score) { conditions.push('l.fit_score <= ?'); params.push(parseInt(max_score as string)); }
-  if (min_signals) { conditions.push('l.signal_count >= ?'); params.push(parseInt(min_signals as string)); }
-  if (date_from) { conditions.push('l.created_at >= ?'); params.push(date_from); }
-  if (date_to) { conditions.push('l.created_at <= ?'); params.push(date_to + ' 23:59:59'); }
-  if (search) {
-    const term = `%${search}%`;
+  if (query.min_score) { conditions.push('l.fit_score >= ?'); params.push(parseInt(query.min_score as string)); }
+  if (query.max_score) { conditions.push('l.fit_score <= ?'); params.push(parseInt(query.max_score as string)); }
+  if (query.min_signals) { conditions.push('l.signal_count >= ?'); params.push(parseInt(query.min_signals as string)); }
+  if (query.date_from) { conditions.push('l.created_at >= ?'); params.push(query.date_from); }
+  if (query.date_to) { conditions.push('l.created_at <= ?'); params.push(query.date_to + ' 23:59:59'); }
+  if (query.search) {
+    const term = `%${query.search}%`;
     conditions.push('(l.company_name LIKE ? OR l.domain LIKE ?)');
     params.push(term, term);
   }
 
+  const dimRanges: Array<[string, string]> = [
+    ['min_potential', 'l.potential_score'], ['max_potential', 'l.potential_score'],
+    ['min_urgency', 'l.urgency_score'], ['max_urgency', 'l.urgency_score'],
+    ['min_icp_fit', 'l.icp_fit_score'], ['max_icp_fit', 'l.icp_fit_score'],
+    ['min_reachability', 'l.reachability_score'], ['max_reachability', 'l.reachability_score'],
+    ['min_signal_quality', 'l.signal_quality_score'], ['max_signal_quality', 'l.signal_quality_score'],
+  ];
+  for (const [param, col] of dimRanges) {
+    if (query[param] != null && query[param] !== '') {
+      const op = param.startsWith('min_') ? '>=' : '<=';
+      conditions.push(`${col} IS NOT NULL AND ${col} ${op} ?`);
+      params.push(parseInt(query[param] as string));
+    }
+  }
+
+  if (query.data_confidence) {
+    const validGrades = ['A', 'B', 'C', 'D', 'F'];
+    const grades = (query.data_confidence as string).split(',')
+      .map(g => g.trim().toUpperCase())
+      .filter(g => validGrades.includes(g));
+    if (grades.length > 0) {
+      conditions.push(`l.data_confidence IN (${grades.map(() => '?').join(',')})`);
+      params.push(...grades);
+    }
+  }
+
+  if (query.watch_candidate === 'true') {
+    conditions.push('l.potential_score >= 60 AND l.urgency_score < 35');
+  }
+
+  if (query.composite_version != null && query.composite_version !== '') {
+    conditions.push('l.composite_version = ?');
+    params.push(parseInt(query.composite_version as string));
+  }
+
+  return { conditions, params };
+}
+
+router.get('/', authenticate, (req: AuthRequest, res: Response) => {
+  const { page = '1', limit = '50', sort = 'fit_score', order = 'desc' } = req.query;
+  const db = getDb();
+  const { conditions, params } = buildLeadFilterConditions(req.query);
+
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-  const allowedSorts = ['fit_score', 'icp_fit_score', 'timing_score', 'company_name', 'segment', 'created_at', 'lead_status', 'convergence_score', 'current_feedback', 'next_outreach_date'];
+  const allowedSorts = [
+    'fit_score', 'icp_fit_score', 'timing_score', 'company_name', 'segment', 'created_at',
+    'lead_status', 'convergence_score', 'current_feedback', 'next_outreach_date',
+    'potential_score', 'urgency_score', 'reachability_score', 'signal_quality_score',
+    'data_confidence_score', 'evidence_modifier',
+  ];
   const sortCol = allowedSorts.includes(sort as string) ? sort : 'fit_score';
   const sortOrder = order === 'asc' ? 'ASC' : 'DESC';
   const offset = (parseInt(page as string) - 1) * parseInt(limit as string);
@@ -267,6 +308,203 @@ router.get('/latest', authenticate, (req: AuthRequest, res: Response) => {
   res.json({ run, leads: grouped });
 });
 
+router.get('/count', authenticate, (req: AuthRequest, res: Response) => {
+  const db = getDb();
+  const { conditions, params } = buildLeadFilterConditions(req.query);
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+  const count = (db.prepare(`SELECT COUNT(*) as c FROM leads l ${where}`).get(...params) as any).c;
+
+  const v2Conditions = [...conditions, 'l.composite_version = 2'];
+  const v2Where = `WHERE ${v2Conditions.join(' AND ')}`;
+  const v2Count = (db.prepare(`SELECT COUNT(*) as c FROM leads l ${v2Where}`).get(...params) as any).c;
+
+  res.json({ count, v2_count: v2Count });
+});
+
+router.get('/saved-filters', authenticate, (req: AuthRequest, res: Response) => {
+  const db = getDb();
+  const filters = db.prepare(
+    'SELECT * FROM saved_filters WHERE user_id = ? ORDER BY is_default DESC, updated_at DESC'
+  ).all(req.user!.id) as any[];
+
+  res.json(filters.map(f => ({
+    ...f,
+    filter_config: JSON.parse(f.filter_config),
+    is_default: !!f.is_default,
+  })));
+});
+
+router.post('/saved-filters', authenticate, (req: AuthRequest, res: Response) => {
+  const { name, filter_config, is_default } = req.body;
+  if (!name || !filter_config) return res.status(400).json({ error: 'name and filter_config are required' });
+
+  const db = getDb();
+  const id = uuid();
+
+  const insertTx = db.transaction(() => {
+    if (is_default) {
+      db.prepare('UPDATE saved_filters SET is_default = 0 WHERE user_id = ?').run(req.user!.id);
+    }
+    db.prepare(
+      'INSERT INTO saved_filters (id, user_id, name, filter_config, is_default) VALUES (?, ?, ?, ?, ?)'
+    ).run(id, req.user!.id, name, JSON.stringify(filter_config), is_default ? 1 : 0);
+  });
+  insertTx();
+
+  res.status(201).json({ id, name, filter_config, is_default: !!is_default });
+});
+
+router.delete('/saved-filters/:filterId', authenticate, (req: AuthRequest, res: Response) => {
+  const db = getDb();
+  const result = db.prepare(
+    'DELETE FROM saved_filters WHERE id = ? AND user_id = ?'
+  ).run(req.params.filterId, req.user!.id);
+
+  if (result.changes === 0) return res.status(404).json({ error: 'Saved filter not found' });
+  res.json({ success: true });
+});
+
+router.post('/bulk-action', authenticate, requireMember, (req: AuthRequest, res: Response) => {
+  const { lead_ids, filter, action, params: actionParams } = req.body;
+  if (!action) return res.status(400).json({ error: 'action is required' });
+
+  const validActions = ['add_to_watchlist', 'update_feedback', 'export'];
+  if (!validActions.includes(action)) {
+    return res.status(400).json({ error: `action must be one of: ${validActions.join(', ')}` });
+  }
+
+  const db = getDb();
+  let targetIds: string[];
+
+  if (lead_ids && Array.isArray(lead_ids) && lead_ids.length > 0) {
+    targetIds = lead_ids;
+  } else if (filter && typeof filter === 'object') {
+    const { conditions, params } = buildLeadFilterConditions(filter);
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const rows = db.prepare(`SELECT l.id FROM leads l ${where}`).all(...params) as { id: string }[];
+    targetIds = rows.map(r => r.id);
+  } else {
+    return res.status(400).json({ error: 'Either lead_ids or filter is required' });
+  }
+
+  if (targetIds.length === 0) {
+    return res.json({ success: true, action, affected: 0 });
+  }
+
+  const MAX_BULK = 100;
+  if (targetIds.length > MAX_BULK) {
+    return res.status(400).json({ error: `Bulk operations limited to ${MAX_BULK} leads` });
+  }
+
+  let result: any;
+
+  switch (action) {
+    case 'add_to_watchlist': {
+      if (!actionParams?.snooze_until) {
+        return res.status(400).json({ error: 'params.snooze_until is required for add_to_watchlist' });
+      }
+      const { snooze_until, category = 'timing_watch', rerun_on_wake = true, notes } = actionParams;
+      let added = 0;
+      const insertTx = db.transaction(() => {
+        for (const leadId of targetIds) {
+          const lead = db.prepare(
+            'SELECT id, campaign_id, fit_score, potential_score, urgency_score, signal_quality_score, evidence_modifier FROM leads WHERE id = ?'
+          ).get(leadId) as any;
+          if (!lead || !lead.campaign_id) continue;
+          const existing = db.prepare(
+            "SELECT id FROM watch_items WHERE lead_id = ? AND status = 'active'"
+          ).get(leadId);
+          if (existing) continue;
+          const snapshot = JSON.stringify({
+            fit_score: lead.fit_score,
+            potential_score: lead.potential_score,
+            urgency_score: lead.urgency_score,
+            signal_quality: lead.signal_quality_score,
+            evidence_modifier: lead.evidence_modifier,
+          });
+          db.prepare(
+            'INSERT INTO watch_items (id, lead_id, campaign_id, category, snooze_until, rerun_on_wake, notes, created_by, score_snapshot) VALUES (?,?,?,?,?,?,?,?,?)'
+          ).run(uuid(), leadId, lead.campaign_id, category, snooze_until, rerun_on_wake ? 1 : 0, notes || null, req.user!.id, snapshot);
+          added++;
+        }
+      });
+      insertTx();
+      result = { added, skipped: targetIds.length - added };
+      break;
+    }
+
+    case 'update_feedback': {
+      if (!actionParams?.verdict) {
+        return res.status(400).json({ error: 'params.verdict is required for update_feedback' });
+      }
+      let mappedVerdict = actionParams.verdict;
+      if (mappedVerdict === 'not_fit') mappedVerdict = 'bad_fit';
+      if (mappedVerdict === 'good_fit') mappedVerdict = 'good_fit_response';
+      if (!ALL_VERDICTS.includes(actionParams.verdict) && !VALID_VERDICTS.includes(actionParams.verdict)) {
+        return res.status(400).json({ error: `Invalid verdict. Must be one of: ${VALID_VERDICTS.join(', ')}` });
+      }
+      const newStatus = VERDICT_TO_LEAD_STATUS[mappedVerdict];
+      let updated = 0;
+      const feedbackTx = db.transaction(() => {
+        for (const leadId of targetIds) {
+          db.prepare(
+            `INSERT INTO lead_feedback (id, lead_id, user_id, verdict, reason, feedback_source) VALUES (?,?,?,?,?,?)
+             ON CONFLICT(lead_id, user_id) DO UPDATE SET verdict=excluded.verdict, reason=excluded.reason, created_at=datetime('now')`
+          ).run(uuid(), leadId, req.user!.id, mappedVerdict, actionParams.reason || null, 'bulk');
+          if (newStatus) {
+            db.prepare(
+              `UPDATE leads SET current_feedback = ?, lead_status = ?, updated_at = datetime('now') WHERE id = ?`
+            ).run(mappedVerdict, newStatus, leadId);
+          } else {
+            db.prepare(
+              `UPDATE leads SET current_feedback = ?, updated_at = datetime('now') WHERE id = ?`
+            ).run(mappedVerdict, leadId);
+          }
+          updated++;
+        }
+      });
+      feedbackTx();
+      result = { updated };
+      break;
+    }
+
+    case 'export': {
+      const placeholders = targetIds.map(() => '?').join(',');
+      const leads = db.prepare(
+        `SELECT l.company_name, l.domain, l.segment, l.fit_score, l.potential_score, l.urgency_score,
+                l.icp_fit_score, l.timing_score, l.data_confidence, l.data_confidence_score,
+                l.reachability_score, l.signal_quality_score, l.research_completeness,
+                l.current_feedback, l.lead_status, l.scoring_verdict, l.created_at,
+                c.name as campaign_name
+         FROM leads l LEFT JOIN campaigns c ON c.id = l.campaign_id
+         WHERE l.id IN (${placeholders})
+         ORDER BY l.fit_score DESC`
+      ).all(...targetIds) as any[];
+
+      const exportFields = [
+        'company_name', 'domain', 'segment', 'fit_score', 'potential_score', 'urgency_score',
+        'icp_fit_score', 'timing_score', 'data_confidence', 'data_confidence_score',
+        'reachability_score', 'signal_quality_score', 'research_completeness',
+        'current_feedback', 'lead_status', 'scoring_verdict', 'campaign_name', 'created_at',
+      ];
+      const header = exportFields.join(',');
+      const rows = leads.map(l => exportFields.map(f => {
+        const val = (l as any)[f];
+        if (val == null) return '';
+        const str = String(val);
+        return str.includes(',') || str.includes('"') ? `"${str.replace(/"/g, '""')}"` : str;
+      }).join(','));
+
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', `attachment; filename="leads-bulk-export-${new Date().toISOString().slice(0, 10)}.csv"`);
+      return res.send([header, ...rows].join('\n'));
+    }
+  }
+
+  res.json({ success: true, action, affected: targetIds.length, ...result });
+});
+
 router.get('/:id', authenticate, (req: AuthRequest, res: Response) => {
   const db = getDb();
   const lead = db.prepare(
@@ -312,6 +550,36 @@ router.get('/:id', authenticate, (req: AuthRequest, res: Response) => {
   }
 
   const parsed = parseLead(lead);
+
+  // Attach active or recent run info for banner hydration
+  if (parsed.campaign_id) {
+    const activeRun = db.prepare(`
+      SELECT id, status, progress_json, steps_run, started_at, completed_at
+      FROM pipeline_runs
+      WHERE campaign_id = ? AND (
+        status IN ('pending', 'running')
+        OR (status = 'completed' AND completed_at > datetime('now', '-60 seconds'))
+      )
+      AND (target_lead_ids LIKE ? OR target_lead_ids IS NULL)
+      ORDER BY
+        CASE WHEN status IN ('pending', 'running') THEN 0 ELSE 1 END,
+        started_at DESC
+      LIMIT 1
+    `).get(parsed.campaign_id, `%"${req.params.id}"%`) as any;
+
+    if (activeRun) {
+      let progress = null;
+      try { progress = JSON.parse(activeRun.progress_json || '{}'); } catch {}
+      (parsed as any).active_run = {
+        id: activeRun.id,
+        status: activeRun.status,
+        progress,
+        steps_run: activeRun.steps_run,
+        started_at: activeRun.started_at,
+        completed_at: activeRun.completed_at,
+      };
+    }
+  }
 
   // Extract brief threshold from campaign funnel config
   if ((lead as any).campaign_funnel_config) {
@@ -807,6 +1075,7 @@ router.post('/backfill-composite', authenticate, requireSuperAdmin, (req: AuthRe
       scoring_version = 2,
       composite_version = 2,
       scoring_verdict = ?,
+      score_breakdown = ?,
       updated_at = datetime('now')
     WHERE id = ?
   `);
@@ -827,16 +1096,20 @@ router.post('/backfill-composite', authenticate, requireSuperAdmin, (req: AuthRe
     }
 
     let icpConfig;
+    let scoringSignals;
     try {
       if (!campaignCache.has(lead.campaign_id)) {
         const campaignRow = db.prepare('SELECT * FROM campaigns WHERE id = ?').get(lead.campaign_id);
         if (campaignRow) {
           const parsed = parseCampaignForBackfill(campaignRow);
           const config = loadCampaignConfig(parsed);
-          campaignCache.set(lead.campaign_id, config.icpConfig);
+          const scoreStep = parsed.funnel_config?.steps?.find((s: any) => s.id === 'score');
+          campaignCache.set(lead.campaign_id, { icpConfig: config.icpConfig, scoringSignals: scoreStep?.scoring_signals });
         }
       }
-      icpConfig = campaignCache.get(lead.campaign_id);
+      const cached = campaignCache.get(lead.campaign_id);
+      icpConfig = cached?.icpConfig;
+      scoringSignals = cached?.scoringSignals;
     } catch {
       icpConfig = undefined;
     }
@@ -846,9 +1119,11 @@ router.post('/backfill-composite', authenticate, requireSuperAdmin, (req: AuthRe
       continue;
     }
 
-    const dimensions = computeAllDimensions(factSheet, icpConfig, enrichMeta);
+    const dimensions = computeAllDimensions(factSheet, icpConfig, enrichMeta, scoringSignals);
     const composite = computeCompositeV2(dimensions);
     const verdict = generateVerdict(dimensions);
+    const breakdown = dimensionsToLegacyBreakdown(dimensions, factSheet);
+    breakdown.total = composite.fit_score;
 
     if (!dryRun && updateStmt) {
       updateStmt.run(
@@ -865,6 +1140,7 @@ router.post('/backfill-composite', authenticate, requireSuperAdmin, (req: AuthRe
         composite.evidence_modifier,
         composite.fit_score,
         verdict,
+        JSON.stringify(breakdown),
         lead.id,
       );
     }
@@ -888,6 +1164,94 @@ router.post('/backfill-composite', authenticate, requireSuperAdmin, (req: AuthRe
     total_skipped: skipped,
     results,
   });
+});
+
+// ── Admin: Backfill LinkedIn metadata (hq_location, founded_year) for leads enriched before extraction code was added ─
+
+router.post('/backfill-enrich', authenticate, requireSuperAdmin, async (req: AuthRequest, res: Response) => {
+  const { LinkedInAdapter } = await import('../agent/enrichment/adapters/linkedin.js');
+  const db = getDb();
+  const dryRun = req.query.dry_run === 'true';
+  const campaignId = req.query.campaign_id as string | undefined;
+  const limit = Math.min(parseInt(req.query.limit as string) || 100, 100);
+  const offset = parseInt(req.query.offset as string) || 0;
+
+  let whereClause = 'linkedin_company_url IS NOT NULL AND (hq_location IS NULL OR founded_year IS NULL)';
+  const params: any[] = [];
+  if (campaignId) {
+    whereClause += ' AND campaign_id = ?';
+    params.push(campaignId);
+  }
+
+  const leads = db.prepare(
+    `SELECT id, company_name, domain, linkedin_company_url, hq_location, founded_year, enrichment_metadata
+     FROM leads WHERE ${whereClause} LIMIT ? OFFSET ?`
+  ).all(...params, limit, offset) as any[];
+
+  if (dryRun) {
+    const totalCount = db.prepare(
+      `SELECT COUNT(*) as cnt FROM leads WHERE ${whereClause}`
+    ).get(...params) as any;
+    return res.json({ dry_run: true, total_found: totalCount.cnt, sample: leads.slice(0, 10).map((l: any) => ({ id: l.id, company: l.company_name, has_hq: !!l.hq_location, has_founded: !!l.founded_year })) });
+  }
+
+  const adapter = new LinkedInAdapter();
+  const updateStmt = db.prepare(`
+    UPDATE leads SET
+      hq_location = COALESCE(hq_location, ?),
+      founded_year = COALESCE(founded_year, ?),
+      enrichment_metadata = ?,
+      updated_at = datetime('now')
+    WHERE id = ?
+  `);
+
+  let updated = 0;
+  let skipped = 0;
+  let errors = 0;
+  const details: any[] = [];
+
+  for (let i = 0; i < leads.length; i++) {
+    const lead = leads[i] as any;
+
+    if (i > 0 && i % 10 === 0) {
+      await new Promise(r => setTimeout(r, 2000));
+    }
+
+    try {
+      const enrichment = await adapter.enrichCompany(
+        lead.company_name,
+        lead.domain,
+        { id: 'linkedin', name: 'LinkedIn', description: 'Backfill', category: 'company_data', enabled: true, requires_key: false, settings: { linkedin_url: lead.linkedin_company_url }, status: 'active' }
+      );
+
+      if (!enrichment.hq_location && !enrichment.founded_year) {
+        skipped++;
+        details.push({ id: lead.id, company: lead.company_name, status: 'no_new_data' });
+        continue;
+      }
+
+      let metadata: any = {};
+      try { metadata = JSON.parse(lead.enrichment_metadata || '{}'); } catch { /* */ }
+      if (metadata.field_completeness) {
+        if (enrichment.hq_location) metadata.field_completeness.hq_location = true;
+        if (enrichment.founded_year) metadata.field_completeness.founded_year = true;
+      }
+
+      updateStmt.run(
+        enrichment.hq_location ?? null,
+        enrichment.founded_year ?? null,
+        JSON.stringify(metadata),
+        lead.id
+      );
+      updated++;
+      details.push({ id: lead.id, company: lead.company_name, status: 'updated', hq: enrichment.hq_location, founded: enrichment.founded_year });
+    } catch (err) {
+      errors++;
+      details.push({ id: lead.id, company: lead.company_name, status: 'error', error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  res.json({ total_found: leads.length, updated, skipped, errors, details });
 });
 
 function parseLead(row: any) {

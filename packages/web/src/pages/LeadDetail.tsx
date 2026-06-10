@@ -1121,9 +1121,20 @@ export function LeadDetail() {
                                                   </div>
                                                   {sub.evidence?.length > 0 && (
                                                     <div className="text-[10px] text-gray-500 leading-snug">
-                                                      {sub.evidence.map((ev: string, ei: number) => (
-                                                        <span key={ei}>{ei > 0 ? ' · ' : ''}{ev}</span>
-                                                      ))}
+                                                      {sub.evidence.map((ev: string, ei: number) => {
+                                                        const url = sub.urls?.[ei];
+                                                        return (
+                                                          <span key={ei}>
+                                                            {ei > 0 ? ' · ' : ''}
+                                                            {url ? (
+                                                              <a href={url} target="_blank" rel="noopener noreferrer"
+                                                                className="text-blue-600 hover:underline inline-flex items-center gap-0.5">
+                                                                {ev}<ExternalLink className="w-2.5 h-2.5 inline opacity-50" />
+                                                              </a>
+                                                            ) : ev}
+                                                          </span>
+                                                        );
+                                                      })}
                                                     </div>
                                                   )}
                                                 </div>
@@ -1153,7 +1164,11 @@ export function LeadDetail() {
                                         {factSheet.vpn_products_detected?.length > 0 && (
                                           <div>VPN: {factSheet.vpn_products_detected.map((v: any, i: number) => (
                                             <span key={i} className="inline-flex items-center gap-0.5 mr-1">
-                                              <span className="text-gray-700">{v.product}</span>
+                                              {v.url ? (
+                                                <a href={v.url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">{v.product}</a>
+                                              ) : (
+                                                <span className="text-gray-700">{v.product}</span>
+                                              )}
                                               <span className={`text-[9px] ${v.confidence === 'confirmed' ? 'text-emerald-600' : 'text-amber-500'}`}>({v.confidence})</span>
                                             </span>
                                           ))}</div>
@@ -1190,7 +1205,9 @@ export function LeadDetail() {
                                               ct.role_fit === 'economic_buyer' ? 'bg-amber-50 text-amber-700' :
                                               'bg-gray-100 text-gray-500'
                                             }`}>{ct.role_fit}</span>
-                                            {ct.has_linkedin && <span className="text-[9px] text-blue-500">LinkedIn</span>}
+                                            {ct.has_linkedin && (ct.linkedin_url ? (
+                                              <a href={ct.linkedin_url} target="_blank" rel="noopener noreferrer" className="text-[9px] text-blue-600 hover:underline inline-flex items-center gap-0.5">LinkedIn<ExternalLink className="w-2 h-2 opacity-50" /></a>
+                                            ) : <span className="text-[9px] text-blue-500">LinkedIn</span>)}
                                           </div>
                                         )) : <div className="text-gray-400 italic">No named contacts found</div>}
                                       </div>

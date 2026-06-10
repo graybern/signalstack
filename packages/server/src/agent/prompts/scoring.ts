@@ -205,6 +205,7 @@ export function getFactExtractionPrompt(icpConfig: ExtendedICPConfig): string {
 3. Be conservative: if unsure, mark it "model_knowledge".
 4. Do NOT fabricate facts. If information is absent, use null or empty arrays.
 5. For recency: "recent" = within 90 days, "aged" = older than 90 days, "unknown" = no date available.
+6. When a fact references a specific URL from the enrichment data (news article, job posting, LinkedIn profile), include it in the "url" field. Only include URLs that appear in the provided enrichment data — do NOT generate or guess URLs.
 
 ## ICP Context (for classifying vertical match and product relevance)
 - **Target Verticals:** ${verticals.join(', ') || 'Not specified'}
@@ -228,21 +229,21 @@ Return a JSON object with this exact structure (FactSheet):
   "byod_byoc_evidence": false,
   "developer_experience_initiative": false,
 
-  "vpn_products_detected": [{"product": "...", "confidence": "confirmed|inferred|model_knowledge", "source": "..."}],
-  "competitor_products_detected": [{"product": "...", "confidence": "confirmed|inferred|model_knowledge", "source": "..."}],
+  "vpn_products_detected": [{"product": "...", "confidence": "confirmed|inferred|model_knowledge", "source": "...", "url": "optional URL where detected"}],
+  "competitor_products_detected": [{"product": "...", "confidence": "confirmed|inferred|model_knowledge", "source": "...", "url": "optional URL where detected"}],
   "legacy_solution_indicators": ["..."],
 
   "vertical_match": "exact|adjacent|tangential|none",
   "vertical_name": "string or null",
   "success_story_similarity": "strong|moderate|weak|none",
 
-  "funding_events": [{"type": "...", "amount": "...", "date": "...", "recency": "recent|aged|unknown"}],
-  "hiring_signals": [{"role": "...", "keywords": ["..."], "date": "...", "recency": "recent|aged|unknown"}],
-  "leadership_changes": [{"title": "...", "date": "...", "recency": "recent|aged|unknown"}],
-  "compliance_signals": [{"regulation": "...", "evidence": "..."}],
-  "active_evaluation_evidence": [{"description": "...", "confidence": "confirmed|inferred|model_knowledge", "source": "..."}],
+  "funding_events": [{"type": "...", "amount": "...", "date": "...", "recency": "recent|aged|unknown", "url": "optional source URL"}],
+  "hiring_signals": [{"role": "...", "keywords": ["..."], "date": "...", "recency": "recent|aged|unknown", "url": "optional job posting URL"}],
+  "leadership_changes": [{"title": "...", "date": "...", "recency": "recent|aged|unknown", "url": "optional source URL"}],
+  "compliance_signals": [{"regulation": "...", "evidence": "...", "url": "optional source URL"}],
+  "active_evaluation_evidence": [{"description": "...", "confidence": "confirmed|inferred|model_knowledge", "source": "...", "url": "optional source URL"}],
 
-  "named_contacts": [{"name": "...", "title": "...", "has_linkedin": false, "has_email": false, "role_fit": "champion|economic_buyer|technical|executive|unknown"}],
+  "named_contacts": [{"name": "...", "title": "...", "has_linkedin": false, "has_email": false, "role_fit": "champion|economic_buyer|technical|executive|unknown", "linkedin_url": "optional LinkedIn profile URL"}],
   "security_team_visible": false,
   "it_org_visible": false,
 

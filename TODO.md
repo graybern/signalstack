@@ -148,9 +148,18 @@ Use existing `expandedSignalCat` state + ChevronDown pattern for expand/collapse
 4. Existing v1 leads render without breakdowns (graceful fallback)
 5. Scores identical before/after refactor (same FactSheet → same numbers)
 
+## Phase 2: FactSheet Source URL Pass-Through ✅
+
+Threads source URLs from enrichment adapters through the FactSheet and scorer into clickable evidence links in the UI.
+
+- [x] Step 1: Extend types — `url?` on FactSheet sub-objects, `linkedin_url?` on named_contacts, `urls?` on SubScore, `url?` on SignalEntry
+- [x] Step 2: Include URLs in enrichment signal text — news/job URLs in `[News]`/`[Jobs]` signals, job URLs added to candidate.sources
+- [x] Step 3: Update fact extraction prompt — rule 6 for URL extraction, `url` fields in JSON schema
+- [x] Step 4: Thread URLs through scorer — `pushEvidence`/`buildSubScore` helpers, parallel `urls[]` in all compute functions
+- [x] Step 5: Render clickable evidence in LeadDetail — sub-score evidence links, VPN product links, contact LinkedIn links
+
 ## Future Phases (not in this TODO)
 
-- **Phase 2**: FactSheet source URL pass-through (enrichment adapters → FactSheet → clickable links)
 - **Phase 3**: Provenance UI polish (ProvenanceTrail component, enrichment metadata cross-reference)
 - **Phase 4**: LinkedIn discovery improvements (editable URL, confidence indicator)
 - **Phase 5**: Leads table redesign (column system, header sort, column picker)

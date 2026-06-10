@@ -595,14 +595,14 @@ function applyCandidateEnrichment(
 
   if (enrichment.recent_news?.length) {
     for (const news of enrichment.recent_news.slice(0, 3)) {
-      newSignals.push(`[News] ${news.title}`);
+      newSignals.push(`[News] ${news.title}${news.url ? ` (${news.url})` : ''}`);
     }
   }
 
   if (enrichment.job_postings?.length) {
     const relevantJobs = enrichment.job_postings.slice(0, 2);
     for (const job of relevantJobs) {
-      newSignals.push(`[Jobs] ${job.title}`);
+      newSignals.push(`[Jobs] ${job.title}${job.url ? ` (${job.url})` : ''}`);
     }
   }
 
@@ -682,7 +682,12 @@ function applyCandidateEnrichment(
   const newSources = [...(candidate.sources || [])];
   if (enrichment.recent_news?.length) {
     for (const news of enrichment.recent_news.slice(0, 3)) {
-      newSources.push(news.url);
+      if (news.url) newSources.push(news.url);
+    }
+  }
+  if (enrichment.job_postings?.length) {
+    for (const job of enrichment.job_postings.slice(0, 2)) {
+      if (job.url) newSources.push(job.url);
     }
   }
   updated.sources = newSources;

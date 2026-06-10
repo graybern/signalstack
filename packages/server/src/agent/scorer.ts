@@ -223,6 +223,15 @@ function clamp(v: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, v));
 }
 
+function pushEvidence(evidence: string[], urls: string[], text: string, url?: string) {
+  evidence.push(text);
+  urls.push(url || '');
+}
+
+function buildSubScore(label: string, points: number, max: number, evidence: string[], urls: string[]): SubScore {
+  return { label, points, max, evidence, ...(urls.some(u => u) && { urls }) };
+}
+
 export function computeIcpFit(fs: FactSheet, icpConfig: ExtendedICPConfig, scoringSignals?: ScoringSignals): { score: number; breakdown: DimensionBreakdown } {
   let score = 0;
   const painSigs = scoringSignals?.pain_signals;
@@ -287,6 +296,7 @@ export function computeIcpFit(fs: FactSheet, icpConfig: ExtendedICPConfig, scori
   // Displacement Wedge (0-20)
   let dispScore = 0;
   const dispEvidence: string[] = [];
+  const dispUrls: string[] = [];
   const confirmedVpn = fs.vpn_products_detected.filter(v => v.confidence === 'confirmed');
   const inferredVpn = fs.vpn_products_detected.filter(v => v.confidence === 'inferred');
   const confirmedComp = fs.competitor_products_detected.filter(v => v.confidence === 'confirmed');
@@ -294,34 +304,34 @@ export function computeIcpFit(fs: FactSheet, icpConfig: ExtendedICPConfig, scori
 
   if (confirmedVpn.length > 0) {
     dispScore = 20;
-    dispEvidence.push(`VPN confirmed: ${confirmedVpn.map(v => v.product).join(', ')}`);
+    pushEvidence(dispEvidence, dispUrls, `VPN confirmed: ${confirmedVpn.map(v => v.product).join(', ')}`, confirmedVpn[0]?.url);
   } else if (confirmedComp.length > 0) {
     dispScore = 16;
-    dispEvidence.push(`Competitor confirmed: ${confirmedComp.map(c => c.product).join(', ')}`);
+    pushEvidence(dispEvidence, dispUrls, `Competitor confirmed: ${confirmedComp.map(c => c.product).join(', ')}`, confirmedComp[0]?.url);
   } else if (dispSigs?.includes('byoc') && fs.byod_byoc_evidence) {
     dispScore = 14;
-    dispEvidence.push('BYOC displacement (campaign signal)');
+    pushEvidence(dispEvidence, dispUrls, 'BYOC displacement (campaign signal)');
   } else if (inferredVpn.length > 0) {
     dispScore = 14;
-    dispEvidence.push(`VPN inferred: ${inferredVpn.map(v => v.product).join(', ')}`);
+    pushEvidence(dispEvidence, dispUrls, `VPN inferred: ${inferredVpn.map(v => v.product).join(', ')}`, inferredVpn[0]?.url);
   } else if (dispSigs?.includes('private_networking') && fs.byod_byoc_evidence) {
     dispScore = 12;
-    dispEvidence.push('Private networking displacement (campaign signal)');
+    pushEvidence(dispEvidence, dispUrls, 'Private networking displacement (campaign signal)');
   } else if (inferredComp.length > 0) {
     dispScore = 10;
-    dispEvidence.push(`Competitor inferred: ${inferredComp.map(c => c.product).join(', ')}`);
+    pushEvidence(dispEvidence, dispUrls, `Competitor inferred: ${inferredComp.map(c => c.product).join(', ')}`, inferredComp[0]?.url);
   } else if (fs.legacy_solution_indicators.length >= 2) {
     dispScore = 8;
-    dispEvidence.push(`Legacy indicators: ${fs.legacy_solution_indicators.join(', ')}`);
+    pushEvidence(dispEvidence, dispUrls, `Legacy indicators: ${fs.legacy_solution_indicators.join(', ')}`);
   } else if (dispSigs?.includes('distributed_team') && fs.multi_office) {
     dispScore = 8;
-    dispEvidence.push('Distributed team displacement (campaign signal)');
+    pushEvidence(dispEvidence, dispUrls, 'Distributed team displacement (campaign signal)');
   } else if (fs.multi_office && (fs.office_count ?? 0) >= 3) {
     dispScore = 8;
-    dispEvidence.push(`Multi-office displacement: ${fs.office_count} offices`);
+    pushEvidence(dispEvidence, dispUrls, `Multi-office displacement: ${fs.office_count} offices`);
   }
   score += dispScore;
-  subScores.push({ label: 'Displacement Wedge', points: dispScore, max: 20, evidence: dispEvidence });
+  subScores.push(buildSubScore('Displacement Wedge', dispScore, 20, dispEvidence, dispUrls));
 
   // Vertical Match (0-15)
   let vertScore = 0;
@@ -345,20 +355,22 @@ export function computeIcpFit(fs: FactSheet, icpConfig: ExtendedICPConfig, scori
   // Buyer Access (0-10)
   let buyerScore = 0;
   const buyerEvidence: string[] = [];
+  const buyerUrls: string[] = [];
   const champions = fs.named_contacts.filter(c => c.role_fit === 'champion');
   if (champions.length > 0 && champions.some(c => c.has_linkedin)) {
     buyerScore = 10;
-    buyerEvidence.push(`Champion: ${champions[0].name} — ${champions[0].title} (LinkedIn)`);
+    const champ = champions.find(c => c.has_linkedin) || champions[0];
+    pushEvidence(buyerEvidence, buyerUrls, `Champion: ${champ.name} — ${champ.title} (LinkedIn)`, champ.linkedin_url);
   } else if (champions.length > 0) {
     buyerScore = 7;
-    buyerEvidence.push(`Champion: ${champions[0].name} — ${champions[0].title} (no LinkedIn)`);
+    pushEvidence(buyerEvidence, buyerUrls, `Champion: ${champions[0].name} — ${champions[0].title} (no LinkedIn)`);
   } else if (fs.security_team_visible || fs.it_org_visible) {
     buyerScore = 5;
-    if (fs.security_team_visible) buyerEvidence.push('Security team visible');
-    if (fs.it_org_visible) buyerEvidence.push('IT org visible');
+    if (fs.security_team_visible) pushEvidence(buyerEvidence, buyerUrls, 'Security team visible');
+    if (fs.it_org_visible) pushEvidence(buyerEvidence, buyerUrls, 'IT org visible');
   }
   score += buyerScore;
-  subScores.push({ label: 'Buyer Access', points: buyerScore, max: 10, evidence: buyerEvidence });
+  subScores.push(buildSubScore('Buyer Access', buyerScore, 10, buyerEvidence, buyerUrls));
 
   // Penalties
   const penalties: { points: number; reason: string }[] = [];
@@ -399,42 +411,45 @@ export function computeTiming(fs: FactSheet): { score: number; breakdown: Dimens
   // Active Evaluation (0-30)
   let evalScore = 0;
   const evalEvidence: string[] = [];
+  const evalUrls: string[] = [];
   const confirmedEval = fs.active_evaluation_evidence.filter(e => e.confidence === 'confirmed');
   const inferredEval = fs.active_evaluation_evidence.filter(e => e.confidence === 'inferred');
   if (confirmedEval.length > 0) {
     evalScore = 30;
-    evalEvidence.push(...confirmedEval.map(e => `Confirmed: ${e.description}`));
+    for (const e of confirmedEval) pushEvidence(evalEvidence, evalUrls, `Confirmed: ${e.description}`, e.url);
   } else if (inferredEval.length > 0) {
     evalScore = 15;
-    evalEvidence.push(...inferredEval.map(e => `Inferred: ${e.description}`));
+    for (const e of inferredEval) pushEvidence(evalEvidence, evalUrls, `Inferred: ${e.description}`, e.url);
   }
   score += evalScore;
-  subScores.push({ label: 'Active Evaluation', points: evalScore, max: 30, evidence: evalEvidence });
+  subScores.push(buildSubScore('Active Evaluation', evalScore, 30, evalEvidence, evalUrls));
 
   // Recent Triggers (0-25 total)
   const triggerEvidence: string[] = [];
+  const triggerUrls: string[] = [];
   const recentFunding = fs.funding_events.filter(f => f.recency === 'recent');
   const recentLeadership = fs.leadership_changes.filter(l => l.recency === 'recent');
   let triggerScore = 0;
   if (recentFunding.length > 0) {
     triggerScore += Math.min(25, 15 + recentFunding.length * 3);
-    triggerEvidence.push(...recentFunding.map(f => `Funding: ${f.type}${f.amount ? ` (${f.amount})` : ''}`));
+    for (const f of recentFunding) pushEvidence(triggerEvidence, triggerUrls, `Funding: ${f.type}${f.amount ? ` (${f.amount})` : ''}`, f.url);
   }
   if (recentLeadership.length > 0) {
     triggerScore += Math.min(15, 10 + recentLeadership.length * 2);
-    triggerEvidence.push(...recentLeadership.map(l => `Leadership: ${l.title}`));
+    for (const l of recentLeadership) pushEvidence(triggerEvidence, triggerUrls, `Leadership: ${l.title}`, l.url);
   }
   if (fs.compliance_signals.length > 0) {
     triggerScore += 10;
-    triggerEvidence.push(...fs.compliance_signals.map(c => `Compliance: ${c.regulation}`));
+    for (const c of fs.compliance_signals) pushEvidence(triggerEvidence, triggerUrls, `Compliance: ${c.regulation}`, c.url);
   }
   const triggerFinal = Math.min(25, triggerScore);
   score += triggerFinal;
-  subScores.push({ label: 'Recent Triggers', points: triggerFinal, max: 25, evidence: triggerEvidence });
+  subScores.push(buildSubScore('Recent Triggers', triggerFinal, 25, triggerEvidence, triggerUrls));
 
   // Hiring Signals (0-20)
   let hiringScore = 0;
   const hiringEvidence: string[] = [];
+  const hiringUrls: string[] = [];
   const vpnKeywords = ['vpn', 'ztna', 'zero trust', 'network access', 'remote access', 'sase'];
   const recentHiring = fs.hiring_signals.filter(h => h.recency === 'recent');
   const vpnHiring = recentHiring.filter(h =>
@@ -442,18 +457,18 @@ export function computeTiming(fs: FactSheet): { score: number; breakdown: Dimens
   );
   if (vpnHiring.length > 0) {
     hiringScore = Math.min(20, 15 + vpnHiring.length * 2);
-    hiringEvidence.push(...vpnHiring.map(h => `VPN-related: ${h.role}`));
+    for (const h of vpnHiring) pushEvidence(hiringEvidence, hiringUrls, `VPN-related: ${h.role}`, h.url);
   } else if (recentHiring.length > 0) {
     hiringScore = Math.min(10, 5 + recentHiring.length * 2);
-    hiringEvidence.push(...recentHiring.map(h => `Hiring: ${h.role}`));
+    for (const h of recentHiring) pushEvidence(hiringEvidence, hiringUrls, `Hiring: ${h.role}`, h.url);
   }
   const agedHiring = fs.hiring_signals.filter(h => h.recency === 'aged' || h.recency === 'unknown');
   if (agedHiring.length > 0 && recentHiring.length === 0) {
     hiringScore += 3;
-    hiringEvidence.push(`${agedHiring.length} aged hiring signal(s)`);
+    pushEvidence(hiringEvidence, hiringUrls, `${agedHiring.length} aged hiring signal(s)`);
   }
   score += hiringScore;
-  subScores.push({ label: 'Hiring Signals', points: hiringScore, max: 20, evidence: hiringEvidence });
+  subScores.push(buildSubScore('Hiring Signals', hiringScore, 20, hiringEvidence, hiringUrls));
 
   // Compound Growth (0-15)
   let compoundScore = 0;
@@ -598,35 +613,43 @@ export function computeReachability(fs: FactSheet, enrichMeta?: EnrichmentMetada
   // Champions (max 30)
   let champScore = 0;
   const champEvidence: string[] = [];
+  const champUrls: string[] = [];
   const champLinked = champions.filter(c => c.has_linkedin).length;
   champScore += Math.min(30, champLinked * 30);
-  if (champLinked > 0) champEvidence.push(...champions.filter(c => c.has_linkedin).map(c => `${c.name} — ${c.title} (LinkedIn)`));
+  if (champLinked > 0) {
+    for (const c of champions.filter(c => c.has_linkedin)) pushEvidence(champEvidence, champUrls, `${c.name} — ${c.title} (LinkedIn)`, c.linkedin_url);
+  }
   if (creditRoleFit && champLinked === 0 && champions.length > 0) {
     champScore += Math.min(15, champions.length * 15);
-    champEvidence.push(...champions.map(c => `${c.name} — ${c.title} (role fit, no LinkedIn)`));
+    for (const c of champions) pushEvidence(champEvidence, champUrls, `${c.name} — ${c.title} (role fit, no LinkedIn)`);
   }
   score += champScore;
-  subScores.push({ label: 'Champions', points: champScore, max: 30, evidence: champEvidence });
+  subScores.push(buildSubScore('Champions', champScore, 30, champEvidence, champUrls));
 
   // Economic Buyers (max 20)
   let econScore = 0;
   const econEvidence: string[] = [];
+  const econUrls: string[] = [];
   const econLinked = econBuyers.filter(c => c.has_linkedin).length;
   econScore += Math.min(20, econLinked * 20);
-  if (econLinked > 0) econEvidence.push(...econBuyers.filter(c => c.has_linkedin).map(c => `${c.name} — ${c.title} (LinkedIn)`));
+  if (econLinked > 0) {
+    for (const c of econBuyers.filter(c => c.has_linkedin)) pushEvidence(econEvidence, econUrls, `${c.name} — ${c.title} (LinkedIn)`, c.linkedin_url);
+  }
   if (creditRoleFit && econLinked === 0 && econBuyers.length > 0) {
     econScore += Math.min(10, econBuyers.length * 10);
-    econEvidence.push(...econBuyers.map(c => `${c.name} — ${c.title} (role fit, no LinkedIn)`));
+    for (const c of econBuyers) pushEvidence(econEvidence, econUrls, `${c.name} — ${c.title} (role fit, no LinkedIn)`);
   }
   score += econScore;
-  subScores.push({ label: 'Economic Buyers', points: econScore, max: 20, evidence: econEvidence });
+  subScores.push(buildSubScore('Economic Buyers', econScore, 20, econEvidence, econUrls));
 
   // Other Contacts (max 20)
   const othersLinked = others.filter(c => c.has_linkedin);
   const otherScore = Math.min(20, othersLinked.length * 10);
-  const otherEvidence = othersLinked.map(c => `${c.name} — ${c.title} (LinkedIn)`);
+  const otherEvidence: string[] = [];
+  const otherUrls: string[] = [];
+  for (const c of othersLinked) pushEvidence(otherEvidence, otherUrls, `${c.name} — ${c.title} (LinkedIn)`, c.linkedin_url);
   score += otherScore;
-  subScores.push({ label: 'Other Contacts', points: otherScore, max: 20, evidence: otherEvidence });
+  subScores.push(buildSubScore('Other Contacts', otherScore, 20, otherEvidence, otherUrls));
 
   // Org Visibility (max 15)
   let orgScore = 0;
@@ -667,22 +690,22 @@ export function computeSignalDensity(fs: FactSheet): SignalDensity {
   const entries: SignalEntry[] = [];
 
   for (const v of fs.vpn_products_detected) {
-    entries.push({ category: 'competitive', description: `VPN: ${v.product}`, recency: 'unknown', source_type: v.confidence === 'model_knowledge' ? 'model_knowledge' : 'enrichment', source: v.source });
+    entries.push({ category: 'competitive', description: `VPN: ${v.product}`, recency: 'unknown', source_type: v.confidence === 'model_knowledge' ? 'model_knowledge' : 'enrichment', source: v.source, url: v.url });
   }
   for (const c of fs.competitor_products_detected) {
-    entries.push({ category: 'competitive', description: `Competitor: ${c.product}`, recency: 'unknown', source_type: c.confidence === 'model_knowledge' ? 'model_knowledge' : 'enrichment', source: c.source });
+    entries.push({ category: 'competitive', description: `Competitor: ${c.product}`, recency: 'unknown', source_type: c.confidence === 'model_knowledge' ? 'model_knowledge' : 'enrichment', source: c.source, url: c.url });
   }
   for (const f of fs.funding_events) {
-    entries.push({ category: 'funding', description: `${f.type}${f.amount ? ` (${f.amount})` : ''}`, recency: f.recency, source_type: 'enrichment' });
+    entries.push({ category: 'funding', description: `${f.type}${f.amount ? ` (${f.amount})` : ''}`, recency: f.recency, source_type: 'enrichment', url: f.url });
   }
   for (const h of fs.hiring_signals) {
-    entries.push({ category: 'hiring', description: h.role, recency: h.recency, source_type: 'enrichment' });
+    entries.push({ category: 'hiring', description: h.role, recency: h.recency, source_type: 'enrichment', url: h.url });
   }
   for (const l of fs.leadership_changes) {
-    entries.push({ category: 'leadership', description: l.title, recency: l.recency, source_type: 'enrichment' });
+    entries.push({ category: 'leadership', description: l.title, recency: l.recency, source_type: 'enrichment', url: l.url });
   }
   for (const c of fs.compliance_signals) {
-    entries.push({ category: 'compliance', description: c.regulation, recency: 'unknown', source_type: 'enrichment' });
+    entries.push({ category: 'compliance', description: c.regulation, recency: 'unknown', source_type: 'enrichment', url: c.url });
   }
 
   const byCategory = {} as Record<SignalCategory, number>;
@@ -716,69 +739,74 @@ export function computeSignalQuality(fs: FactSheet, scoringSignals?: ScoringSign
   // VPN detections
   let vpnTotal = 0;
   const vpnEvidence: string[] = [];
+  const vpnUrls: string[] = [];
   for (const v of fs.vpn_products_detected) {
     const pts = weights.vpn_detection * (CONFIDENCE_MULT[v.confidence] ?? 0.3) * FRESHNESS_MULT.unknown;
     vpnTotal += pts;
-    vpnEvidence.push(`${v.product} (${v.confidence}) = ${Math.round(pts)}pts`);
+    pushEvidence(vpnEvidence, vpnUrls, `${v.product} (${v.confidence}) = ${Math.round(pts)}pts`, v.url);
   }
-  if (vpnTotal > 0) subScores.push({ label: 'VPN Detection', points: Math.round(vpnTotal), max: 30, evidence: vpnEvidence });
+  if (vpnTotal > 0) subScores.push(buildSubScore('VPN Detection', Math.round(vpnTotal), 30, vpnEvidence, vpnUrls));
   total += vpnTotal;
 
   // Competitor detections
   let compTotal = 0;
   const compEvidence: string[] = [];
+  const compUrls: string[] = [];
   for (const c of fs.competitor_products_detected) {
     const pts = weights.competitor * (CONFIDENCE_MULT[c.confidence] ?? 0.3) * FRESHNESS_MULT.unknown;
     compTotal += pts;
-    compEvidence.push(`${c.product} (${c.confidence}) = ${Math.round(pts)}pts`);
+    pushEvidence(compEvidence, compUrls, `${c.product} (${c.confidence}) = ${Math.round(pts)}pts`, c.url);
   }
-  if (compTotal > 0) subScores.push({ label: 'Competitor Detection', points: Math.round(compTotal), max: 24, evidence: compEvidence });
+  if (compTotal > 0) subScores.push(buildSubScore('Competitor Detection', Math.round(compTotal), 24, compEvidence, compUrls));
   total += compTotal;
 
   // Active evaluation
   let evalTotal = 0;
-  const evalEvidence: string[] = [];
+  const sqEvalEvidence: string[] = [];
+  const sqEvalUrls: string[] = [];
   for (const e of fs.active_evaluation_evidence) {
     const pts = weights.evaluation * (CONFIDENCE_MULT[e.confidence] ?? 0.3) * FRESHNESS_MULT.recent;
     evalTotal += pts;
-    evalEvidence.push(`${e.description} (${e.confidence}) = ${Math.round(pts)}pts`);
+    pushEvidence(sqEvalEvidence, sqEvalUrls, `${e.description} (${e.confidence}) = ${Math.round(pts)}pts`, e.url);
   }
-  if (evalTotal > 0) subScores.push({ label: 'Active Evaluation', points: Math.round(evalTotal), max: 40, evidence: evalEvidence });
+  if (evalTotal > 0) subScores.push(buildSubScore('Active Evaluation', Math.round(evalTotal), 40, sqEvalEvidence, sqEvalUrls));
   total += evalTotal;
 
   // Hiring signals
   let hiringTotal = 0;
-  const hiringEvidence: string[] = [];
+  const sqHiringEvidence: string[] = [];
+  const sqHiringUrls: string[] = [];
   const vpnKeywords = ['vpn', 'ztna', 'zero trust', 'network access', 'remote access', 'sase'];
   for (const h of fs.hiring_signals) {
     const isVpn = h.keywords.some(k => vpnKeywords.some(vk => k.toLowerCase().includes(vk)));
     const weight = isVpn ? weights.hiring_vpn : weights.hiring_general;
     const pts = weight * CONFIDENCE_MULT.inferred * (FRESHNESS_MULT[h.recency] ?? 0.7);
     hiringTotal += pts;
-    hiringEvidence.push(`${h.role}${isVpn ? ' (VPN-related)' : ''} [${h.recency}] = ${Math.round(pts)}pts`);
+    pushEvidence(sqHiringEvidence, sqHiringUrls, `${h.role}${isVpn ? ' (VPN-related)' : ''} [${h.recency}] = ${Math.round(pts)}pts`, h.url);
   }
-  if (hiringTotal > 0) subScores.push({ label: 'Hiring Signals', points: Math.round(hiringTotal), max: 20, evidence: hiringEvidence });
+  if (hiringTotal > 0) subScores.push(buildSubScore('Hiring Signals', Math.round(hiringTotal), 20, sqHiringEvidence, sqHiringUrls));
   total += hiringTotal;
 
   // Funding & leadership & compliance
   let otherTotal = 0;
-  const otherEvidence: string[] = [];
+  const sqOtherEvidence: string[] = [];
+  const sqOtherUrls: string[] = [];
   for (const f of fs.funding_events) {
     const pts = weights.funding * CONFIDENCE_MULT.confirmed * (FRESHNESS_MULT[f.recency] ?? 0.7);
     otherTotal += pts;
-    otherEvidence.push(`Funding: ${f.type}${f.amount ? ` (${f.amount})` : ''} [${f.recency}] = ${Math.round(pts)}pts`);
+    pushEvidence(sqOtherEvidence, sqOtherUrls, `Funding: ${f.type}${f.amount ? ` (${f.amount})` : ''} [${f.recency}] = ${Math.round(pts)}pts`, f.url);
   }
   for (const l of fs.leadership_changes) {
     const pts = weights.leadership * CONFIDENCE_MULT.confirmed * (FRESHNESS_MULT[l.recency] ?? 0.7);
     otherTotal += pts;
-    otherEvidence.push(`Leadership: ${l.title} [${l.recency}] = ${Math.round(pts)}pts`);
+    pushEvidence(sqOtherEvidence, sqOtherUrls, `Leadership: ${l.title} [${l.recency}] = ${Math.round(pts)}pts`, l.url);
   }
   for (const c of fs.compliance_signals) {
     const pts = weights.compliance * CONFIDENCE_MULT.inferred * FRESHNESS_MULT.unknown;
     otherTotal += pts;
-    otherEvidence.push(`Compliance: ${c.regulation} = ${Math.round(pts)}pts`);
+    pushEvidence(sqOtherEvidence, sqOtherUrls, `Compliance: ${c.regulation} = ${Math.round(pts)}pts`, c.url);
   }
-  if (otherTotal > 0) subScores.push({ label: 'Other Signals', points: Math.round(otherTotal), max: 20, evidence: otherEvidence });
+  if (otherTotal > 0) subScores.push(buildSubScore('Other Signals', Math.round(otherTotal), 20, sqOtherEvidence, sqOtherUrls));
   total += otherTotal;
 
   const finalScore = clamp(Math.round(total), 0, 100);

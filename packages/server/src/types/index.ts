@@ -264,19 +264,19 @@ export interface FactSheet {
   byod_byoc_evidence: boolean;
   developer_experience_initiative: boolean;
 
-  vpn_products_detected: { product: string; confidence: FactConfidence; source: string }[];
-  competitor_products_detected: { product: string; confidence: FactConfidence; source: string }[];
+  vpn_products_detected: { product: string; confidence: FactConfidence; source: string; url?: string }[];
+  competitor_products_detected: { product: string; confidence: FactConfidence; source: string; url?: string }[];
   legacy_solution_indicators: string[];
 
   vertical_match: 'exact' | 'adjacent' | 'tangential' | 'none';
   vertical_name: string | null;
   success_story_similarity: 'strong' | 'moderate' | 'weak' | 'none';
 
-  funding_events: { type: string; amount?: string; date?: string; recency: SignalRecency }[];
-  hiring_signals: { role: string; keywords: string[]; date?: string; recency: SignalRecency }[];
-  leadership_changes: { title: string; date?: string; recency: SignalRecency }[];
-  compliance_signals: { regulation: string; evidence: string }[];
-  active_evaluation_evidence: { description: string; confidence: FactConfidence; source: string }[];
+  funding_events: { type: string; amount?: string; date?: string; recency: SignalRecency; url?: string }[];
+  hiring_signals: { role: string; keywords: string[]; date?: string; recency: SignalRecency; url?: string }[];
+  leadership_changes: { title: string; date?: string; recency: SignalRecency; url?: string }[];
+  compliance_signals: { regulation: string; evidence: string; url?: string }[];
+  active_evaluation_evidence: { description: string; confidence: FactConfidence; source: string; url?: string }[];
 
   named_contacts: {
     name: string;
@@ -284,6 +284,7 @@ export interface FactSheet {
     has_linkedin: boolean;
     has_email: boolean;
     role_fit: 'champion' | 'economic_buyer' | 'technical' | 'executive' | 'unknown';
+    linkedin_url?: string;
   }[];
   security_team_visible: boolean;
   it_org_visible: boolean;
@@ -299,6 +300,7 @@ export interface SignalEntry {
   recency: SignalRecency;
   source_type: 'enrichment' | 'model_knowledge';
   source?: string;
+  url?: string;
 }
 
 export interface SignalDensity {
@@ -331,6 +333,7 @@ export interface SubScore {
   points: number;
   max: number;
   evidence: string[];
+  urls?: string[];
 }
 
 export interface DimensionBreakdown {

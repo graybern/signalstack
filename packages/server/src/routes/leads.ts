@@ -6,7 +6,7 @@ import { logActivity } from '../services/activityLog.js';
 import { analyzeCampaignFeedback, getCampaignFeedbackCount } from '../agent/feedbackAnalyzer.js';
 import { computeAllDimensions, computeCompositeV2, generateVerdict, dimensionsToLegacyBreakdown } from '../agent/scorer.js';
 import { loadCampaignConfig } from '../agent/campaignOrchestrator.js';
-import type { Lead, Persona, LeadFeedback, FeedbackVerdict, FactSheet, EnrichmentMetadata } from '../types/index.js';
+import type { Lead, Persona, LeadFeedback, FeedbackVerdict, FactSheet, EnrichmentMetadata, LinkedInMatch } from '../types/index.js';
 
 const router = Router();
 
@@ -916,6 +916,100 @@ router.post('/:id/reset-feedback', authenticate, requireMember, (req: AuthReques
     exclusion_removed: sideEffects.exclusion_removed,
     customer_removed: sideEffects.customer_removed,
   });
+});
+
+// ── LinkedIn URL correction + targeted re-enrichment ──
+
+router.patch('/:id/linkedin', authenticate, requireMember, async (req: AuthRequest, res: Response) => {
+  const { linkedin_url } = req.body;
+  if (!linkedin_url || typeof linkedin_url !== 'string') {
+    return res.status(400).json({ error: 'linkedin_url is required' });
+  }
+
+  const slugMatch = linkedin_url.match(/linkedin\.com\/company\/([a-zA-Z0-9_-]+)/);
+  if (!slugMatch) {
+    return res.status(400).json({ error: 'Invalid LinkedIn company URL. Expected format: https://www.linkedin.com/company/slug' });
+  }
+
+  const db = getDb();
+  const lead = db.prepare(
+    'SELECT id, company_name, linkedin_company_url, enrichment_metadata FROM leads WHERE id = ?'
+  ).get(req.params.id) as any;
+  if (!lead) return res.status(404).json({ error: 'Lead not found' });
+
+  const normalizedUrl = `https://www.linkedin.com/company/${slugMatch[1]}`;
+
+  try {
+    const { enrichFromLinkedIn } = await import('../agent/enrichment/service.js');
+
+    const { enrichment, linkedinMatch } = await enrichFromLinkedIn(
+      lead.company_name,
+      normalizedUrl,
+      true,
+    );
+
+    let metadata: EnrichmentMetadata;
+    try {
+      metadata = lead.enrichment_metadata ? JSON.parse(lead.enrichment_metadata) : {
+        sources_responded: [], sources_failed: [], sources_available: [],
+        field_completeness: { employee_count: false, hq_location: false, founded_year: false, funding_stage: false, website: false, linkedin_url: false },
+        field_sources: {}, corroboration_count: 0,
+      };
+    } catch {
+      metadata = {
+        sources_responded: [], sources_failed: [], sources_available: [],
+        field_completeness: { employee_count: false, hq_location: false, founded_year: false, funding_stage: false, website: false, linkedin_url: false },
+        field_sources: {}, corroboration_count: 0,
+      };
+    }
+    metadata.linkedin_match = linkedinMatch;
+    metadata.field_completeness.linkedin_url = true;
+
+    db.prepare(`
+      UPDATE leads SET
+        linkedin_company_url = ?,
+        hq_location = COALESCE(?, hq_location),
+        founded_year = COALESCE(?, founded_year),
+        employee_count = COALESCE(?, employee_count),
+        enrichment_metadata = ?,
+        updated_at = datetime('now')
+      WHERE id = ?
+    `).run(
+      normalizedUrl,
+      enrichment.hq_location ?? null,
+      enrichment.founded_year ?? null,
+      enrichment.employee_count ?? null,
+      JSON.stringify(metadata),
+      req.params.id,
+    );
+
+    logActivity({
+      userId: req.user!.id,
+      entityType: 'lead',
+      entityId: req.params.id,
+      entityTitle: lead.company_name,
+      action: 'updated',
+      changes: {
+        linkedin_company_url: { old: lead.linkedin_company_url || null, new: normalizedUrl },
+        linkedin_confidence: { old: null, new: linkedinMatch.confidence },
+      },
+    });
+
+    res.json({
+      success: true,
+      linkedin_url: normalizedUrl,
+      linkedin_match: linkedinMatch,
+      fields_updated: {
+        hq_location: enrichment.hq_location || null,
+        founded_year: enrichment.founded_year || null,
+        employee_count: enrichment.employee_count || null,
+        industry: enrichment.industry || null,
+      },
+    });
+  } catch (err: any) {
+    console.error(`[linkedin-patch] Error for lead ${req.params.id}:`, err);
+    res.status(500).json({ error: err.message || 'LinkedIn re-enrichment failed' });
+  }
 });
 
 // Delete all leads from a specific run

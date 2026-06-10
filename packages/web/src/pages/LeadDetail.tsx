@@ -12,7 +12,7 @@ import {
   Briefcase, Linkedin, MessageSquare, Shield, Server, ChevronDown, ChevronUp,
   Signal, Trash2, AlertTriangle, Brain, FileText, Download, Layers,
   ClipboardCheck, RefreshCw, Sparkles, Check, Circle, XCircle, ArrowRight, SlidersHorizontal,
-  Target, Clock, Mail, BarChart3, Search, Radio, Crosshair,
+  Target, Clock, Mail, BarChart3, Search, Radio, Crosshair, Pencil,
 } from 'lucide-react';
 import FeedbackPanel from '../components/FeedbackPanel';
 
@@ -39,6 +39,10 @@ export function LeadDetail() {
   const [showRerunMenu, setShowRerunMenu] = useState(false);
   const [rerunCampaign, setRerunCampaign] = useState<{ leadId: string; campaignName: string; campaignId: string } | null>(null);
   const [rerunMode, setRerunMode] = useState<'full' | 'brief'>('full');
+  const [editingLinkedin, setEditingLinkedin] = useState(false);
+  const [linkedinInput, setLinkedinInput] = useState('');
+  const [linkedinSaving, setLinkedinSaving] = useState(false);
+  const [linkedinError, setLinkedinError] = useState<string | null>(null);
   const briefMenuRef = useRef<HTMLDivElement>(null);
   const rerunMenuRef = useRef<HTMLDivElement>(null);
 
@@ -210,6 +214,24 @@ export function LeadDetail() {
       console.error('Force brief failed:', err);
       setRerunning(false);
       setRerunError(err?.message || 'Failed to generate brief');
+    }
+  };
+
+  const handleLinkedinSave = async () => {
+    if (!linkedinInput.trim()) return;
+    const slug = linkedinInput.match(/linkedin\.com\/company\/([a-zA-Z0-9_-]+)/);
+    if (!slug) { setLinkedinError('Paste a valid LinkedIn company URL'); return; }
+    setLinkedinSaving(true);
+    setLinkedinError(null);
+    try {
+      await api(`/leads/${id}/linkedin`, { method: 'PATCH', body: JSON.stringify({ linkedin_url: linkedinInput.trim() }) });
+      fetchLead();
+      setEditingLinkedin(false);
+      setLinkedinInput('');
+    } catch (err: any) {
+      setLinkedinError(err?.message || 'Failed to update LinkedIn URL');
+    } finally {
+      setLinkedinSaving(false);
     }
   };
 
@@ -567,7 +589,59 @@ export function LeadDetail() {
                 {lead.funding_stage && <span className="flex items-center gap-1"><Building2 className="w-4 h-4" />{lead.funding_stage}{lead.total_funding ? ` (${lead.total_funding})` : ''}</span>}
                 {lead.updated_at && <span className="flex items-center gap-1"><RefreshCw className="w-4 h-4" />Updated {formatDateTimeFull(lead.updated_at)}</span>}
                 <a href={`https://${(lead.website || lead.domain || '').replace(/^https?:\/\//, '')}`} target="_blank" rel="noopener" className="flex items-center gap-1 text-brand-600 hover:underline"><Globe className="w-4 h-4" />{(lead.website || lead.domain || '').replace(/^https?:\/\//, '')}</a>
-                {lead.linkedin_company_url ? <a href={lead.linkedin_company_url} target="_blank" rel="noopener" className="flex items-center gap-1 text-blue-600 hover:underline"><Linkedin className="w-4 h-4" />LinkedIn</a> : <span className="flex items-center gap-1 text-gray-300 text-xs italic border-b border-dashed border-gray-300"><Linkedin className="w-4 h-4" />Find on LinkedIn</span>}
+                {editingLinkedin ? (
+                  <span className="flex items-center gap-1 flex-wrap">
+                    <Linkedin className="w-4 h-4 text-blue-600" />
+                    <input
+                      type="text"
+                      value={linkedinInput}
+                      onChange={e => { setLinkedinInput(e.target.value); setLinkedinError(null); }}
+                      onKeyDown={e => { if (e.key === 'Enter') handleLinkedinSave(); if (e.key === 'Escape') { setEditingLinkedin(false); setLinkedinError(null); } }}
+                      placeholder="https://linkedin.com/company/..."
+                      className="text-xs border border-blue-300 rounded px-1.5 py-0.5 w-56 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                      autoFocus
+                      disabled={linkedinSaving}
+                    />
+                    <button onClick={handleLinkedinSave} disabled={linkedinSaving} className="text-[10px] px-1.5 py-0.5 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50">
+                      {linkedinSaving ? '...' : 'Save'}
+                    </button>
+                    <button onClick={() => { setEditingLinkedin(false); setLinkedinError(null); }} className="text-[10px] text-gray-400 hover:text-gray-600">Cancel</button>
+                    {linkedinError && <span className="text-[9px] text-red-500 basis-full ml-5">{linkedinError}</span>}
+                  </span>
+                ) : (
+                  <span className="flex items-center gap-1 group">
+                    {lead.enrichment_metadata_parsed?.linkedin_match && (() => {
+                      const lm = lead.enrichment_metadata_parsed.linkedin_match;
+                      const color = lm.confidence === 'high' ? 'bg-emerald-400' : lm.confidence === 'medium' ? 'bg-amber-400' : 'bg-red-400';
+                      const tip = lm.confidence === 'high' ? 'High confidence match'
+                        : lm.confidence === 'medium' ? 'Medium confidence — slug partially matches'
+                        : 'Low confidence — slug may not match company';
+                      return <span className={`w-2 h-2 rounded-full ${color} inline-block`} title={tip} />;
+                    })()}
+                    {lead.linkedin_company_url ? (
+                      <a href={lead.linkedin_company_url} target="_blank" rel="noopener" className="flex items-center gap-1 text-blue-600 hover:underline">
+                        <Linkedin className="w-4 h-4" />LinkedIn
+                      </a>
+                    ) : (
+                      <span className="flex items-center gap-1 text-gray-300 text-xs italic border-b border-dashed border-gray-300">
+                        <Linkedin className="w-4 h-4" />No LinkedIn
+                      </span>
+                    )}
+                    {lead.enrichment_metadata_parsed?.linkedin_match?.slug_matches_name === false && (
+                      <span title={`LinkedIn slug "${lead.enrichment_metadata_parsed.linkedin_match.slug}" may not match "${lead.company_name}"`}>
+                        <AlertTriangle className="w-3 h-3 text-amber-500" />
+                      </span>
+                    )}
+                    <button
+                      onClick={() => { setLinkedinInput(lead.linkedin_company_url || ''); setEditingLinkedin(true); }}
+                      className="opacity-0 group-hover:opacity-100 transition-opacity text-gray-400 hover:text-blue-600"
+                      title="Edit LinkedIn URL"
+                      disabled={rerunning}
+                    >
+                      <Pencil className="w-3 h-3" />
+                    </button>
+                  </span>
+                )}
               </div>
               {(!lead.hq_location || !lead.employee_count || !lead.founded_year) && lead.campaign_id && !rerunning && (
                 <button

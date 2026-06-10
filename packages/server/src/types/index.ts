@@ -312,6 +312,17 @@ export interface SignalDensity {
   entries: SignalEntry[];
 }
 
+export interface LinkedInMatch {
+  url: string;
+  slug: string;
+  contributing_sources: string[];
+  confidence: 'high' | 'medium' | 'low';
+  slug_matches_name: boolean;
+  page_company_name: string | null;
+  validated_at: string | null;
+  user_corrected: boolean;
+}
+
 export interface EnrichmentMetadata {
   sources_responded: string[];
   sources_failed: string[];
@@ -326,6 +337,7 @@ export interface EnrichmentMetadata {
   };
   field_sources: Record<string, string[]>;
   corroboration_count: number;
+  linkedin_match?: LinkedInMatch;
 }
 
 export interface SubScore {

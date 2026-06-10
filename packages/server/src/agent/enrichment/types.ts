@@ -67,6 +67,7 @@ export interface CompanyEnrichment {
   description?: string;
   website?: string;
   linkedin_url?: string;
+  linkedin_page_name?: string;
   tech_stack?: string[];  // BuiltWith / Clearbit tech data
   /**
    * Structured tech signals with multi-source corroboration.

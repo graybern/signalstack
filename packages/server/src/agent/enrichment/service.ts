@@ -15,7 +15,7 @@ import type {
   EnrichmentSummary,
 } from './types.js';
 import type { ResearchCandidate } from '../researcher.js';
-import type { EnrichmentMetadata } from '../../types/index.js';
+import type { EnrichmentMetadata, LinkedInMatch } from '../../types/index.js';
 import { WebSearchAdapter } from './adapters/webSearch.js';
 import { CrunchbaseAdapter } from './adapters/crunchbase.js';
 import { ApolloAdapter } from './adapters/apollo.js';
@@ -254,7 +254,25 @@ async function enrichSingleCandidate(
   }
 
   const merged = mergeEnrichments(enrichments.map(e => e.data));
-  const metadata = buildEnrichmentMetadata(enrichments, sourcesResponded, sourcesFailed, sourcesAvailable, merged);
+
+  let linkedinMatch: LinkedInMatch | undefined;
+  if (discoveredLinkedinUrl) {
+    const slugMatch = discoveredLinkedinUrl.match(/linkedin\.com\/company\/([a-zA-Z0-9_-]+)/);
+    if (slugMatch) {
+      const linkedinSources: string[] = [];
+      for (const e of enrichments) {
+        if (e.data.linkedin_url) linkedinSources.push(e.sourceId);
+      }
+      linkedinMatch = computeLinkedInConfidence(
+        slugMatch[1],
+        candidate.company_name,
+        linkedinSources,
+        merged.linkedin_page_name || null,
+      );
+    }
+  }
+
+  const metadata = buildEnrichmentMetadata(enrichments, sourcesResponded, sourcesFailed, sourcesAvailable, merged, linkedinMatch);
   const enrichedCandidate = applyCandidateEnrichment(candidate, merged);
   enrichedCandidate.enrichment_source_count = (candidate.enrichment_source_count || 0) + enrichments.length;
   enrichedCandidate.enrichment_metadata = mergeMetadata(candidate.enrichment_metadata, metadata);
@@ -268,12 +286,75 @@ function countCorroboration(fieldSources: Record<string, string[]>): number {
   return Object.values(fieldSources).filter(s => s.length >= 2).length;
 }
 
+function normalizeForSlugMatch(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[,.'"""'']/g, '')
+    .replace(/\b(inc|llc|ltd|corp|corporation|co|company|technologies|technology|tech|solutions|software|group|holdings|international|global|gmbh|ag|sa|plc|pty|bv|nv)\b/gi, '')
+    .replace(/[^a-z0-9]/g, '')
+    .trim();
+}
+
+function slugMatchesCompanyName(slug: string, companyName: string): boolean {
+  const normSlug = slug.toLowerCase().replace(/[-_]/g, '');
+  const normName = normalizeForSlugMatch(companyName);
+  if (!normSlug || !normName) return false;
+  if (normSlug === normName) return true;
+  if (normSlug.includes(normName) || normName.includes(normSlug)) return true;
+  const words = companyName.toLowerCase().replace(/[^a-z\s]/g, '').split(/\s+/).filter(w => w.length > 0);
+  if (words.length >= 2) {
+    const initials = words.map(w => w[0]).join('');
+    if (normSlug === initials) return true;
+  }
+  return false;
+}
+
+export function computeLinkedInConfidence(
+  slug: string,
+  companyName: string,
+  contributingSources: string[],
+  pageCompanyName: string | null,
+): LinkedInMatch {
+  const url = `https://www.linkedin.com/company/${slug}`;
+  const slugMatches = slugMatchesCompanyName(slug, companyName);
+
+  let pageNameMatches = false;
+  if (pageCompanyName) {
+    const normPage = normalizeForSlugMatch(pageCompanyName);
+    const normCompany = normalizeForSlugMatch(companyName);
+    pageNameMatches = normPage === normCompany
+      || normPage.includes(normCompany)
+      || normCompany.includes(normPage);
+  }
+
+  let confidence: 'high' | 'medium' | 'low';
+  if (slugMatches && (contributingSources.length >= 2 || pageNameMatches)) {
+    confidence = 'high';
+  } else if (slugMatches || pageNameMatches) {
+    confidence = 'medium';
+  } else {
+    confidence = 'low';
+  }
+
+  return {
+    url,
+    slug,
+    contributing_sources: contributingSources,
+    confidence,
+    slug_matches_name: slugMatches,
+    page_company_name: pageCompanyName,
+    validated_at: new Date().toISOString(),
+    user_corrected: false,
+  };
+}
+
 function buildEnrichmentMetadata(
   enrichments: { sourceId: string; data: Partial<CompanyEnrichment> }[],
   sourcesResponded: string[],
   sourcesFailed: string[],
   sourcesAvailable: string[],
   merged: CompanyEnrichment,
+  linkedinMatch?: LinkedInMatch,
 ): EnrichmentMetadata {
   const field_completeness = {
     employee_count: !!merged.employee_count,
@@ -305,6 +386,7 @@ function buildEnrichmentMetadata(
     field_completeness,
     field_sources,
     corroboration_count: countCorroboration(field_sources),
+    ...(linkedinMatch ? { linkedin_match: linkedinMatch } : {}),
   };
 }
 
@@ -333,6 +415,7 @@ function mergeMetadata(existing: EnrichmentMetadata | undefined, incoming: Enric
     field_completeness: merged_completeness,
     field_sources: merged_field_sources,
     corroboration_count: countCorroboration(merged_field_sources),
+    linkedin_match: incoming.linkedin_match || existing.linkedin_match,
   };
 }
 
@@ -693,4 +776,40 @@ function applyCandidateEnrichment(
   updated.sources = newSources;
 
   return updated;
+}
+
+export async function enrichFromLinkedIn(
+  companyName: string,
+  linkedinUrl: string,
+  userCorrected: boolean,
+): Promise<{
+  enrichment: Partial<CompanyEnrichment>;
+  linkedinMatch: LinkedInMatch;
+}> {
+  const adapter = ADAPTERS['linkedin'];
+  const config: DataSourceConfig = {
+    id: 'linkedin' as DataSourceId,
+    name: 'LinkedIn Company Page',
+    description: 'Targeted re-enrichment',
+    category: 'firmographics',
+    enabled: true,
+    requires_key: false,
+    settings: { linkedin_url: linkedinUrl },
+    status: 'active',
+  };
+
+  const enrichment = await adapter.enrichCompany(companyName, null, config);
+
+  const slugMatch = linkedinUrl.match(/linkedin\.com\/company\/([a-zA-Z0-9_-]+)/);
+  const slug = slugMatch ? slugMatch[1] : linkedinUrl;
+
+  const linkedinMatch = computeLinkedInConfidence(
+    slug,
+    companyName,
+    userCorrected ? ['user'] : ['linkedin'],
+    enrichment.linkedin_page_name || null,
+  );
+  linkedinMatch.user_corrected = userCorrected;
+
+  return { enrichment, linkedinMatch };
 }

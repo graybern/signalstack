@@ -64,6 +64,11 @@ export class LinkedInAdapter implements DataSourceAdapter {
       const industry = this.extractIndustry(html);
       if (industry) result.industry = industry;
 
+      const pageName = this.extractCompanyName(html);
+      if (pageName) {
+        result.linkedin_page_name = pageName;
+      }
+
       if (!result.linkedin_url) {
         result.linkedin_url = `https://www.linkedin.com/company/${slug}`;
       }
@@ -132,6 +137,30 @@ export class LinkedInAdapter implements DataSourceAdapter {
     // "companyIndustries":["Computer Software"]
     const arr = html.match(/"companyIndustries"\s*:\s*\["([^"]+)"/);
     if (arr) return arr[1];
+
+    return null;
+  }
+
+  private extractCompanyName(html: string): string | null {
+    const jsonLd = html.match(/"@type"\s*:\s*"Organization"[^}]*"name"\s*:\s*"([^"]+)"/);
+    if (jsonLd) return jsonLd[1];
+    const jsonLd2 = html.match(/"name"\s*:\s*"([^"]+)"[^}]*"@type"\s*:\s*"Organization"/);
+    if (jsonLd2) return jsonLd2[1];
+
+    const localized = html.match(/"localizedName"\s*:\s*"([^"]+)"/);
+    if (localized) return localized[1];
+
+    const titleTag = html.match(/<title[^>]*>([^<|]+?)(?:\s*[|]\s*LinkedIn)?<\/title>/i);
+    if (titleTag) {
+      const name = titleTag[1].trim();
+      if (name.length > 0 && name.length < 100) return name;
+    }
+
+    const ogTitle = html.match(/<meta[^>]*property="og:title"[^>]*content="([^"]+)"/i);
+    if (ogTitle) {
+      const name = ogTitle[1].replace(/\s*[|:]\s*LinkedIn.*$/i, '').trim();
+      if (name.length > 0 && name.length < 100) return name;
+    }
 
     return null;
   }

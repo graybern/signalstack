@@ -168,7 +168,16 @@ Adds confidence tracking to evidence items and surfaces provenance at a glance i
 - [x] Step 4: Evidence confidence dots — emerald (confirmed), amber (inferred), gray (model_knowledge) with text styling
 - [x] Step 5: Data Sources cross-reference — "Evidence contributed" section linking sources to scoring evidence
 
+## Phase 4: LinkedIn Discovery — Confidence Tracking, Validation & Editable URL ✅
+
+Slug validation, confidence scoring, user-editable URL with targeted re-enrich, visual match indicators.
+
+- [x] Step 1: Add `LinkedInMatch` type, extend `EnrichmentMetadata` and `CompanyEnrichment`
+- [x] Step 2: LinkedIn adapter — `extractCompanyName()` from HTML, return `linkedin_page_name`
+- [x] Step 3: Enrichment service — slug validation, confidence algorithm, `enrichFromLinkedIn()` export
+- [x] Step 4: `PATCH /leads/:id/linkedin` endpoint with targeted re-enrichment
+- [x] Step 5: LeadDetail UI — confidence dot, slug mismatch warning, editable URL with pencil icon
+
 ## Future Phases (not in this TODO)
 
-- **Phase 4**: LinkedIn discovery improvements (editable URL, confidence indicator)
 - **Phase 5**: Leads table redesign (column system, header sort, column picker)

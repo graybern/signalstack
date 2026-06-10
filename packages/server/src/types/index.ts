@@ -334,6 +334,7 @@ export interface SubScore {
   max: number;
   evidence: string[];
   urls?: string[];
+  confidences?: FactConfidence[];
 }
 
 export interface DimensionBreakdown {

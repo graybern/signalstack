@@ -158,8 +158,17 @@ Threads source URLs from enrichment adapters through the FactSheet and scorer in
 - [x] Step 4: Thread URLs through scorer — `pushEvidence`/`buildSubScore` helpers, parallel `urls[]` in all compute functions
 - [x] Step 5: Render clickable evidence in LeadDetail — sub-score evidence links, VPN product links, contact LinkedIn links
 
+## Phase 3: Provenance UI Polish ✅
+
+Adds confidence tracking to evidence items and surfaces provenance at a glance in the LeadDetail UI.
+
+- [x] Step 1: Add `confidences?: FactConfidence[]` to SubScore type
+- [x] Step 2: Thread confidences through scorer — `pushEvidence`, `buildSubScore`, all 5 compute functions
+- [x] Step 3: ProvenanceSummary bar (evidence count + confirmed/inferred/model ratio) + DimensionTrustIndicator (per-dimension micro bars)
+- [x] Step 4: Evidence confidence dots — emerald (confirmed), amber (inferred), gray (model_knowledge) with text styling
+- [x] Step 5: Data Sources cross-reference — "Evidence contributed" section linking sources to scoring evidence
+
 ## Future Phases (not in this TODO)
 
-- **Phase 3**: Provenance UI polish (ProvenanceTrail component, enrichment metadata cross-reference)
 - **Phase 4**: LinkedIn discovery improvements (editable URL, confidence indicator)
 - **Phase 5**: Leads table redesign (column system, header sort, column picker)

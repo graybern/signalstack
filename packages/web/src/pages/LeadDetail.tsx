@@ -1029,6 +1029,44 @@ export function LeadDetail() {
                     </span>
                   </div>
 
+                  {/* Provenance Summary */}
+                  {dims.breakdowns && (() => {
+                    const allSubs = Object.values(dims.breakdowns).flatMap((bd: any) => bd.sub_scores || []);
+                    const totalEv = allSubs.reduce((s: number, sub: any) => s + (sub.evidence?.length || 0), 0);
+                    const confirmed = allSubs.reduce((s: number, sub: any) => s + (sub.confidences?.filter((c: string) => c === 'confirmed').length || 0), 0);
+                    const inferred = allSubs.reduce((s: number, sub: any) => s + (sub.confidences?.filter((c: string) => c === 'inferred').length || 0), 0);
+                    const model = totalEv - confirmed - inferred;
+                    const srcCount = lead.enrichment_metadata_parsed?.sources_responded?.length ?? 0;
+                    const corrobCount = lead.enrichment_metadata_parsed?.corroboration_count ?? 0;
+                    if (totalEv === 0) return null;
+                    return (
+                      <div className="mb-3 px-2 py-1.5 rounded-md bg-gray-50 border border-gray-100">
+                        <div className="flex items-center gap-1.5 text-[10px] text-gray-500 flex-wrap">
+                          <span className="tabular-nums font-medium text-gray-600">{totalEv}</span>
+                          <span>evidence items</span>
+                          {confirmed > 0 && (<>
+                            <span className="text-gray-300">·</span>
+                            <span className="tabular-nums text-emerald-600 font-medium">{confirmed}</span>
+                            <span>confirmed</span>
+                          </>)}
+                          <span className="text-gray-300">·</span>
+                          <span className="tabular-nums">{srcCount}</span>
+                          <span>sources</span>
+                          {corrobCount > 0 && (<>
+                            <span className="text-gray-300">·</span>
+                            <span className="tabular-nums text-emerald-600">{corrobCount}</span>
+                            <span>corroborated</span>
+                          </>)}
+                        </div>
+                        <div className="flex h-[3px] rounded-full overflow-hidden mt-1">
+                          {confirmed > 0 && <div className="bg-emerald-500" style={{ width: `${(confirmed / totalEv) * 100}%` }} />}
+                          {inferred > 0 && <div className="bg-amber-400" style={{ width: `${(inferred / totalEv) * 100}%` }} />}
+                          {model > 0 && <div className="bg-gray-300" style={{ width: `${(model / totalEv) * 100}%` }} />}
+                        </div>
+                      </div>
+                    );
+                  })()}
+
                   <div className="space-y-3">
                     {buckets.map((bucket) => {
                       const { colorScheme: c } = bucket;
@@ -1086,6 +1124,22 @@ export function LeadDetail() {
                                         <GradeTooltip grade={dims.data_confidence} />
                                       )}
                                       <span className={`text-xs font-semibold tabular-nums ${dimWeak ? 'text-gray-400' : c.score}`}>{dim.getValue()}</span>
+                                      {(() => {
+                                        const db = dims.breakdowns?.[dim.key];
+                                        const dc = (db?.sub_scores || []).flatMap((s: any) => s.confidences || []);
+                                        const dt = dc.length;
+                                        if (dt === 0) return null;
+                                        const dConf = dc.filter((x: string) => x === 'confirmed').length;
+                                        const dInf = dc.filter((x: string) => x === 'inferred').length;
+                                        const dMod = dt - dConf - dInf;
+                                        return (
+                                          <div className="flex h-[3px] w-6 rounded-full overflow-hidden" title={`${dConf} confirmed, ${dInf} inferred, ${dMod} model`}>
+                                            {dConf > 0 && <div className="bg-emerald-500" style={{ width: `${(dConf / dt) * 100}%` }} />}
+                                            {dInf > 0 && <div className="bg-amber-400" style={{ width: `${(dInf / dt) * 100}%` }} />}
+                                            {dMod > 0 && <div className="bg-gray-300" style={{ width: `${(dMod / dt) * 100}%` }} />}
+                                          </div>
+                                        );
+                                      })()}
                                       {hasDetail && (
                                         <ChevronDown className={`w-3 h-3 text-gray-400 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
                                       )}
@@ -1123,15 +1177,24 @@ export function LeadDetail() {
                                                     <div className="text-[10px] text-gray-500 leading-snug">
                                                       {sub.evidence.map((ev: string, ei: number) => {
                                                         const url = sub.urls?.[ei];
+                                                        const conf = sub.confidences?.[ei] as string | undefined;
+                                                        const dotColor = conf === 'confirmed' ? 'bg-emerald-500'
+                                                          : conf === 'model_knowledge' ? 'bg-gray-300'
+                                                          : conf ? 'bg-amber-400' : '';
+                                                        const textClass = conf === 'model_knowledge' ? 'text-gray-400 italic'
+                                                          : conf === 'confirmed' ? 'font-medium' : '';
                                                         return (
-                                                          <span key={ei}>
-                                                            {ei > 0 ? ' · ' : ''}
-                                                            {url ? (
-                                                              <a href={url} target="_blank" rel="noopener noreferrer"
-                                                                className="text-blue-600 hover:underline inline-flex items-center gap-0.5">
-                                                                {ev}<ExternalLink className="w-2.5 h-2.5 inline opacity-50" />
-                                                              </a>
-                                                            ) : ev}
+                                                          <span key={ei} className="inline-flex items-start gap-1">
+                                                            {ei > 0 && <span className="text-gray-300 mx-0.5">·</span>}
+                                                            {dotColor && <span className={`w-1.5 h-1.5 rounded-full ${dotColor} mt-[5px] shrink-0`} />}
+                                                            <span className={textClass}>
+                                                              {url ? (
+                                                                <a href={url} target="_blank" rel="noopener noreferrer"
+                                                                  className="text-blue-600 hover:underline inline-flex items-center gap-0.5">
+                                                                  {ev}<ExternalLink className="w-2.5 h-2.5 inline opacity-50" />
+                                                                </a>
+                                                              ) : ev}
+                                                            </span>
                                                           </span>
                                                         );
                                                       })}
@@ -1449,6 +1512,25 @@ export function LeadDetail() {
             const responded = new Set(em.sources_responded || []);
             const failed = new Set(em.sources_failed || []);
             const fieldSources = em.field_sources as Record<string, string[]> | undefined;
+            const dimBreakdowns = lead.scoring_version === 2 ? lead.dimensions_parsed?.breakdowns : null;
+
+            const DIM_LABELS: Record<string, string> = { icp_fit: 'ICP Fit', timing: 'Timing', reachability: 'Reachability', data_confidence: 'Data', signal_quality: 'Signal Quality' };
+            const getSourceEvidence = (src: string): { dimension: string; evidence: string }[] => {
+              if (!dimBreakdowns) return [];
+              const results: { dimension: string; evidence: string }[] = [];
+              const aliases = [src.toLowerCase().replace(/_/g, ' '), src.replace(/_/g, ''), src.toLowerCase()];
+              for (const [dimKey, bd] of Object.entries(dimBreakdowns as Record<string, any>)) {
+                for (const sub of (bd.sub_scores || [])) {
+                  for (let ei = 0; ei < (sub.evidence?.length || 0); ei++) {
+                    const haystack = `${sub.evidence[ei]} ${sub.urls?.[ei] || ''}`.toLowerCase();
+                    if (aliases.some((a: string) => haystack.includes(a))) {
+                      results.push({ dimension: DIM_LABELS[dimKey] || dimKey, evidence: sub.evidence[ei] });
+                    }
+                  }
+                }
+              }
+              return results;
+            };
             const corroborationCount = em.corroboration_count ?? 0;
             const respondedCount = responded.size;
             const totalCount = available.length;
@@ -1540,6 +1622,23 @@ export function LeadDetail() {
                                   );
                                 })}
                               </div>
+                              {(() => {
+                                const evMatches = getSourceEvidence(src);
+                                if (evMatches.length === 0) return null;
+                                return (
+                                  <div className="mt-1.5">
+                                    <div className="text-[9px] uppercase text-gray-400 font-semibold tracking-wider mb-1">Evidence contributed</div>
+                                    <div className="space-y-0.5">
+                                      {evMatches.map((m: any, mi: number) => (
+                                        <div key={mi} className="text-[10px] text-gray-500 flex items-start gap-1">
+                                          <span className="text-gray-400 shrink-0">{m.dimension}:</span>
+                                          <span className="text-gray-600">{m.evidence}</span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                );
+                              })()}
                             </div>
                           );
                         })()}

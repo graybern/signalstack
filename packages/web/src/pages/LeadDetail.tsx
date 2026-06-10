@@ -1100,96 +1100,108 @@ export function LeadDetail() {
                                     </div>
                                   </div>
 
-                                  {/* Expandable Evidence */}
-                                  {isExpanded && factSheet && dim.key === 'icp_fit' && (
-                                    <div className="mx-1.5 mb-2 p-2 rounded-md bg-white/80 border border-gray-100 space-y-0.5 text-[11px] text-gray-500">
-                                      <div>Industry: <span className="text-gray-700">{factSheet.industry || 'Unknown'}{factSheet.sub_industry ? ` / ${factSheet.sub_industry}` : ''}</span></div>
-                                      <div>Employees: <span className="text-gray-700">{factSheet.employee_count_range}</span> {factSheet.employee_count_confirmed ? <span className="text-emerald-600 text-[9px]">confirmed</span> : <span className="text-amber-500 text-[9px]">unconfirmed</span>}</div>
-                                      <div>Remote workforce: <span className="text-gray-700">{factSheet.remote_workforce_evidence}</span></div>
-                                      <div>Multi-office: <span className="text-gray-700">{factSheet.multi_office ? `Yes (${factSheet.office_count ?? '?'} offices)` : 'No/Unknown'}</span></div>
-                                      <div>Vertical: <span className="text-gray-700">{factSheet.vertical_match}</span> {factSheet.vertical_name ? <span className="text-gray-400">— {factSheet.vertical_name}</span> : ''}</div>
-                                      {factSheet.vpn_products_detected?.length > 0 && (
-                                        <div>VPN: {factSheet.vpn_products_detected.map((v: any, i: number) => (
-                                          <span key={i} className="inline-flex items-center gap-0.5 mr-1">
-                                            <span className="text-gray-700">{v.product}</span>
-                                            <span className={`text-[9px] ${v.confidence === 'confirmed' ? 'text-emerald-600' : 'text-amber-500'}`}>({v.confidence})</span>
-                                            {v.source && <span className="text-[9px] text-gray-400">via {v.source}</span>}
-                                          </span>
-                                        ))}</div>
-                                      )}
-                                      {factSheet.competitor_products_detected?.length > 0 && (
-                                        <div>Competitors: {factSheet.competitor_products_detected.map((cp: any, i: number) => (
-                                          <span key={i} className="inline-flex items-center gap-0.5 mr-1">
-                                            <span className="text-gray-700">{cp.product}</span>
-                                            <span className={`text-[9px] ${cp.confidence === 'confirmed' ? 'text-emerald-600' : 'text-amber-500'}`}>({cp.confidence})</span>
-                                            {cp.source && <span className="text-[9px] text-gray-400">via {cp.source}</span>}
-                                          </span>
-                                        ))}</div>
-                                      )}
-                                    </div>
-                                  )}
-                                  {isExpanded && factSheet && dim.key === 'timing' && (
-                                    <div className="mx-1.5 mb-2 p-2 rounded-md bg-white/80 border border-gray-100 space-y-0.5 text-[11px] text-gray-500">
-                                      {factSheet.active_evaluation_evidence?.length > 0 && (
-                                        <div className="text-amber-700 font-medium">Active evaluation: {factSheet.active_evaluation_evidence.map((e: any) => `${e.description} (${e.confidence})`).join('; ')}</div>
-                                      )}
-                                      {factSheet.funding_events?.length > 0 && (
-                                        <div>Funding: {factSheet.funding_events.map((f: any) => `${f.type}${f.amount ? ` ${f.amount}` : ''} (${f.recency})`).join(', ')}</div>
-                                      )}
-                                      {factSheet.hiring_signals?.length > 0 && (
-                                        <div>Hiring: {factSheet.hiring_signals.map((h: any) => `${h.role} (${h.recency})`).join(', ')}</div>
-                                      )}
-                                      {factSheet.leadership_changes?.length > 0 && (
-                                        <div>Leadership: {factSheet.leadership_changes.map((l: any) => `${l.title} (${l.recency})`).join(', ')}</div>
-                                      )}
-                                      {factSheet.compliance_signals?.length > 0 && (
-                                        <div>Compliance: {factSheet.compliance_signals.map((c: any) => `${c.regulation}: ${c.evidence}`).join('; ')}</div>
-                                      )}
-                                    </div>
-                                  )}
-                                  {isExpanded && factSheet && dim.key === 'signal_quality' && (
-                                    <div className="mx-1.5 mb-2 p-2 rounded-md bg-white/80 border border-gray-100 text-[11px] text-gray-500">
-                                      <div className="text-gray-400 italic">Signal strength derived from weighted buying signals — see Signal Breakdown below for detail.</div>
-                                    </div>
-                                  )}
-                                  {isExpanded && factSheet && dim.key === 'data_confidence' && (
-                                    <div className="mx-1.5 mb-2 p-2 rounded-md bg-white/80 border border-gray-100 space-y-0.5 text-[11px] text-gray-500">
-                                      <div>Enrichment facts: <span className="text-gray-700 font-medium">{factSheet.facts_from_enrichment ?? 0}</span></div>
-                                      <div>Model knowledge facts: <span className="text-gray-700">{factSheet.facts_from_model_knowledge ?? 0}</span></div>
-                                      <div>Overall confidence: <span className="text-gray-700">{factSheet.fact_confidence ?? 'unknown'}</span></div>
-                                      {lead.enrichment_metadata_parsed && (
-                                        <>
-                                          <div className="border-t border-gray-100 pt-1 mt-1">Sources: <span className="text-emerald-600 font-medium">{lead.enrichment_metadata_parsed.sources_responded?.length ?? 0} responded</span> · <span className="text-red-500">{lead.enrichment_metadata_parsed.sources_failed?.length ?? 0} failed</span></div>
-                                          {(lead.enrichment_metadata_parsed.corroboration_count ?? 0) > 0 && (
-                                            <div className="flex items-center gap-1">
-                                              <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 text-[9px] font-medium border border-emerald-200">{lead.enrichment_metadata_parsed.corroboration_count} fields corroborated</span>
+                                  {/* Expandable Evidence — v2 breakdowns or FactSheet fallback */}
+                                  {isExpanded && (() => {
+                                    const bd = dims.breakdowns?.[dim.key];
+                                    if (bd && bd.sub_scores?.length > 0) {
+                                      return (
+                                        <div className="mx-1.5 mb-2 p-2 rounded-md bg-white/80 border border-gray-100 text-[11px]">
+                                          <div className="space-y-1.5">
+                                            {bd.sub_scores.map((sub: any, si: number) => {
+                                              const subPct = sub.max > 0 ? Math.min(sub.points / sub.max, 1) : 0;
+                                              return (
+                                                <div key={si}>
+                                                  <div className="flex items-center justify-between">
+                                                    <span className="text-gray-700 font-medium">{sub.label}</span>
+                                                    <span className={`tabular-nums font-semibold ${sub.points > 0 ? 'text-gray-700' : 'text-gray-400'}`}>{sub.points}/{sub.max}</span>
+                                                  </div>
+                                                  <div className="h-[3px] rounded-full bg-gray-100 mt-0.5 mb-0.5">
+                                                    <div className={`h-full rounded-full transition-all ${sub.points > 0 ? c.subBar : 'bg-gray-200'}`}
+                                                      style={{ width: `${Math.round(subPct * 100)}%` }} />
+                                                  </div>
+                                                  {sub.evidence?.length > 0 && (
+                                                    <div className="text-[10px] text-gray-500 leading-snug">
+                                                      {sub.evidence.map((ev: string, ei: number) => (
+                                                        <span key={ei}>{ei > 0 ? ' · ' : ''}{ev}</span>
+                                                      ))}
+                                                    </div>
+                                                  )}
+                                                </div>
+                                              );
+                                            })}
+                                          </div>
+                                          {bd.penalties?.length > 0 && (
+                                            <div className="border-t border-gray-100 mt-2 pt-1.5 space-y-0.5">
+                                              {bd.penalties.map((p: any, pi: number) => (
+                                                <div key={pi} className="text-[10px] text-red-600 flex items-center gap-1">
+                                                  <span className="font-semibold tabular-nums">{p.points}</span>
+                                                  <span>{p.reason}</span>
+                                                </div>
+                                              ))}
                                             </div>
                                           )}
-                                        </>
-                                      )}
-                                    </div>
-                                  )}
-                                  {isExpanded && factSheet && dim.key === 'reachability' && (
-                                    <div className="mx-1.5 mb-2 p-2 rounded-md bg-white/80 border border-gray-100 space-y-0.5 text-[11px] text-gray-500">
-                                      {factSheet.named_contacts?.length > 0 ? factSheet.named_contacts.map((ct: any, i: number) => (
-                                        <div key={i} className="flex items-center gap-1 flex-wrap">
-                                          <span className="text-gray-700 font-medium">{ct.name || 'Unnamed'}</span>
-                                          <span className="text-gray-400">— {ct.title}</span>
-                                          <span className={`text-[9px] px-1 py-px rounded ${
-                                            ct.role_fit === 'champion' ? 'bg-sky-50 text-sky-700' :
-                                            ct.role_fit === 'economic_buyer' ? 'bg-amber-50 text-amber-700' :
-                                            'bg-gray-100 text-gray-500'
-                                          }`}>{ct.role_fit}</span>
-                                          {ct.has_linkedin && <span className="text-[9px] text-blue-500">LinkedIn</span>}
-                                          {ct.has_email && <span className="text-[9px] text-emerald-500">Email</span>}
                                         </div>
-                                      )) : <div className="text-gray-400 italic">No named contacts found</div>}
-                                      <div className="border-t border-gray-100 pt-1 mt-1 flex gap-3">
-                                        <span>Security team: <span className={factSheet.security_team_visible ? 'text-emerald-600' : 'text-gray-400'}>{factSheet.security_team_visible ? 'Visible' : 'No'}</span></span>
-                                        <span>IT org: <span className={factSheet.it_org_visible ? 'text-emerald-600' : 'text-gray-400'}>{factSheet.it_org_visible ? 'Visible' : 'No'}</span></span>
+                                      );
+                                    }
+                                    if (!factSheet) return null;
+                                    if (dim.key === 'icp_fit') return (
+                                      <div className="mx-1.5 mb-2 p-2 rounded-md bg-white/80 border border-gray-100 space-y-0.5 text-[11px] text-gray-500">
+                                        <div>Industry: <span className="text-gray-700">{factSheet.industry || 'Unknown'}{factSheet.sub_industry ? ` / ${factSheet.sub_industry}` : ''}</span></div>
+                                        <div>Employees: <span className="text-gray-700">{factSheet.employee_count_range}</span> {factSheet.employee_count_confirmed ? <span className="text-emerald-600 text-[9px]">confirmed</span> : <span className="text-amber-500 text-[9px]">unconfirmed</span>}</div>
+                                        <div>Remote workforce: <span className="text-gray-700">{factSheet.remote_workforce_evidence}</span></div>
+                                        <div>Vertical: <span className="text-gray-700">{factSheet.vertical_match}</span> {factSheet.vertical_name ? <span className="text-gray-400">— {factSheet.vertical_name}</span> : ''}</div>
+                                        {factSheet.vpn_products_detected?.length > 0 && (
+                                          <div>VPN: {factSheet.vpn_products_detected.map((v: any, i: number) => (
+                                            <span key={i} className="inline-flex items-center gap-0.5 mr-1">
+                                              <span className="text-gray-700">{v.product}</span>
+                                              <span className={`text-[9px] ${v.confidence === 'confirmed' ? 'text-emerald-600' : 'text-amber-500'}`}>({v.confidence})</span>
+                                            </span>
+                                          ))}</div>
+                                        )}
                                       </div>
-                                    </div>
-                                  )}
+                                    );
+                                    if (dim.key === 'timing') return (
+                                      <div className="mx-1.5 mb-2 p-2 rounded-md bg-white/80 border border-gray-100 space-y-0.5 text-[11px] text-gray-500">
+                                        {factSheet.active_evaluation_evidence?.length > 0 && (
+                                          <div className="text-amber-700 font-medium">Active evaluation: {factSheet.active_evaluation_evidence.map((e: any) => `${e.description} (${e.confidence})`).join('; ')}</div>
+                                        )}
+                                        {factSheet.funding_events?.length > 0 && (
+                                          <div>Funding: {factSheet.funding_events.map((f: any) => `${f.type}${f.amount ? ` ${f.amount}` : ''} (${f.recency})`).join(', ')}</div>
+                                        )}
+                                        {factSheet.hiring_signals?.length > 0 && (
+                                          <div>Hiring: {factSheet.hiring_signals.map((h: any) => `${h.role} (${h.recency})`).join(', ')}</div>
+                                        )}
+                                      </div>
+                                    );
+                                    if (dim.key === 'data_confidence') return (
+                                      <div className="mx-1.5 mb-2 p-2 rounded-md bg-white/80 border border-gray-100 space-y-0.5 text-[11px] text-gray-500">
+                                        <div>Enrichment facts: <span className="text-gray-700 font-medium">{factSheet.facts_from_enrichment ?? 0}</span></div>
+                                        <div>Model knowledge: <span className="text-gray-700">{factSheet.facts_from_model_knowledge ?? 0}</span></div>
+                                      </div>
+                                    );
+                                    if (dim.key === 'reachability') return (
+                                      <div className="mx-1.5 mb-2 p-2 rounded-md bg-white/80 border border-gray-100 space-y-0.5 text-[11px] text-gray-500">
+                                        {factSheet.named_contacts?.length > 0 ? factSheet.named_contacts.map((ct: any, i: number) => (
+                                          <div key={i} className="flex items-center gap-1 flex-wrap">
+                                            <span className="text-gray-700 font-medium">{ct.name || 'Unnamed'}</span>
+                                            <span className="text-gray-400">— {ct.title}</span>
+                                            <span className={`text-[9px] px-1 py-px rounded ${
+                                              ct.role_fit === 'champion' ? 'bg-sky-50 text-sky-700' :
+                                              ct.role_fit === 'economic_buyer' ? 'bg-amber-50 text-amber-700' :
+                                              'bg-gray-100 text-gray-500'
+                                            }`}>{ct.role_fit}</span>
+                                            {ct.has_linkedin && <span className="text-[9px] text-blue-500">LinkedIn</span>}
+                                          </div>
+                                        )) : <div className="text-gray-400 italic">No named contacts found</div>}
+                                      </div>
+                                    );
+                                    if (dim.key === 'signal_quality') return (
+                                      <div className="mx-1.5 mb-2 p-2 rounded-md bg-white/80 border border-gray-100 text-[11px] text-gray-500">
+                                        <div className="text-gray-400 italic">Signal strength derived from weighted buying signals — see Signal Breakdown below for detail.</div>
+                                      </div>
+                                    );
+                                    return null;
+                                  })()}
                                 </div>
                               );
                             })}

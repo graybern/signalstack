@@ -1076,6 +1076,7 @@ router.post('/backfill-composite', authenticate, requireSuperAdmin, (req: AuthRe
       composite_version = 2,
       scoring_verdict = ?,
       score_breakdown = ?,
+      scoring_breakdown_v2 = ?,
       updated_at = datetime('now')
     WHERE id = ?
   `);
@@ -1141,6 +1142,7 @@ router.post('/backfill-composite', authenticate, requireSuperAdmin, (req: AuthRe
         composite.fit_score,
         verdict,
         JSON.stringify(breakdown),
+        dimensions.breakdowns ? JSON.stringify(dimensions.breakdowns) : null,
         lead.id,
       );
     }
@@ -1272,6 +1274,7 @@ function parseLead(row: any) {
   try { lead.fact_sheet_parsed = JSON.parse(row.fact_sheet); } catch { lead.fact_sheet_parsed = null; }
   try { lead.signal_density_parsed = JSON.parse(row.signal_density); } catch { lead.signal_density_parsed = null; }
   try { lead.enrichment_metadata_parsed = JSON.parse(row.enrichment_metadata); } catch { lead.enrichment_metadata_parsed = null; }
+  try { lead.scoring_breakdown_v2_parsed = JSON.parse(row.scoring_breakdown_v2); } catch { lead.scoring_breakdown_v2_parsed = null; }
 
   if (row.scoring_version === 2 && row.icp_fit_score != null) {
     const potential = row.potential_score ?? null;
@@ -1293,6 +1296,7 @@ function parseLead(row: any) {
         ? `High fit (${potential}) but low intent (${urgency})`
         : null,
       verdict: row.scoring_verdict || null,
+      breakdowns: lead.scoring_breakdown_v2_parsed || undefined,
     };
   } else {
     lead.dimensions_parsed = null;

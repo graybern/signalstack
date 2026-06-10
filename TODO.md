@@ -7,13 +7,13 @@ The scorer computes sub-scores internally (Segment 0-20, Remote Pain 0-20, Displ
 ## Status
 
 - [x] Step 0: Commit existing uncommitted changes (~3165 lines from prior sessions)
-- [ ] Step 1: Add types — `SubScore`, `DimensionBreakdown`
-- [ ] Step 2: Refactor `computeIcpFit()` → return `{ score, breakdown }`
-- [ ] Step 3: Refactor `computeTiming()` → return `{ score, breakdown }`
-- [ ] Step 4: Refactor remaining compute functions (`computeDataConfidence`, `computeReachability`, `computeSignalQuality`)
-- [ ] Step 5: Wire breakdowns through `computeAllDimensions()`
-- [ ] Step 6: Persist & parse breakdowns (DB column + orchestrator + leads route)
-- [ ] Step 7: LeadDetail UI — render sub-score breakdown tree
+- [x] Step 1: Add types — `SubScore`, `DimensionBreakdown`
+- [x] Step 2: Refactor `computeIcpFit()` → return `{ score, breakdown }`
+- [x] Step 3: Refactor `computeTiming()` → return `{ score, breakdown }`
+- [x] Step 4: Refactor remaining compute functions (`computeDataConfidence`, `computeReachability`, `computeSignalQuality`)
+- [x] Step 5: Wire breakdowns through `computeAllDimensions()`
+- [x] Step 6: Persist & parse breakdowns (DB column + orchestrator + leads route)
+- [x] Step 7: LeadDetail UI — render sub-score breakdown tree
 
 ## Step Details
 

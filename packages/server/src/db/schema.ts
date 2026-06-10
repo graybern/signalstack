@@ -635,6 +635,10 @@ function initSchema(db: Database.Database) {
     db.exec("ALTER TABLE leads ADD COLUMN composite_version INTEGER DEFAULT 1");
   }
 
+  if (!leadColsV2b.find(c => c.name === 'scoring_breakdown_v2')) {
+    db.exec("ALTER TABLE leads ADD COLUMN scoring_breakdown_v2 TEXT");
+  }
+
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_leads_potential ON leads(potential_score DESC);
     CREATE INDEX IF NOT EXISTS idx_leads_urgency ON leads(urgency_score DESC);

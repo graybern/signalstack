@@ -326,6 +326,21 @@ export interface EnrichmentMetadata {
   corroboration_count: number;
 }
 
+export interface SubScore {
+  label: string;
+  points: number;
+  max: number;
+  evidence: string[];
+}
+
+export interface DimensionBreakdown {
+  dimension: string;
+  score: number;
+  max: number;
+  sub_scores: SubScore[];
+  penalties?: { points: number; reason: string }[];
+}
+
 export interface ScoringDimensions {
   icp_fit: number;
   timing: number;
@@ -341,6 +356,7 @@ export interface ScoringDimensions {
   watch_candidate: boolean;
   watch_reason: string | null;
   verdict: string;
+  breakdowns?: Record<string, DimensionBreakdown>;
 }
 
 export interface DeterministicScoringResult {

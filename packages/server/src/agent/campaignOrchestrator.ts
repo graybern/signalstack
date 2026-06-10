@@ -525,11 +525,13 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
         enrichment_metadata, fact_sheet, scoring_model,
         scoring_verdict, employee_count_source, scoring_icp_version,
         potential_score, urgency_score, signal_quality_score, evidence_modifier, composite_version,
+        scoring_breakdown_v2,
         created_at, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?,
         ?, ?, ?, ?, ?,
+        ?,
         datetime('now'), datetime('now'))
       ON CONFLICT(id) DO UPDATE SET
         segment = excluded.segment,
@@ -578,6 +580,7 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
         signal_quality_score = COALESCE(excluded.signal_quality_score, leads.signal_quality_score),
         evidence_modifier = COALESCE(excluded.evidence_modifier, leads.evidence_modifier),
         composite_version = COALESCE(excluded.composite_version, leads.composite_version),
+        scoring_breakdown_v2 = COALESCE(excluded.scoring_breakdown_v2, leads.scoring_breakdown_v2),
         updated_at = datetime('now')`
     );
 
@@ -647,6 +650,7 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
             score?.dimensions?.signal_quality ?? null,
             score?.dimensions?.evidence_modifier ?? null,
             score?.scoring_version === 2 ? 2 : null,
+            score?.dimensions?.breakdowns ? JSON.stringify(score.dimensions.breakdowns) : null,
           );
         }
       });

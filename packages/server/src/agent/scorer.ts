@@ -6,6 +6,7 @@ import type {
   ExtendedICPConfig, ScoreBreakdown, FunnelStepConfig,
   FactSheet, ScoringDimensions, DataConfidenceGrade, SignalDensity,
   SignalEntry, SignalCategory, EnrichmentMetadata, ScoringSignals,
+  SubScore, DimensionBreakdown,
 } from '../types/index.js';
 import type { ResearchCandidate } from './researcher.js';
 import type { TokenTracker } from './tokenTracker.js';
@@ -222,92 +223,145 @@ function clamp(v: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, v));
 }
 
-export function computeIcpFit(fs: FactSheet, icpConfig: ExtendedICPConfig, scoringSignals?: ScoringSignals): number {
+export function computeIcpFit(fs: FactSheet, icpConfig: ExtendedICPConfig, scoringSignals?: ScoringSignals): { score: number; breakdown: DimensionBreakdown } {
   let score = 0;
   const painSigs = scoringSignals?.pain_signals;
   const dispSigs = scoringSignals?.displacement_signals;
+  const subScores: SubScore[] = [];
 
   // Segment & Scale (0-20)
   let segScore = 0;
+  const segEvidence: string[] = [];
   if (fs.employee_count_range !== 'unknown') {
-    segScore += fs.employee_count_confirmed ? 20 : 12;
+    if (fs.employee_count_confirmed) {
+      segScore += 20;
+      segEvidence.push(`Employee count confirmed (${fs.employee_count_range})`);
+    } else {
+      segScore += 12;
+      segEvidence.push(`Employee range: ${fs.employee_count_range} (unconfirmed)`);
+    }
   } else {
     segScore += 3;
+    segEvidence.push('Employee count unknown');
   }
-  if (fs.engineering_team_evidence) segScore += 3;
-  if (fs.contractor_usage_evidence) segScore += 2;
-  score += Math.min(segScore, 20);
+  if (fs.engineering_team_evidence) { segScore += 3; segEvidence.push('Engineering team evidence'); }
+  if (fs.contractor_usage_evidence) { segScore += 2; segEvidence.push('Contractor usage evidence'); }
+  const segFinal = Math.min(segScore, 20);
+  score += segFinal;
+  subScores.push({ label: 'Segment & Scale', points: segFinal, max: 20, evidence: segEvidence });
 
   // Remote Access Pain (0-20)
   let rapScore = 0;
+  const rapEvidence: string[] = [];
   if (painSigs?.includes('byoc') && fs.byod_byoc_evidence) {
     rapScore += 20;
+    rapEvidence.push('BYOC evidence (campaign signal)');
   } else if (fs.remote_workforce_evidence === 'confirmed' && fs.byod_byoc_evidence) {
     rapScore += 20;
+    rapEvidence.push('Remote workforce confirmed + BYOD/BYOC');
   } else if (fs.remote_workforce_evidence === 'confirmed') {
     rapScore += 14;
+    rapEvidence.push('Remote workforce confirmed');
   } else if (fs.remote_workforce_evidence === 'inferred') {
     rapScore += 8;
+    rapEvidence.push('Remote workforce inferred');
   }
   if (painSigs?.includes('multi_office') && fs.multi_office) {
     rapScore += 4;
+    rapEvidence.push(`Multi-office (campaign signal)`);
   } else if (fs.multi_office && (fs.office_count ?? 0) >= 3) {
     rapScore += 4;
+    rapEvidence.push(`Multi-office: ${fs.office_count} offices`);
   }
   if (painSigs?.includes('developer_experience') && fs.developer_experience_initiative) {
     rapScore += 5;
+    rapEvidence.push('DevEx initiative (campaign signal)');
   } else if (fs.developer_experience_initiative) {
     rapScore += 3;
+    rapEvidence.push('Developer experience initiative');
   }
-  score += Math.min(20, rapScore);
+  const rapFinal = Math.min(20, rapScore);
+  score += rapFinal;
+  subScores.push({ label: 'Remote Access Pain', points: rapFinal, max: 20, evidence: rapEvidence });
 
   // Displacement Wedge (0-20)
+  let dispScore = 0;
+  const dispEvidence: string[] = [];
   const confirmedVpn = fs.vpn_products_detected.filter(v => v.confidence === 'confirmed');
   const inferredVpn = fs.vpn_products_detected.filter(v => v.confidence === 'inferred');
   const confirmedComp = fs.competitor_products_detected.filter(v => v.confidence === 'confirmed');
   const inferredComp = fs.competitor_products_detected.filter(v => v.confidence === 'inferred');
 
   if (confirmedVpn.length > 0) {
-    score += 20;
+    dispScore = 20;
+    dispEvidence.push(`VPN confirmed: ${confirmedVpn.map(v => v.product).join(', ')}`);
   } else if (confirmedComp.length > 0) {
-    score += 16;
+    dispScore = 16;
+    dispEvidence.push(`Competitor confirmed: ${confirmedComp.map(c => c.product).join(', ')}`);
   } else if (dispSigs?.includes('byoc') && fs.byod_byoc_evidence) {
-    score += 14;
+    dispScore = 14;
+    dispEvidence.push('BYOC displacement (campaign signal)');
   } else if (inferredVpn.length > 0) {
-    score += 14;
+    dispScore = 14;
+    dispEvidence.push(`VPN inferred: ${inferredVpn.map(v => v.product).join(', ')}`);
   } else if (dispSigs?.includes('private_networking') && fs.byod_byoc_evidence) {
-    score += 12;
+    dispScore = 12;
+    dispEvidence.push('Private networking displacement (campaign signal)');
   } else if (inferredComp.length > 0) {
-    score += 10;
+    dispScore = 10;
+    dispEvidence.push(`Competitor inferred: ${inferredComp.map(c => c.product).join(', ')}`);
   } else if (fs.legacy_solution_indicators.length >= 2) {
-    score += 8;
+    dispScore = 8;
+    dispEvidence.push(`Legacy indicators: ${fs.legacy_solution_indicators.join(', ')}`);
   } else if (dispSigs?.includes('distributed_team') && fs.multi_office) {
-    score += 8;
+    dispScore = 8;
+    dispEvidence.push('Distributed team displacement (campaign signal)');
   } else if (fs.multi_office && (fs.office_count ?? 0) >= 3) {
-    score += 8;
+    dispScore = 8;
+    dispEvidence.push(`Multi-office displacement: ${fs.office_count} offices`);
   }
+  score += dispScore;
+  subScores.push({ label: 'Displacement Wedge', points: dispScore, max: 20, evidence: dispEvidence });
 
   // Vertical Match (0-15)
+  let vertScore = 0;
+  const vertEvidence: string[] = [];
   if (fs.vertical_match === 'exact' && fs.success_story_similarity === 'strong') {
-    score += 15;
+    vertScore = 15;
+    vertEvidence.push(`Exact vertical: ${fs.vertical_name || 'matched'}, strong success story`);
   } else if (fs.vertical_match === 'exact') {
-    score += 12;
+    vertScore = 12;
+    vertEvidence.push(`Exact vertical: ${fs.vertical_name || 'matched'}`);
   } else if (fs.vertical_match === 'adjacent') {
-    score += 8;
+    vertScore = 8;
+    vertEvidence.push(`Adjacent vertical: ${fs.vertical_name || 'matched'}`);
   } else if (fs.vertical_match === 'tangential') {
-    score += 4;
+    vertScore = 4;
+    vertEvidence.push(`Tangential vertical: ${fs.vertical_name || 'matched'}`);
   }
+  score += vertScore;
+  subScores.push({ label: 'Vertical Match', points: vertScore, max: 15, evidence: vertEvidence });
 
   // Buyer Access (0-10)
+  let buyerScore = 0;
+  const buyerEvidence: string[] = [];
   const champions = fs.named_contacts.filter(c => c.role_fit === 'champion');
   if (champions.length > 0 && champions.some(c => c.has_linkedin)) {
-    score += 10;
+    buyerScore = 10;
+    buyerEvidence.push(`Champion: ${champions[0].name} — ${champions[0].title} (LinkedIn)`);
   } else if (champions.length > 0) {
-    score += 7;
+    buyerScore = 7;
+    buyerEvidence.push(`Champion: ${champions[0].name} — ${champions[0].title} (no LinkedIn)`);
   } else if (fs.security_team_visible || fs.it_org_visible) {
-    score += 5;
+    buyerScore = 5;
+    if (fs.security_team_visible) buyerEvidence.push('Security team visible');
+    if (fs.it_org_visible) buyerEvidence.push('IT org visible');
   }
+  score += buyerScore;
+  subScores.push({ label: 'Buyer Access', points: buyerScore, max: 10, evidence: buyerEvidence });
 
+  // Penalties
+  const penalties: { points: number; reason: string }[] = [];
   const disqualifiers = icpConfig.disqualifiers || [];
   const prospectText = [
     fs.industry, fs.sub_industry, fs.vertical_name,
@@ -318,61 +372,114 @@ export function computeIcpFit(fs: FactSheet, icpConfig: ExtendedICPConfig, scori
   let penaltyTotal = 0;
   for (const dq of disqualifiers) {
     if (prospectText.includes(dq.signal.toLowerCase())) {
-      penaltyTotal += dq.severity === 'hard' ? 20 : 5;
+      const pts = dq.severity === 'hard' ? 20 : 5;
+      penaltyTotal += pts;
+      penalties.push({ points: -pts, reason: `${dq.severity === 'hard' ? 'Hard' : 'Soft'} disqualifier: ${dq.signal}` });
     }
   }
   score -= Math.min(penaltyTotal, 30);
 
-  return clamp(score, 0, 100);
+  const finalScore = clamp(score, 0, 100);
+  return {
+    score: finalScore,
+    breakdown: {
+      dimension: 'icp_fit',
+      score: finalScore,
+      max: 100,
+      sub_scores: subScores,
+      penalties: penalties.length > 0 ? penalties : undefined,
+    },
+  };
 }
 
-export function computeTiming(fs: FactSheet): number {
+export function computeTiming(fs: FactSheet): { score: number; breakdown: DimensionBreakdown } {
   let score = 0;
+  const subScores: SubScore[] = [];
 
   // Active Evaluation (0-30)
+  let evalScore = 0;
+  const evalEvidence: string[] = [];
   const confirmedEval = fs.active_evaluation_evidence.filter(e => e.confidence === 'confirmed');
   const inferredEval = fs.active_evaluation_evidence.filter(e => e.confidence === 'inferred');
   if (confirmedEval.length > 0) {
-    score += 30;
+    evalScore = 30;
+    evalEvidence.push(...confirmedEval.map(e => `Confirmed: ${e.description}`));
   } else if (inferredEval.length > 0) {
-    score += 15;
+    evalScore = 15;
+    evalEvidence.push(...inferredEval.map(e => `Inferred: ${e.description}`));
   }
+  score += evalScore;
+  subScores.push({ label: 'Active Evaluation', points: evalScore, max: 30, evidence: evalEvidence });
 
   // Recent Triggers (0-25 total)
+  const triggerEvidence: string[] = [];
   const recentFunding = fs.funding_events.filter(f => f.recency === 'recent');
   const recentLeadership = fs.leadership_changes.filter(l => l.recency === 'recent');
   let triggerScore = 0;
-  if (recentFunding.length > 0) triggerScore += Math.min(25, 15 + recentFunding.length * 3);
-  if (recentLeadership.length > 0) triggerScore += Math.min(15, 10 + recentLeadership.length * 2);
-  if (fs.compliance_signals.length > 0) triggerScore += 10;
-  score += Math.min(25, triggerScore);
+  if (recentFunding.length > 0) {
+    triggerScore += Math.min(25, 15 + recentFunding.length * 3);
+    triggerEvidence.push(...recentFunding.map(f => `Funding: ${f.type}${f.amount ? ` (${f.amount})` : ''}`));
+  }
+  if (recentLeadership.length > 0) {
+    triggerScore += Math.min(15, 10 + recentLeadership.length * 2);
+    triggerEvidence.push(...recentLeadership.map(l => `Leadership: ${l.title}`));
+  }
+  if (fs.compliance_signals.length > 0) {
+    triggerScore += 10;
+    triggerEvidence.push(...fs.compliance_signals.map(c => `Compliance: ${c.regulation}`));
+  }
+  const triggerFinal = Math.min(25, triggerScore);
+  score += triggerFinal;
+  subScores.push({ label: 'Recent Triggers', points: triggerFinal, max: 25, evidence: triggerEvidence });
 
   // Hiring Signals (0-20)
+  let hiringScore = 0;
+  const hiringEvidence: string[] = [];
   const vpnKeywords = ['vpn', 'ztna', 'zero trust', 'network access', 'remote access', 'sase'];
   const recentHiring = fs.hiring_signals.filter(h => h.recency === 'recent');
   const vpnHiring = recentHiring.filter(h =>
     h.keywords.some(k => vpnKeywords.some(vk => k.toLowerCase().includes(vk)))
   );
   if (vpnHiring.length > 0) {
-    score += Math.min(20, 15 + vpnHiring.length * 2);
+    hiringScore = Math.min(20, 15 + vpnHiring.length * 2);
+    hiringEvidence.push(...vpnHiring.map(h => `VPN-related: ${h.role}`));
   } else if (recentHiring.length > 0) {
-    score += Math.min(10, 5 + recentHiring.length * 2);
+    hiringScore = Math.min(10, 5 + recentHiring.length * 2);
+    hiringEvidence.push(...recentHiring.map(h => `Hiring: ${h.role}`));
   }
   const agedHiring = fs.hiring_signals.filter(h => h.recency === 'aged' || h.recency === 'unknown');
-  if (agedHiring.length > 0 && recentHiring.length === 0) score += 3;
+  if (agedHiring.length > 0 && recentHiring.length === 0) {
+    hiringScore += 3;
+    hiringEvidence.push(`${agedHiring.length} aged hiring signal(s)`);
+  }
+  score += hiringScore;
+  subScores.push({ label: 'Hiring Signals', points: hiringScore, max: 20, evidence: hiringEvidence });
 
   // Compound Growth (0-15)
+  let compoundScore = 0;
+  const compoundEvidence: string[] = [];
   const signalCategories = new Set<string>();
   if (recentFunding.length > 0) signalCategories.add('funding');
   if (recentHiring.length > 0) signalCategories.add('hiring');
   if (recentLeadership.length > 0) signalCategories.add('leadership');
   if (fs.compliance_signals.length > 0) signalCategories.add('compliance');
   if (confirmedEval.length > 0 || inferredEval.length > 0) signalCategories.add('evaluation');
-  if (signalCategories.size >= 3) score += 15;
-  else if (signalCategories.size === 2) score += 8;
-  else if (signalCategories.size === 1) score += 3;
+  if (signalCategories.size >= 3) {
+    compoundScore = 15;
+    compoundEvidence.push(`${signalCategories.size} signal categories: ${[...signalCategories].join(', ')}`);
+  } else if (signalCategories.size === 2) {
+    compoundScore = 8;
+    compoundEvidence.push(`2 signal categories: ${[...signalCategories].join(', ')}`);
+  } else if (signalCategories.size === 1) {
+    compoundScore = 3;
+    compoundEvidence.push(`1 signal category: ${[...signalCategories].join(', ')}`);
+  }
+  score += compoundScore;
+  subScores.push({ label: 'Compound Growth', points: compoundScore, max: 15, evidence: compoundEvidence });
 
   // Recency Modifier (0-10)
+  let recencyScore = 0;
+  const recencyEvidence: string[] = [];
   const allTimingSignals = [
     ...fs.funding_events.map(f => f.recency),
     ...fs.hiring_signals.map(h => h.recency),
@@ -380,48 +487,88 @@ export function computeTiming(fs: FactSheet): number {
   ];
   if (allTimingSignals.length > 0) {
     const recentPct = allTimingSignals.filter(r => r === 'recent').length / allTimingSignals.length;
-    if (recentPct > 0.5) score += 10;
-    else if (recentPct >= 0.25) score += 5;
+    if (recentPct > 0.5) {
+      recencyScore = 10;
+      recencyEvidence.push(`${Math.round(recentPct * 100)}% of signals are recent`);
+    } else if (recentPct >= 0.25) {
+      recencyScore = 5;
+      recencyEvidence.push(`${Math.round(recentPct * 100)}% of signals are recent`);
+    }
   }
+  score += recencyScore;
+  subScores.push({ label: 'Recency Modifier', points: recencyScore, max: 10, evidence: recencyEvidence });
 
+  // Model knowledge penalty
   const modelKnowledgeEval = fs.active_evaluation_evidence.filter(e => e.confidence === 'model_knowledge');
   if (modelKnowledgeEval.length > 0 && confirmedEval.length === 0 && inferredEval.length === 0) {
     score = Math.round(score * 0.4);
   }
 
-  return clamp(score, 0, 100);
+  const finalScore = clamp(score, 0, 100);
+  return {
+    score: finalScore,
+    breakdown: {
+      dimension: 'timing',
+      score: finalScore,
+      max: 100,
+      sub_scores: subScores,
+    },
+  };
 }
 
-export function computeDataConfidence(fs: FactSheet, enrichMeta?: EnrichmentMetadata): { grade: DataConfidenceGrade; score: number } {
+export function computeDataConfidence(fs: FactSheet, enrichMeta?: EnrichmentMetadata): { grade: DataConfidenceGrade; score: number; breakdown: DimensionBreakdown } {
   let raw = 0;
+  const subScores: SubScore[] = [];
 
   // Source count (0-30): 6pts per source
   const sourceCount = enrichMeta?.sources_responded.length ?? 0;
-  raw += Math.min(30, sourceCount * 6);
-  if (sourceCount >= 8) raw += 5;
+  let srcScore = Math.min(30, sourceCount * 6);
+  const srcEvidence: string[] = [`${sourceCount} source(s) responded`];
+  if (sourceCount >= 8) { srcScore += 5; srcEvidence.push('Bonus: 8+ sources'); }
+  srcScore = Math.min(35, srcScore);
+  raw += srcScore;
+  subScores.push({ label: 'Source Count', points: srcScore, max: 35, evidence: srcEvidence });
 
   // Field completeness (0-25)
+  let fieldScore = 0;
+  const fieldEvidence: string[] = [];
   const fields = enrichMeta?.field_completeness;
   if (fields) {
     const completed = Object.values(fields).filter(Boolean).length;
-    raw += Math.round((completed / 6) * 25);
+    fieldScore = Math.round((completed / 6) * 25);
+    const present = Object.entries(fields).filter(([, v]) => v).map(([k]) => k);
+    if (present.length > 0) fieldEvidence.push(`Fields: ${present.join(', ')}`);
   } else {
-    if (fs.employee_count_confirmed) raw += 4;
-    if (fs.industry) raw += 4;
+    if (fs.employee_count_confirmed) { fieldScore += 4; fieldEvidence.push('Employee count confirmed'); }
+    if (fs.industry) { fieldScore += 4; fieldEvidence.push(`Industry: ${fs.industry}`); }
   }
+  raw += fieldScore;
+  subScores.push({ label: 'Field Completeness', points: fieldScore, max: 25, evidence: fieldEvidence });
 
   // Source corroboration (0-25)
-  raw += Math.min(25, (enrichMeta?.corroboration_count ?? 0) * 5);
+  const corrobCount = enrichMeta?.corroboration_count ?? 0;
+  const corrobScore = Math.min(25, corrobCount * 5);
+  const corrobEvidence = corrobCount > 0 ? [`${corrobCount} field(s) corroborated by multiple sources`] : [];
+  raw += corrobScore;
+  subScores.push({ label: 'Corroboration', points: corrobScore, max: 25, evidence: corrobEvidence });
 
   // Domain validation (0-10)
-  if (enrichMeta?.field_completeness?.website) raw += 10;
+  const domainScore = enrichMeta?.field_completeness?.website ? 10 : 0;
+  const domainEvidence = domainScore > 0 ? ['Website validated'] : [];
+  raw += domainScore;
+  subScores.push({ label: 'Domain Validation', points: domainScore, max: 10, evidence: domainEvidence });
 
   // Signal-to-inference ratio (0-10)
+  let ratioScore = 0;
+  const ratioEvidence: string[] = [];
   const totalFacts = fs.facts_from_enrichment + fs.facts_from_model_knowledge;
   if (totalFacts > 0) {
     const enrichmentRatio = fs.facts_from_enrichment / totalFacts;
-    raw += Math.round(enrichmentRatio * 10);
+    ratioScore = Math.round(enrichmentRatio * 10);
+    ratioEvidence.push(`${Math.round(enrichmentRatio * 100)}% from enrichment (${fs.facts_from_enrichment}/${totalFacts})`);
   }
+  raw += ratioScore;
+  subScores.push({ label: 'Signal-to-Inference', points: ratioScore, max: 10, evidence: ratioEvidence });
 
   raw = clamp(raw, 0, 100);
 
@@ -432,41 +579,82 @@ export function computeDataConfidence(fs: FactSheet, enrichMeta?: EnrichmentMeta
   else if (raw >= 25) grade = 'D';
   else grade = 'F';
 
-  return { grade, score: raw };
+  return {
+    grade,
+    score: raw,
+    breakdown: { dimension: 'data_confidence', score: raw, max: 100, sub_scores: subScores },
+  };
 }
 
-export function computeReachability(fs: FactSheet, enrichMeta?: EnrichmentMetadata, scoringSignals?: ScoringSignals): number {
+export function computeReachability(fs: FactSheet, enrichMeta?: EnrichmentMetadata, scoringSignals?: ScoringSignals): { score: number; breakdown: DimensionBreakdown } {
   let score = 0;
+  const subScores: SubScore[] = [];
   const creditRoleFit = scoringSignals?.credit_role_fit_without_urls ?? false;
 
   const champions = fs.named_contacts.filter(c => c.role_fit === 'champion');
   const econBuyers = fs.named_contacts.filter(c => c.role_fit === 'economic_buyer');
   const others = fs.named_contacts.filter(c => !['champion', 'economic_buyer'].includes(c.role_fit));
 
-  // Champions with LinkedIn: 30pts each (max 30)
+  // Champions (max 30)
+  let champScore = 0;
+  const champEvidence: string[] = [];
   const champLinked = champions.filter(c => c.has_linkedin).length;
-  score += Math.min(30, champLinked * 30);
-  // Champions without LinkedIn but with role fit: 15pts each (max 15)
+  champScore += Math.min(30, champLinked * 30);
+  if (champLinked > 0) champEvidence.push(...champions.filter(c => c.has_linkedin).map(c => `${c.name} — ${c.title} (LinkedIn)`));
   if (creditRoleFit && champLinked === 0 && champions.length > 0) {
-    score += Math.min(15, champions.length * 15);
+    champScore += Math.min(15, champions.length * 15);
+    champEvidence.push(...champions.map(c => `${c.name} — ${c.title} (role fit, no LinkedIn)`));
   }
-  // Economic buyers with LinkedIn: 20pts each (max 20)
-  const econLinked = econBuyers.filter(c => c.has_linkedin).length;
-  score += Math.min(20, econLinked * 20);
-  // Economic buyers without LinkedIn but with role fit: 10pts each (max 10)
-  if (creditRoleFit && econLinked === 0 && econBuyers.length > 0) {
-    score += Math.min(10, econBuyers.length * 10);
-  }
-  // Other contacts with LinkedIn: 10pts each (max 20)
-  score += Math.min(20, others.filter(c => c.has_linkedin).length * 10);
-  // Company LinkedIn URL: 10pts (inferred from it_org_visible as proxy)
-  if (fs.it_org_visible || fs.security_team_visible) score += 10;
-  // Company website exists: 5pts
-  if (enrichMeta?.field_completeness?.website) score += 5;
-  // Emails: 5pts each (max 15)
-  score += Math.min(15, fs.named_contacts.filter(c => c.has_email).length * 5);
+  score += champScore;
+  subScores.push({ label: 'Champions', points: champScore, max: 30, evidence: champEvidence });
 
-  return clamp(score, 0, 100);
+  // Economic Buyers (max 20)
+  let econScore = 0;
+  const econEvidence: string[] = [];
+  const econLinked = econBuyers.filter(c => c.has_linkedin).length;
+  econScore += Math.min(20, econLinked * 20);
+  if (econLinked > 0) econEvidence.push(...econBuyers.filter(c => c.has_linkedin).map(c => `${c.name} — ${c.title} (LinkedIn)`));
+  if (creditRoleFit && econLinked === 0 && econBuyers.length > 0) {
+    econScore += Math.min(10, econBuyers.length * 10);
+    econEvidence.push(...econBuyers.map(c => `${c.name} — ${c.title} (role fit, no LinkedIn)`));
+  }
+  score += econScore;
+  subScores.push({ label: 'Economic Buyers', points: econScore, max: 20, evidence: econEvidence });
+
+  // Other Contacts (max 20)
+  const othersLinked = others.filter(c => c.has_linkedin);
+  const otherScore = Math.min(20, othersLinked.length * 10);
+  const otherEvidence = othersLinked.map(c => `${c.name} — ${c.title} (LinkedIn)`);
+  score += otherScore;
+  subScores.push({ label: 'Other Contacts', points: otherScore, max: 20, evidence: otherEvidence });
+
+  // Org Visibility (max 15)
+  let orgScore = 0;
+  const orgEvidence: string[] = [];
+  if (fs.it_org_visible || fs.security_team_visible) {
+    orgScore += 10;
+    if (fs.security_team_visible) orgEvidence.push('Security team visible');
+    if (fs.it_org_visible) orgEvidence.push('IT org visible');
+  }
+  if (enrichMeta?.field_completeness?.website) {
+    orgScore += 5;
+    orgEvidence.push('Company website validated');
+  }
+  score += orgScore;
+  subScores.push({ label: 'Org Visibility', points: orgScore, max: 15, evidence: orgEvidence });
+
+  // Emails (max 15)
+  const emailContacts = fs.named_contacts.filter(c => c.has_email);
+  const emailScore = Math.min(15, emailContacts.length * 5);
+  const emailEvidence = emailContacts.map(c => `${c.name} — ${c.title} (email)`);
+  score += emailScore;
+  subScores.push({ label: 'Email Contacts', points: emailScore, max: 15, evidence: emailEvidence });
+
+  const finalScore = clamp(score, 0, 100);
+  return {
+    score: finalScore,
+    breakdown: { dimension: 'reachability', score: finalScore, max: 100, sub_scores: subScores },
+  };
 }
 
 export function computeResearchCompleteness(enrichMeta?: EnrichmentMetadata): number {
@@ -520,38 +708,84 @@ const SIGNAL_INTENT_WEIGHTS: Record<string, number> = {
 const CONFIDENCE_MULT: Record<string, number> = { confirmed: 1.0, inferred: 0.7, model_knowledge: 0.3 };
 const FRESHNESS_MULT: Record<string, number> = { recent: 1.0, aged: 0.5, unknown: 0.7 };
 
-export function computeSignalQuality(fs: FactSheet, scoringSignals?: ScoringSignals): number {
+export function computeSignalQuality(fs: FactSheet, scoringSignals?: ScoringSignals): { score: number; breakdown: DimensionBreakdown } {
   let total = 0;
+  const subScores: SubScore[] = [];
   const weights = { ...SIGNAL_INTENT_WEIGHTS, ...scoringSignals?.signal_intent_weights } as Record<string, number>;
 
+  // VPN detections
+  let vpnTotal = 0;
+  const vpnEvidence: string[] = [];
   for (const v of fs.vpn_products_detected) {
-    total += weights.vpn_detection * (CONFIDENCE_MULT[v.confidence] ?? 0.3) * FRESHNESS_MULT.unknown;
+    const pts = weights.vpn_detection * (CONFIDENCE_MULT[v.confidence] ?? 0.3) * FRESHNESS_MULT.unknown;
+    vpnTotal += pts;
+    vpnEvidence.push(`${v.product} (${v.confidence}) = ${Math.round(pts)}pts`);
   }
-  for (const c of fs.competitor_products_detected) {
-    total += weights.competitor * (CONFIDENCE_MULT[c.confidence] ?? 0.3) * FRESHNESS_MULT.unknown;
-  }
-  for (const e of fs.active_evaluation_evidence) {
-    total += weights.evaluation * (CONFIDENCE_MULT[e.confidence] ?? 0.3) * FRESHNESS_MULT.recent;
-  }
+  if (vpnTotal > 0) subScores.push({ label: 'VPN Detection', points: Math.round(vpnTotal), max: 30, evidence: vpnEvidence });
+  total += vpnTotal;
 
+  // Competitor detections
+  let compTotal = 0;
+  const compEvidence: string[] = [];
+  for (const c of fs.competitor_products_detected) {
+    const pts = weights.competitor * (CONFIDENCE_MULT[c.confidence] ?? 0.3) * FRESHNESS_MULT.unknown;
+    compTotal += pts;
+    compEvidence.push(`${c.product} (${c.confidence}) = ${Math.round(pts)}pts`);
+  }
+  if (compTotal > 0) subScores.push({ label: 'Competitor Detection', points: Math.round(compTotal), max: 24, evidence: compEvidence });
+  total += compTotal;
+
+  // Active evaluation
+  let evalTotal = 0;
+  const evalEvidence: string[] = [];
+  for (const e of fs.active_evaluation_evidence) {
+    const pts = weights.evaluation * (CONFIDENCE_MULT[e.confidence] ?? 0.3) * FRESHNESS_MULT.recent;
+    evalTotal += pts;
+    evalEvidence.push(`${e.description} (${e.confidence}) = ${Math.round(pts)}pts`);
+  }
+  if (evalTotal > 0) subScores.push({ label: 'Active Evaluation', points: Math.round(evalTotal), max: 40, evidence: evalEvidence });
+  total += evalTotal;
+
+  // Hiring signals
+  let hiringTotal = 0;
+  const hiringEvidence: string[] = [];
   const vpnKeywords = ['vpn', 'ztna', 'zero trust', 'network access', 'remote access', 'sase'];
   for (const h of fs.hiring_signals) {
     const isVpn = h.keywords.some(k => vpnKeywords.some(vk => k.toLowerCase().includes(vk)));
     const weight = isVpn ? weights.hiring_vpn : weights.hiring_general;
-    total += weight * CONFIDENCE_MULT.inferred * (FRESHNESS_MULT[h.recency] ?? 0.7);
+    const pts = weight * CONFIDENCE_MULT.inferred * (FRESHNESS_MULT[h.recency] ?? 0.7);
+    hiringTotal += pts;
+    hiringEvidence.push(`${h.role}${isVpn ? ' (VPN-related)' : ''} [${h.recency}] = ${Math.round(pts)}pts`);
   }
+  if (hiringTotal > 0) subScores.push({ label: 'Hiring Signals', points: Math.round(hiringTotal), max: 20, evidence: hiringEvidence });
+  total += hiringTotal;
 
+  // Funding & leadership & compliance
+  let otherTotal = 0;
+  const otherEvidence: string[] = [];
   for (const f of fs.funding_events) {
-    total += weights.funding * CONFIDENCE_MULT.confirmed * (FRESHNESS_MULT[f.recency] ?? 0.7);
+    const pts = weights.funding * CONFIDENCE_MULT.confirmed * (FRESHNESS_MULT[f.recency] ?? 0.7);
+    otherTotal += pts;
+    otherEvidence.push(`Funding: ${f.type}${f.amount ? ` (${f.amount})` : ''} [${f.recency}] = ${Math.round(pts)}pts`);
   }
   for (const l of fs.leadership_changes) {
-    total += weights.leadership * CONFIDENCE_MULT.confirmed * (FRESHNESS_MULT[l.recency] ?? 0.7);
+    const pts = weights.leadership * CONFIDENCE_MULT.confirmed * (FRESHNESS_MULT[l.recency] ?? 0.7);
+    otherTotal += pts;
+    otherEvidence.push(`Leadership: ${l.title} [${l.recency}] = ${Math.round(pts)}pts`);
   }
-  for (const _c of fs.compliance_signals) {
-    total += weights.compliance * CONFIDENCE_MULT.inferred * FRESHNESS_MULT.unknown;
+  for (const c of fs.compliance_signals) {
+    const pts = weights.compliance * CONFIDENCE_MULT.inferred * FRESHNESS_MULT.unknown;
+    otherTotal += pts;
+    otherEvidence.push(`Compliance: ${c.regulation} = ${Math.round(pts)}pts`);
   }
+  if (otherTotal > 0) subScores.push({ label: 'Other Signals', points: Math.round(otherTotal), max: 20, evidence: otherEvidence });
+  total += otherTotal;
 
-  return clamp(Math.round(total), 0, 100);
+  const finalScore = clamp(Math.round(total), 0, 100);
+  return {
+    score: finalScore,
+    breakdown: { dimension: 'signal_quality', score: finalScore, max: 100, sub_scores: subScores },
+  };
 }
 
 export function generateVerdict(dims: ScoringDimensions): string {
@@ -580,18 +814,25 @@ export function computeAllDimensions(
   enrichMeta?: EnrichmentMetadata,
   scoringSignals?: ScoringSignals,
 ): ScoringDimensions {
-  const icp_fit = computeIcpFit(fs, icpConfig, scoringSignals);
-  const timing = computeTiming(fs);
-  const { grade: data_confidence, score: data_confidence_score } = computeDataConfidence(fs, enrichMeta);
-  const reachability = computeReachability(fs, enrichMeta, scoringSignals);
+  const { score: icp_fit, breakdown: icpBreakdown } = computeIcpFit(fs, icpConfig, scoringSignals);
+  const { score: timing, breakdown: timingBreakdown } = computeTiming(fs);
+  const { grade: data_confidence, score: data_confidence_score, breakdown: dcBreakdown } = computeDataConfidence(fs, enrichMeta);
+  const { score: reachability, breakdown: reachBreakdown } = computeReachability(fs, enrichMeta, scoringSignals);
   const research_completeness = computeResearchCompleteness(enrichMeta);
   const signal_density = computeSignalDensity(fs);
-  const signal_quality = computeSignalQuality(fs, scoringSignals);
+  const { score: signal_quality, breakdown: sqBreakdown } = computeSignalQuality(fs, scoringSignals);
 
-  const partialDims = {
+  const partialDims: ScoringDimensions = {
     icp_fit, timing, data_confidence, data_confidence_score,
     reachability, research_completeness, signal_density, signal_quality,
-    potential_score: 0, urgency_score: 0, evidence_modifier: 1, watch_candidate: false, watch_reason: null as string | null, verdict: '',
+    potential_score: 0, urgency_score: 0, evidence_modifier: 1, watch_candidate: false, watch_reason: null, verdict: '',
+    breakdowns: {
+      icp_fit: icpBreakdown,
+      timing: timingBreakdown,
+      data_confidence: dcBreakdown,
+      reachability: reachBreakdown,
+      signal_quality: sqBreakdown,
+    },
   };
   const composite = computeCompositeV2(partialDims);
   partialDims.potential_score = composite.potential_score;

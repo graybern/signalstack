@@ -1,183 +1,318 @@
-# Scoring Provenance: Sub-Score Breakdowns
+# Phase 5: Leads Table Redesign
 
 ## Context
 
-The scorer computes sub-scores internally (Segment 0-20, Remote Pain 0-20, Displacement 0-20, etc.) but discards them — only returning aggregates. `dimensionsToLegacyBreakdown()` (scorer.ts:629) reverse-engineers approximate breakdowns from aggregates using `Math.round(dims.icp_fit * 0.2)`, which is lossy. This phase captures real sub-scores and persists them. Pure deterministic code — zero AI/prompt risk.
+The Leads table currently has 5 hardcoded columns (Company, Score, Campaign, Feedback, Updated). All dimension scores are crammed into a single `InlineScoreStrip` cell. Users can't show/hide individual dimension columns, and sort is done via a separate `<select>` dropdown rather than clickable headers. This phase introduces a column system with configurable visibility, sortable headers, and a column picker.
 
-## Status
+## Current State
 
-- [x] Step 0: Commit existing uncommitted changes (~3165 lines from prior sessions)
-- [x] Step 1: Add types — `SubScore`, `DimensionBreakdown`
-- [x] Step 2: Refactor `computeIcpFit()` → return `{ score, breakdown }`
-- [x] Step 3: Refactor `computeTiming()` → return `{ score, breakdown }`
-- [x] Step 4: Refactor remaining compute functions (`computeDataConfidence`, `computeReachability`, `computeSignalQuality`)
-- [x] Step 5: Wire breakdowns through `computeAllDimensions()`
-- [x] Step 6: Persist & parse breakdowns (DB column + orchestrator + leads route)
-- [x] Step 7: LeadDetail UI — render sub-score breakdown tree
+- **Table header**: 5 hardcoded columns defined inline (Leads.tsx:1351-1366)
+- **Table body**: 5 hardcoded `<td>` cells per row (Leads.tsx:1415-1522)
+- **Sort**: `<select>` dropdown with `SORT_OPTIONS` array (Leads.tsx:1076-1082), `toggleSort()` at line 653
+- **Headers**: Partial click-to-sort on columns with a `key` value, but only 3 of 5 columns are sortable
+- **Backend**: Already supports sorting by all dimension fields — `allowedSorts` in leads.ts:117-122 includes `potential_score`, `urgency_score`, `icp_fit_score`, `reachability_score`, `signal_quality_score`, `data_confidence_score`, `evidence_modifier`
+- **Lead interface**: Already has `potential_score`, `urgency_score`, `icp_fit_score`, `reachability_score`, `signal_quality_score`, `data_confidence`, `data_confidence_score` fields
+- **localStorage pattern**: `signalstack:leads:lastFilters` key, URL params > localStorage > defaults
+
+## Column Definitions
+
+### Always-visible (not toggleable)
+| Column | Sort Key | Width | Renders |
+|--------|----------|-------|---------|
+| Company | `company_name` | flex-1 / min-w-[200px] | Company name link + domain + segment badge |
+
+### Default visible (toggleable)
+| Column | Sort Key | Width | Renders |
+|--------|----------|-------|---------|
+| Score | `fit_score` | w-[160px] | `InlineScoreStrip` (composite + F/I/Ev%) |
+| Campaign | — (not sortable) | w-[160px] | Campaign name link |
+| Status | `current_feedback` | w-[100px] | Feedback badge OR action label |
+| Updated | `created_at` | w-[90px] | Date string |
+
+### Dimension columns (hidden by default, toggleable)
+| Column | Sort Key | Width | Renders |
+|--------|----------|-------|---------|
+| Potential | `potential_score` | w-[80px] | Score number + color-coded bg |
+| Urgency | `urgency_score` | w-[80px] | Score number + color-coded bg |
+| ICP Fit | `icp_fit_score` | w-[80px] | Score number + color-coded bg |
+| Signal Quality | `signal_quality_score` | w-[80px] | Score number + color-coded bg |
+| Reachability | `reachability_score` | w-[80px] | Score number + color-coded bg |
+| Data Confidence | `data_confidence_score` | w-[80px] | Grade badge (A-F) |
+| Segment | — | w-[70px] | Segment badge (separate from Company) |
+| Signals | — | w-[70px] | Signal count |
+
+## Steps
+
+- [x] Step 1: Define column configuration array and types
+- [x] Step 2: Column visibility state with localStorage persistence
+- [x] Step 3: Refactor table header to use column config
+- [x] Step 4: Refactor table body to use column config with cell renderers
+- [x] Step 5: Column picker popover
+- [x] Step 6: Sortable column headers replacing dropdown
+- [x] Step 7: TypeScript check + visual verification
 
 ## Step Details
 
-### Step 0: Commit existing uncommitted changes
-Commit ~3165 lines of existing work (LinkedIn extraction, UI overhaul, filters, bulk actions) to establish clean baseline.
+### Step 1: Define column configuration array and types
+**File**: `packages/web/src/pages/Leads.tsx`
 
-### Step 1: Add types
-**File**: `packages/server/src/types/index.ts`
-
-```typescript
-export interface SubScore {
-  label: string;          // "Segment & Scale"
-  points: number;         // actual points scored
-  max: number;            // max possible
-  evidence: string[];     // human-readable evidence strings
-}
-
-export interface DimensionBreakdown {
-  dimension: string;      // "icp_fit"
-  score: number;
-  max: number;
-  sub_scores: SubScore[];
-  penalties?: { points: number; reason: string }[];
-}
-```
-
-Add optional `breakdowns?: Record<string, DimensionBreakdown>` to `ScoringDimensions`.
-
-### Step 2: Refactor `computeIcpFit()` → `{ score, breakdown }`
-**File**: `packages/server/src/agent/scorer.ts` (line 225)
-
-Change return type. Track 5 sub-scores + penalties with evidence strings:
-- **Segment & Scale** (0-20): employee confirmed/unconfirmed, engineering evidence, contractor evidence
-- **Remote Access Pain** (0-20): BYOC, remote workforce, multi-office, DevEx
-- **Displacement Wedge** (0-20): VPN/competitor/legacy match with product names
-- **Vertical Match** (0-15): exact/adjacent/tangential, success story
-- **Buyer Access** (0-10): champion/security team/IT org
-- **Penalties**: disqualifiers matched with severity
-
-Pattern: alongside each `score +=`, push an evidence string describing what triggered it.
-
-### Step 3: Refactor `computeTiming()` → `{ score, breakdown }`
-**File**: `packages/server/src/agent/scorer.ts` (line 329)
-
-5 sub-scores:
-- **Active Evaluation** (0-30): confirmed vs inferred eval evidence
-- **Recent Triggers** (0-25): funding events with amounts/dates
-- **Hiring Signals** (0-20): role names, keywords, recency
-- **Compound Growth** (0-15): hiring + evaluation + funding combo
-- **Recency Modifier** (0-10): recent vs aged signal distribution
-
-### Step 4: Refactor remaining compute functions
-**File**: `packages/server/src/agent/scorer.ts`
-
-- **`computeDataConfidence()`** (line 395): Add `breakdown` to return. Sub-scores: source count, field completeness, corroboration, domain validation, signal-to-inference ratio.
-- **`computeReachability()`** (line 438): Sub-scores: champions w/ LinkedIn (30), economic buyers (20), other contacts (20), company LinkedIn/website (15), emails (15).
-- **`computeSignalQuality()`** (line 523): Per-signal breakdown with weight, confidence multiplier, freshness factor.
-
-### Step 5: Wire through `computeAllDimensions()`
-**File**: `packages/server/src/agent/scorer.ts` (line 577)
+Add above the component, after existing constants:
 
 ```typescript
-const { score: icp_fit, breakdown: icpBreakdown } = computeIcpFit(fs, icpConfig, scoringSignals);
-const { score: timing, breakdown: timingBreakdown } = computeTiming(fs);
-// ... etc ...
-partialDims.breakdowns = { icp_fit: icpBreakdown, timing: timingBreakdown, ... };
+interface ColumnDef {
+  id: string;
+  label: string;
+  sortKey?: string;       // backend sort column name, undefined = not sortable
+  width?: string;         // Tailwind width class
+  alwaysVisible?: boolean; // can't be toggled off
+  defaultVisible?: boolean;
+  group?: 'core' | 'dimensions' | 'meta';
+  render: (lead: Lead, helpers: RenderHelpers) => React.ReactNode;
+}
+
+interface RenderHelpers {
+  getFeedback: (lead: Lead) => string | null;
+  deriveAction: (lead: Lead) => { action: ActionState | null; cfg: typeof ACTION_CONFIG[ActionState] | null };
+  showCheckboxes: boolean;
+}
 ```
 
-Replace `dimensionsToLegacyBreakdown()` call in `scoreCandidateDeterministic()` (line 836) with real breakdowns from `dimensions.breakdowns`.
+Define `COLUMNS: ColumnDef[]` array with all columns from the tables above. Each column has a `render` function that returns the `<td>` contents (not the `<td>` itself — the wrapper handles that).
 
-### Step 6: Persist & parse breakdowns
-**Files**: `schema.ts`, `campaignOrchestrator.ts`, `leads.ts`
+- Company column: `alwaysVisible: true`, `group: 'core'`
+- Score, Campaign, Status, Updated: `defaultVisible: true`, `group: 'core'`
+- Potential, Urgency, ICP Fit, Signal Quality, Reachability, Data Confidence: `defaultVisible: false`, `group: 'dimensions'`
+- Segment, Signals: `defaultVisible: false`, `group: 'meta'`
 
-- Add `scoring_breakdown_v2 TEXT` column to leads (safe ALTER, check existence first)
-- In `persistCandidates()` (campaignOrchestrator.ts:606): serialize `score.dimensions.breakdowns` as JSON
-- In `parseLead()` (leads.ts): parse `scoring_breakdown_v2` JSON and attach to response
-- In re-score endpoint (leads.ts:1062): persist breakdown on UPDATE
-- In backfill-composite endpoint: include breakdown if available
+### Step 2: Column visibility state with localStorage persistence
+**File**: `packages/web/src/pages/Leads.tsx`
 
-### Step 7: LeadDetail UI — render breakdown tree
-**File**: `packages/web/src/pages/LeadDetail.tsx`
+```typescript
+const COLUMNS_STORAGE_KEY = 'signalstack:leads:columns';
 
-Replace expandable dimension sections (lines 1090-1200) with breakdown renderer:
+// Inside component:
+const [visibleColumns, setVisibleColumns] = useState<Set<string>>(() => {
+  try {
+    const stored = localStorage.getItem(COLUMNS_STORAGE_KEY);
+    if (stored) return new Set(JSON.parse(stored));
+  } catch {}
+  return new Set(COLUMNS.filter(c => c.alwaysVisible || c.defaultVisible).map(c => c.id));
+});
 
+// Persist on change:
+useEffect(() => {
+  localStorage.setItem(COLUMNS_STORAGE_KEY, JSON.stringify([...visibleColumns]));
+}, [visibleColumns]);
+
+// Derived: columns to render
+const activeColumns = COLUMNS.filter(c => c.alwaysVisible || visibleColumns.has(c.id));
+const colSpan = activeColumns.length + (showCheckboxes ? 1 : 0);
 ```
-ICP Fit: 72/100
-├── Segment & Scale                 20/20
-│   Employee count confirmed (mm), Engineering team evidence
-├── Remote Access Pain              14/20
-│   Remote workforce confirmed
-├── Displacement Wedge              20/20
-│   VPN: GlobalProtect (confirmed via job posting)
-├── Vertical Match                  12/15
-│   Exact match: FinTech
-├── Buyer Access                     7/10
-│   Champion: VP Eng (has LinkedIn)
-└── Penalty                          -1
-    Soft disqualifier: government
+
+Replace all hardcoded `colSpan` values (`showCheckboxes ? 6 : 5`) with the computed `colSpan`.
+
+### Step 3: Refactor table header to use column config
+**File**: `packages/web/src/pages/Leads.tsx` (lines 1339-1367)
+
+Replace the hardcoded 5-column header array with:
+
+```tsx
+<thead>
+  <tr className="bg-gray-50/80 border-b border-gray-200">
+    {showCheckboxes && (
+      <th className="pl-3 pr-1 py-2.5 w-8">
+        <input type="checkbox" checked={...} onChange={toggleSelectAll} className="rounded border-gray-300 text-brand-600" />
+      </th>
+    )}
+    {activeColumns.map(col => (
+      <th key={col.id} className={`px-3 py-2.5 text-left text-[10px] font-semibold text-gray-400 uppercase tracking-wider ${col.width || ''}`}>
+        {col.sortKey ? (
+          <button onClick={() => toggleSort(col.sortKey!)} className="flex items-center gap-1 hover:text-gray-600 group">
+            {col.label}
+            {sort === col.sortKey ? (
+              order === 'asc'
+                ? <ChevronUp className="w-3 h-3 text-brand-500" />
+                : <ChevronDown className="w-3 h-3 text-brand-500" />
+            ) : (
+              <ArrowUpDown className="w-3 h-3 opacity-0 group-hover:opacity-50 transition-opacity" />
+            )}
+          </button>
+        ) : (
+          <span>{col.label}</span>
+        )}
+      </th>
+    ))}
+  </tr>
+</thead>
 ```
 
-Use existing `expandedSignalCat` state + ChevronDown pattern for expand/collapse.
+Import `ChevronUp` from lucide-react (already have `ChevronDown`).
+
+### Step 4: Refactor table body to use column config with cell renderers
+**File**: `packages/web/src/pages/Leads.tsx` (lines 1415-1522)
+
+Replace the hardcoded 5-cell row with a loop over `activeColumns`:
+
+```tsx
+leads.map(lead => {
+  const feedback = getFeedback(lead);
+  const action = lead.composite_version === 2
+    ? deriveActionState({ potential_score: lead.potential_score ?? 0, urgency_score: lead.urgency_score ?? 0, evidence_modifier: lead.evidence_modifier ?? 0.5 })
+    : null;
+  const actionCfg = action ? ACTION_CONFIG[action] : null;
+  const rowTint = action === 'engage' ? 'bg-emerald-50/30' : action === 'pass' ? 'opacity-60' : '';
+
+  return (
+    <tr key={lead.id} className={`group hover:bg-gray-50 transition-colors ${selectedLeads.has(lead.id) ? 'bg-brand-50/30' : rowTint}`}>
+      {showCheckboxes && (
+        <td className="pl-3 pr-1 py-2.5" style={action ? { boxShadow: `inset 4px 0 0 0 ${actionColorMap[action]}` } : undefined}>
+          <input type="checkbox" checked={selectedLeads.has(lead.id)} onChange={() => toggleSelect(lead.id)} className="rounded border-gray-300 text-brand-600" />
+        </td>
+      )}
+      {activeColumns.map((col, i) => (
+        <td
+          key={col.id}
+          className={`px-3 py-2.5 ${col.width || ''}`}
+          style={i === 0 && !showCheckboxes && action ? { boxShadow: `inset 4px 0 0 0 ${actionColorMap[action]}` } : undefined}
+        >
+          {col.render(lead, { getFeedback: () => feedback, deriveAction: () => ({ action, cfg: actionCfg }), showCheckboxes })}
+        </td>
+      ))}
+    </tr>
+  );
+})
+```
+
+Extract `actionColorMap` constant:
+```typescript
+const ACTION_COLOR_MAP: Record<string, string> = {
+  engage: '#10b981', watch: '#f59e0b', research: '#38bdf8', pass: '#d1d5db',
+};
+```
+
+Dimension column renderers should display:
+- Numeric scores (0-100) with color-coded background using `dimColor()` pattern from ScoreBadge.tsx
+- Data Confidence as `GradeBadge` from ScoreBadge.tsx
+- Null values as `—` in gray
+
+### Step 5: Column picker popover
+**File**: `packages/web/src/pages/Leads.tsx`
+
+Add a column picker button next to the existing filter toggle button (around line 1084). Follow the export picker dropdown pattern (lines 948-991):
+
+```tsx
+// New ref
+const columnPickerRef = useRef<HTMLDivElement>(null);
+const [showColumnPicker, setShowColumnPicker] = useState(false);
+
+// Click-outside handler (same pattern as lines 572-589)
+
+// Button (next to Filters button, around line 1100):
+<div className="relative" ref={columnPickerRef}>
+  <button
+    onClick={() => setShowColumnPicker(!showColumnPicker)}
+    className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50"
+  >
+    <Columns3 className="w-3.5 h-3.5" />
+    Columns
+  </button>
+
+  {showColumnPicker && (
+    <div className="absolute right-0 top-full mt-1 w-64 bg-white border border-gray-200 rounded-lg shadow-lg z-20 py-2">
+      <div className="px-3 py-1.5 mb-1 border-b border-gray-100 flex items-center justify-between">
+        <span className="text-xs font-semibold text-gray-500">Visible Columns</span>
+        <div className="flex items-center gap-2">
+          <button onClick={showAllColumns} className="text-[10px] text-brand-600 hover:underline">All</button>
+          <button onClick={resetColumns} className="text-[10px] text-gray-500 hover:underline">Reset</button>
+        </div>
+      </div>
+
+      {/* Grouped: Core, Dimensions, Meta */}
+      {['core', 'dimensions', 'meta'].map(group => (
+        <div key={group}>
+          <div className="px-3 py-1 text-[9px] font-bold uppercase tracking-wider text-gray-300">{group}</div>
+          {COLUMNS.filter(c => c.group === group && !c.alwaysVisible).map(col => (
+            <label key={col.id} className="flex items-center gap-2 px-3 py-1.5 text-xs text-gray-700 cursor-pointer hover:bg-gray-50">
+              <input
+                type="checkbox"
+                checked={visibleColumns.has(col.id)}
+                onChange={() => toggleColumn(col.id)}
+                className="rounded border-gray-300 text-brand-600"
+              />
+              {col.label}
+            </label>
+          ))}
+        </div>
+      ))}
+    </div>
+  )}
+</div>
+```
+
+Import `Columns3` from lucide-react.
+
+Helper functions:
+```typescript
+const toggleColumn = (id: string) => {
+  setVisibleColumns(prev => {
+    const next = new Set(prev);
+    next.has(id) ? next.delete(id) : next.add(id);
+    return next;
+  });
+};
+
+const showAllColumns = () => setVisibleColumns(new Set(COLUMNS.map(c => c.id)));
+const resetColumns = () => setVisibleColumns(new Set(COLUMNS.filter(c => c.alwaysVisible || c.defaultVisible).map(c => c.id)));
+```
+
+### Step 6: Sortable column headers replacing dropdown
+**File**: `packages/web/src/pages/Leads.tsx`
+
+1. **Remove** the sort `<select>` dropdown (lines 1076-1082)
+2. The header sort buttons from Step 3 now handle all sorting
+3. Keep the existing `toggleSort()` function (line 653) and `sort`/`order` state unchanged — it already works with all backend sort keys
+4. Remove `SORT_OPTIONS` array (line 115-126) since it's no longer needed
+5. Update sort indicator: active column header shows `ChevronUp`/`ChevronDown` in brand color, inactive sortable headers show `ArrowUpDown` on hover
+
+### Step 7: TypeScript check + visual verification
+1. `cd packages/web && npx tsc --noEmit` — fix any type errors
+2. `cd packages/server && npx tsc --noEmit` — should be unchanged
+3. Start dev server (`npm run dev`) and verify:
+   - Default view shows Company, Score, Campaign, Status, Updated columns
+   - Column picker opens, shows grouped toggles
+   - Enabling dimension columns adds them to the table
+   - Clicking column headers sorts (with direction indicator)
+   - Column preferences persist across page refresh (localStorage)
+   - Bulk selection still works (colSpan adjusts dynamically)
+   - "Select all matching" banner spans correct width
+   - Loading/empty states span correct width
 
 ## Files Modified
 
 | File | Steps | Change |
 |------|-------|--------|
-| `packages/server/src/types/index.ts` | 1 | Add SubScore, DimensionBreakdown; extend ScoringDimensions |
-| `packages/server/src/agent/scorer.ts` | 2-5 | Refactor 5 compute functions, update computeAllDimensions |
-| `packages/server/src/db/schema.ts` | 6 | Add scoring_breakdown_v2 column |
-| `packages/server/src/agent/campaignOrchestrator.ts` | 6 | Persist breakdowns JSON |
-| `packages/server/src/routes/leads.ts` | 6 | Parse breakdowns in parseLead, persist on re-score |
-| `packages/web/src/pages/LeadDetail.tsx` | 7 | Render sub-score breakdown tree |
+| `packages/web/src/pages/Leads.tsx` | 1-6 | Column config, visibility state, header/body refactor, picker, sort headers |
 
-## Reuse
+## Patterns to Reuse
 
-- `dimensionsToLegacyBreakdown()` (scorer.ts:629) — evidence string patterns to copy; function becomes dead code
-- `expandedSignalCat` state + ChevronDown in LeadDetail.tsx — reuse for breakdown expand/collapse
-- `clamp()` helper (scorer.ts:221)
-- `FactConfidence` type already exists
+- `dimColor()` from ScoreBadge.tsx for dimension score cell backgrounds
+- `GradeBadge` from ScoreBadge.tsx for Data Confidence column
+- Export picker dropdown pattern (Leads.tsx:948-991) for column picker
+- Click-outside handler pattern (Leads.tsx:572-589)
+- localStorage pattern (Leads.tsx:95, 142-150, 877-885) for column persistence
+- `toggleSort()` function (Leads.tsx:653) — reuse as-is
 
 ## Backward Compatibility
 
-- `breakdowns` is optional on `ScoringDimensions` — existing leads render as today
-- `score_breakdown` column (v1) stays; `scoring_breakdown_v2` is additive
-- `dimensionsToLegacyBreakdown()` kept but no longer called for new scores
+- Default columns = exact same 5 as today — no visual change on first load
+- `InlineScoreStrip` stays as the default "Score" column
+- Dimension columns are opt-in — hidden by default
+- Sort dropdown removed, but same sort behavior via headers
+- All `colSpan` values become dynamic — handles any number of visible columns
 
-## Verification
+## Anti-Patterns to Avoid
 
-1. `npx tsc --noEmit` in both packages after each step
-2. Run a fresh campaign → API returns `scoring_breakdown_v2` with sub-scores
-3. LeadDetail renders breakdown tree for scored leads
-4. Existing v1 leads render without breakdowns (graceful fallback)
-5. Scores identical before/after refactor (same FactSheet → same numbers)
-
-## Phase 2: FactSheet Source URL Pass-Through ✅
-
-Threads source URLs from enrichment adapters through the FactSheet and scorer into clickable evidence links in the UI.
-
-- [x] Step 1: Extend types — `url?` on FactSheet sub-objects, `linkedin_url?` on named_contacts, `urls?` on SubScore, `url?` on SignalEntry
-- [x] Step 2: Include URLs in enrichment signal text — news/job URLs in `[News]`/`[Jobs]` signals, job URLs added to candidate.sources
-- [x] Step 3: Update fact extraction prompt — rule 6 for URL extraction, `url` fields in JSON schema
-- [x] Step 4: Thread URLs through scorer — `pushEvidence`/`buildSubScore` helpers, parallel `urls[]` in all compute functions
-- [x] Step 5: Render clickable evidence in LeadDetail — sub-score evidence links, VPN product links, contact LinkedIn links
-
-## Phase 3: Provenance UI Polish ✅
-
-Adds confidence tracking to evidence items and surfaces provenance at a glance in the LeadDetail UI.
-
-- [x] Step 1: Add `confidences?: FactConfidence[]` to SubScore type
-- [x] Step 2: Thread confidences through scorer — `pushEvidence`, `buildSubScore`, all 5 compute functions
-- [x] Step 3: ProvenanceSummary bar (evidence count + confirmed/inferred/model ratio) + DimensionTrustIndicator (per-dimension micro bars)
-- [x] Step 4: Evidence confidence dots — emerald (confirmed), amber (inferred), gray (model_knowledge) with text styling
-- [x] Step 5: Data Sources cross-reference — "Evidence contributed" section linking sources to scoring evidence
-
-## Phase 4: LinkedIn Discovery — Confidence Tracking, Validation & Editable URL ✅
-
-Slug validation, confidence scoring, user-editable URL with targeted re-enrich, visual match indicators.
-
-- [x] Step 1: Add `LinkedInMatch` type, extend `EnrichmentMetadata` and `CompanyEnrichment`
-- [x] Step 2: LinkedIn adapter — `extractCompanyName()` from HTML, return `linkedin_page_name`
-- [x] Step 3: Enrichment service — slug validation, confidence algorithm, `enrichFromLinkedIn()` export
-- [x] Step 4: `PATCH /leads/:id/linkedin` endpoint with targeted re-enrichment
-- [x] Step 5: LeadDetail UI — confidence dot, slug mismatch warning, editable URL with pencil icon
-
-## Future Phases (not in this TODO)
-
-- **Phase 5**: Leads table redesign (column system, header sort, column picker)
+- Do NOT create a separate component file — keep column definitions in Leads.tsx to avoid prop-threading the complex filter/selection state
+- Do NOT add drag-to-reorder — out of scope, adds complexity with no clear need
+- Do NOT change the Lead interface or backend API — all data is already available
+- Do NOT modify ScoreBadge.tsx — import and reuse existing components

@@ -6,6 +6,7 @@ import { formatDate, formatTime } from '../utils/dates';
 import {
   Search,
   ChevronDown,
+  ChevronUp,
   ChevronLeft,
   ChevronRight,
   ArrowUpDown,
@@ -15,7 +16,6 @@ import {
   RotateCcw,
   BarChart3,
   RefreshCw,
-  SlidersHorizontal,
   Calendar,
   X,
   Trash2,
@@ -26,8 +26,9 @@ import {
   MessageSquare,
   Clock,
   Filter,
+  Columns3,
 } from 'lucide-react';
-import { ScoreBadge, SegmentBadge, InlineScoreStrip, deriveActionState, ACTION_CONFIG } from '../components/ScoreBadge';
+import { ScoreBadge, SegmentBadge, InlineScoreStrip, GradeBadge, deriveActionState, ACTION_CONFIG } from '../components/ScoreBadge';
 import type { ActionState } from '../components/ScoreBadge';
 import { useToast } from '../components/Toast';
 
@@ -111,19 +112,6 @@ const GRADE_DESCRIPTIONS: Record<string, string> = {
   D: 'Limited. Few sources or sparse data.',
   F: "Insufficient. Can't verify basics.",
 };
-
-const SORT_OPTIONS = [
-  { value: 'fit_score', label: 'Composite Score' },
-  { value: 'potential_score', label: 'Potential (FIT)' },
-  { value: 'urgency_score', label: 'Urgency (INTENT)' },
-  { value: 'icp_fit_score', label: 'ICP Fit' },
-  { value: 'signal_quality_score', label: 'Signal Quality' },
-  { value: 'reachability_score', label: 'Reachability' },
-  { value: 'company_name', label: 'Company Name' },
-  { value: 'segment', label: 'Segment' },
-  { value: 'created_at', label: 'Date Created' },
-  { value: 'current_feedback', label: 'Feedback' },
-];
 
 const SYSTEM_PRESETS: Array<{
   id: string; name: string; actionState: ActionState;
@@ -228,6 +216,45 @@ const BULK_WATCH_CATEGORIES = [
   { id: 'manual', label: 'Manual', desc: 'Custom watch' },
 ];
 
+const ACTION_COLOR_MAP: Record<string, string> = {
+  engage: '#10b981', watch: '#f59e0b', research: '#38bdf8', pass: '#d1d5db',
+};
+
+function scoreCellColor(val: number): string {
+  if (val >= 60) return 'text-emerald-700 bg-emerald-50';
+  if (val >= 35) return 'text-amber-700 bg-amber-50';
+  return 'text-gray-500 bg-gray-50';
+}
+
+interface ColumnDef {
+  id: string;
+  label: string;
+  sortKey?: string;
+  width?: string;
+  alwaysVisible?: boolean;
+  defaultVisible?: boolean;
+  group: 'core' | 'dimensions' | 'meta';
+}
+
+const COLUMNS: ColumnDef[] = [
+  { id: 'company',          label: 'Company',          sortKey: 'company_name',       alwaysVisible: true, group: 'core' },
+  { id: 'score',            label: 'Score',            sortKey: 'fit_score',          defaultVisible: true, group: 'core',       width: 'w-[160px]' },
+  { id: 'campaign',         label: 'Campaign',                                        defaultVisible: true, group: 'core',       width: 'w-[160px]' },
+  { id: 'status',           label: 'Status',           sortKey: 'current_feedback',   defaultVisible: true, group: 'core',       width: 'w-[100px]' },
+  { id: 'updated',          label: 'Updated',          sortKey: 'created_at',         defaultVisible: true, group: 'core',       width: 'w-[90px]' },
+  { id: 'potential',        label: 'Potential',        sortKey: 'potential_score',     group: 'dimensions', width: 'w-[80px]' },
+  { id: 'urgency',          label: 'Urgency',          sortKey: 'urgency_score',       group: 'dimensions', width: 'w-[80px]' },
+  { id: 'icp_fit',          label: 'ICP Fit',          sortKey: 'icp_fit_score',       group: 'dimensions', width: 'w-[80px]' },
+  { id: 'signal_quality',   label: 'Signal Quality',   sortKey: 'signal_quality_score', group: 'dimensions', width: 'w-[80px]' },
+  { id: 'reachability',     label: 'Reachability',     sortKey: 'reachability_score',  group: 'dimensions', width: 'w-[80px]' },
+  { id: 'data_confidence',  label: 'Confidence',       sortKey: 'data_confidence_score', group: 'dimensions', width: 'w-[80px]' },
+  { id: 'segment',          label: 'Segment',                                          group: 'meta',       width: 'w-[70px]' },
+  { id: 'signals',          label: 'Signals',                                          group: 'meta',       width: 'w-[70px]' },
+];
+
+const COLUMNS_STORAGE_KEY = 'signalstack:leads:columns';
+const DEFAULT_VISIBLE = new Set(COLUMNS.filter(c => c.alwaysVisible || c.defaultVisible).map(c => c.id));
+
 const FEEDBACK_DOT_COLORS: Record<string, string> = {
   bad_fit: 'bg-red-500',
   good_fit_response: 'bg-green-500',
@@ -299,6 +326,30 @@ export function Leads() {
   const [bulkFeedbacking, setBulkFeedbacking] = useState(false);
   const [bulkExporting, setBulkExporting] = useState(false);
   const [selectAllMatching, setSelectAllMatching] = useState(false);
+
+  // Column visibility
+  const [visibleColumns, setVisibleColumns] = useState<Set<string>>(() => {
+    try {
+      const stored = localStorage.getItem(COLUMNS_STORAGE_KEY);
+      if (stored) return new Set(JSON.parse(stored));
+    } catch {}
+    return new Set(DEFAULT_VISIBLE);
+  });
+  const columnPickerRef = useRef<HTMLDivElement>(null);
+  const [showColumnPicker, setShowColumnPicker] = useState(false);
+
+  const activeColumns = COLUMNS.filter(c => c.alwaysVisible || visibleColumns.has(c.id));
+  const colSpan = activeColumns.length + (showCheckboxes ? 1 : 0);
+
+  const toggleColumn = (id: string) => {
+    setVisibleColumns(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+  const showAllColumns = () => setVisibleColumns(new Set(COLUMNS.map(c => c.id)));
+  const resetColumns = () => setVisibleColumns(new Set(DEFAULT_VISIBLE));
 
   // Dimension filter state
   const [minPotential, setMinPotential] = useState(() => getInitialFilter('min_potential'));
@@ -884,8 +935,130 @@ export function Leads() {
       minUrgency, maxUrgency, minIcpFit, maxIcpFit, minReachability, maxReachability,
       minSignalQuality, maxSignalQuality, dataConfidenceGrades.size, compositeVersion]);
 
+  useEffect(() => {
+    localStorage.setItem(COLUMNS_STORAGE_KEY, JSON.stringify([...visibleColumns]));
+  }, [visibleColumns]);
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (columnPickerRef.current && !columnPickerRef.current.contains(e.target as Node)) {
+        setShowColumnPicker(false);
+      }
+    }
+    if (showColumnPicker) document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showColumnPicker]);
+
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { if (hasDimensionFilters) setShowAdvancedFilters(true); }, []);
+
+  const renderCell = (colId: string, lead: Lead, feedback: string | null, action: ActionState | null, actionCfg: typeof ACTION_CONFIG[ActionState] | null) => {
+    switch (colId) {
+      case 'company':
+        return (
+          <div className="flex items-center gap-2">
+            <div className="min-w-0">
+              <Link to={`/leads/${lead.id}`} className="font-medium text-gray-900 hover:text-brand-600 block truncate">
+                {lead.company_name}
+              </Link>
+              <div className="flex items-center gap-1.5 mt-0.5">
+                {lead.domain && <span className="text-[11px] text-gray-400 truncate">{lead.domain}</span>}
+                {lead.segment && (
+                  <span className={`text-[9px] font-bold uppercase px-1.5 py-0 rounded ${
+                    lead.segment === 'ENT' ? 'text-purple-600 bg-purple-50' :
+                    lead.segment === 'MM' ? 'text-blue-600 bg-blue-50' :
+                    'text-teal-600 bg-teal-50'
+                  }`}>{lead.segment}</span>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      case 'score':
+        return (
+          <InlineScoreStrip
+            score={lead.fit_score}
+            potential={lead.potential_score}
+            urgency={lead.urgency_score}
+            evidenceModifier={lead.evidence_modifier}
+            compositeVersion={lead.composite_version}
+          />
+        );
+      case 'campaign':
+        return lead.campaign_name ? (
+          <Link to={`/campaigns/${lead.campaign_id}`} className="text-xs text-brand-600 hover:text-brand-700 truncate max-w-[200px] block">
+            {lead.campaign_name}
+          </Link>
+        ) : (
+          <span className="text-xs text-gray-400">—</span>
+        );
+      case 'status':
+        return feedback ? (
+          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border ${FEEDBACK_COLORS[feedback] || 'bg-gray-100 text-gray-600 border-gray-200'}`}>
+            {FEEDBACK_LABELS[feedback] || feedback}
+          </span>
+        ) : action && actionCfg ? (
+          <span className={`text-[10px] font-medium ${
+            action === 'engage' ? 'text-emerald-600' :
+            action === 'watch' ? 'text-amber-600' :
+            action === 'research' ? 'text-sky-600' :
+            'text-gray-400'
+          }`}>
+            {actionCfg.label}
+          </span>
+        ) : null;
+      case 'updated':
+        return <span className="text-[11px] text-gray-400 tabular-nums">{formatDate(lead.updated_at || lead.created_at)}</span>;
+      case 'potential': {
+        const val = lead.potential_score;
+        return val != null ? (
+          <span className={`text-xs font-semibold tabular-nums px-1.5 py-0.5 rounded ${scoreCellColor(val)}`}>{val}</span>
+        ) : <span className="text-xs text-gray-300">—</span>;
+      }
+      case 'urgency': {
+        const val = lead.urgency_score;
+        return val != null ? (
+          <span className={`text-xs font-semibold tabular-nums px-1.5 py-0.5 rounded ${scoreCellColor(val)}`}>{val}</span>
+        ) : <span className="text-xs text-gray-300">—</span>;
+      }
+      case 'icp_fit': {
+        const val = lead.icp_fit_score;
+        return val != null ? (
+          <span className={`text-xs font-semibold tabular-nums px-1.5 py-0.5 rounded ${scoreCellColor(val)}`}>{val}</span>
+        ) : <span className="text-xs text-gray-300">—</span>;
+      }
+      case 'signal_quality': {
+        const val = lead.signal_quality_score;
+        return val != null ? (
+          <span className={`text-xs font-semibold tabular-nums px-1.5 py-0.5 rounded ${scoreCellColor(val)}`}>{val}</span>
+        ) : <span className="text-xs text-gray-300">—</span>;
+      }
+      case 'reachability': {
+        const val = lead.reachability_score;
+        return val != null ? (
+          <span className={`text-xs font-semibold tabular-nums px-1.5 py-0.5 rounded ${scoreCellColor(val)}`}>{val}</span>
+        ) : <span className="text-xs text-gray-300">—</span>;
+      }
+      case 'data_confidence':
+        return lead.data_confidence ? (
+          <GradeBadge grade={lead.data_confidence} size="sm" />
+        ) : <span className="text-xs text-gray-300">—</span>;
+      case 'segment':
+        return lead.segment ? (
+          <span className={`text-[9px] font-bold uppercase px-1.5 py-0 rounded ${
+            lead.segment === 'ENT' ? 'text-purple-600 bg-purple-50' :
+            lead.segment === 'MM' ? 'text-blue-600 bg-blue-50' :
+            'text-teal-600 bg-teal-50'
+          }`}>{lead.segment}</span>
+        ) : <span className="text-xs text-gray-300">—</span>;
+      case 'signals':
+        return lead.signal_count != null ? (
+          <span className="text-xs text-gray-600 tabular-nums">{lead.signal_count}</span>
+        ) : <span className="text-xs text-gray-300">—</span>;
+      default:
+        return null;
+    }
+  };
 
   return (
     <div>
@@ -1072,15 +1245,6 @@ export function Leads() {
 
         <div className="flex-1" />
 
-        {/* Sort */}
-        <select
-          value={sort}
-          onChange={e => { setSort(e.target.value); setPage(1); }}
-          className="px-3 py-2 text-xs border border-gray-200 rounded-lg bg-white text-gray-600"
-        >
-          {SORT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-        </select>
-
         {/* Filter toggle */}
         <button
           onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
@@ -1098,6 +1262,60 @@ export function Leads() {
             </span>
           )}
         </button>
+
+        {/* Column picker */}
+        <div className="relative" ref={columnPickerRef}>
+          <button
+            onClick={() => setShowColumnPicker(!showColumnPicker)}
+            className={`flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg border transition-colors ${
+              showColumnPicker || activeColumns.length > DEFAULT_VISIBLE.size
+                ? 'bg-brand-50 border-brand-300 text-brand-700'
+                : 'border-gray-200 text-gray-600 hover:bg-gray-50'
+            }`}
+          >
+            <Columns3 className="w-3.5 h-3.5" />
+            Columns
+            {activeColumns.length !== DEFAULT_VISIBLE.size && (
+              <span className="min-w-[18px] h-[18px] text-[10px] leading-[18px] text-center rounded-full bg-brand-600 text-white px-1">
+                {activeColumns.length}
+              </span>
+            )}
+          </button>
+
+          {showColumnPicker && (
+            <div className="absolute right-0 top-full mt-1 w-64 bg-white border border-gray-200 rounded-lg shadow-lg z-20 py-2">
+              <div className="px-3 py-1.5 mb-1 border-b border-gray-100 flex items-center justify-between">
+                <span className="text-xs font-semibold text-gray-500">Visible Columns</span>
+                <div className="flex items-center gap-2">
+                  <button onClick={showAllColumns} className="text-[10px] text-brand-600 hover:underline">All</button>
+                  <button onClick={resetColumns} className="text-[10px] text-gray-500 hover:underline">Reset</button>
+                </div>
+              </div>
+              {(['core', 'dimensions', 'meta'] as const).map(group => {
+                const groupCols = COLUMNS.filter(c => c.group === group && !c.alwaysVisible);
+                if (groupCols.length === 0) return null;
+                return (
+                  <div key={group}>
+                    <div className="px-3 py-1 text-[9px] font-bold uppercase tracking-wider text-gray-300 mt-1">
+                      {group === 'core' ? 'Core' : group === 'dimensions' ? 'Dimensions' : 'Meta'}
+                    </div>
+                    {groupCols.map(col => (
+                      <label key={col.id} className="flex items-center gap-2 px-3 py-1.5 text-xs text-gray-700 cursor-pointer hover:bg-gray-50">
+                        <input
+                          type="checkbox"
+                          checked={visibleColumns.has(col.id)}
+                          onChange={() => toggleColumn(col.id)}
+                          className="rounded border-gray-300 text-brand-600"
+                        />
+                        {col.label}
+                      </label>
+                    ))}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* ── Row 2: Saved filters + match count ─────────────────── */}
@@ -1348,20 +1566,22 @@ export function Leads() {
                   />
                 </th>
               )}
-              {[
-                { key: 'company_name', label: 'Company' },
-                { key: 'fit_score', label: 'Score' },
-                { key: '', label: 'Campaign' },
-                { key: 'current_feedback', label: 'Feedback' },
-                { key: 'created_at', label: 'Updated' },
-              ].map(col => (
-                <th key={col.label} className="px-3 py-2.5 text-left text-[10px] font-semibold text-gray-400 uppercase tracking-wider">
-                  {col.key ? (
-                    <button onClick={() => toggleSort(col.key)} className="flex items-center gap-1 hover:text-gray-600">
+              {activeColumns.map(col => (
+                <th key={col.id} className={`px-3 py-2.5 text-left text-[10px] font-semibold text-gray-400 uppercase tracking-wider ${col.width || ''}`}>
+                  {col.sortKey ? (
+                    <button onClick={() => toggleSort(col.sortKey!)} className="flex items-center gap-1 hover:text-gray-600 group">
                       {col.label}
-                      {sort === col.key && <ArrowUpDown className="w-3 h-3" />}
+                      {sort === col.sortKey ? (
+                        order === 'asc'
+                          ? <ChevronUp className="w-3 h-3 text-brand-500" />
+                          : <ChevronDown className="w-3 h-3 text-brand-500" />
+                      ) : (
+                        <ArrowUpDown className="w-3 h-3 opacity-0 group-hover:opacity-50 transition-opacity" />
+                      )}
                     </button>
-                  ) : col.label}
+                  ) : (
+                    <span>{col.label}</span>
+                  )}
                 </th>
               ))}
             </tr>
@@ -1370,7 +1590,7 @@ export function Leads() {
             {/* "Select all matching" banner */}
             {showCheckboxes && selectedLeads.size > 0 && selectedLeads.size >= leads.length && !selectAllMatching && total > leads.length && (
               <tr>
-                <td colSpan={showCheckboxes ? 6 : 5} className="px-4 py-2 bg-brand-50 border-b border-brand-100 text-center">
+                <td colSpan={colSpan} className="px-4 py-2 bg-brand-50 border-b border-brand-100 text-center">
                   <span className="text-xs text-brand-700">
                     All <span className="font-semibold">{leads.length}</span> on this page selected.{' '}
                     <button onClick={() => setSelectAllMatching(true)}
@@ -1383,7 +1603,7 @@ export function Leads() {
             )}
             {selectAllMatching && (
               <tr>
-                <td colSpan={showCheckboxes ? 6 : 5} className="px-4 py-2 bg-brand-50 border-b border-brand-100 text-center">
+                <td colSpan={colSpan} className="px-4 py-2 bg-brand-50 border-b border-brand-100 text-center">
                   <span className="text-xs text-brand-700">
                     All <span className="font-semibold">{matchCount?.count ?? total}</span> matching leads selected.{' '}
                     <button onClick={clearBulkSelection}
@@ -1395,9 +1615,9 @@ export function Leads() {
               </tr>
             )}
             {loading ? (
-              <tr><td colSpan={showCheckboxes ? 6 : 5} className="px-4 py-12 text-center text-gray-500">Loading leads...</td></tr>
+              <tr><td colSpan={colSpan} className="px-4 py-12 text-center text-gray-500">Loading leads...</td></tr>
             ) : leads.length === 0 ? (
-              <tr><td colSpan={showCheckboxes ? 6 : 5} className="px-4 py-16 text-center">
+              <tr><td colSpan={colSpan} className="px-4 py-16 text-center">
                 {activeFilterCount > 0 ? (
                   <div className="flex flex-col items-center gap-2">
                     <Search className="w-8 h-8 text-gray-300" />
@@ -1425,21 +1645,12 @@ export function Leads() {
                 const rowTint = action === 'engage' ? 'bg-emerald-50/30'
                   : action === 'pass' ? 'opacity-60'
                   : '';
+                const actionShadow = action ? { boxShadow: `inset 4px 0 0 0 ${ACTION_COLOR_MAP[action] || '#d1d5db'}` } : undefined;
 
                 return (
                   <tr key={lead.id} className={`group hover:bg-gray-50 transition-colors ${selectedLeads.has(lead.id) ? 'bg-brand-50/30' : rowTint}`}>
                     {showCheckboxes && (
-                      <td
-                        className="pl-3 pr-1 py-2.5"
-                        style={action ? {
-                          boxShadow: `inset 4px 0 0 0 ${
-                            action === 'engage' ? '#10b981'
-                            : action === 'watch' ? '#f59e0b'
-                            : action === 'research' ? '#38bdf8'
-                            : '#d1d5db'
-                          }`,
-                        } : undefined}
-                      >
+                      <td className="pl-3 pr-1 py-2.5" style={actionShadow}>
                         <input
                           type="checkbox"
                           checked={selectedLeads.has(lead.id)}
@@ -1448,77 +1659,15 @@ export function Leads() {
                         />
                       </td>
                     )}
-                    {/* Company + segment */}
-                    <td
-                      className="px-3 py-2.5"
-                      style={!showCheckboxes && action ? {
-                        boxShadow: `inset 4px 0 0 0 ${
-                          action === 'engage' ? '#10b981'
-                          : action === 'watch' ? '#f59e0b'
-                          : action === 'research' ? '#38bdf8'
-                          : '#d1d5db'
-                        }`,
-                      } : undefined}
-                    >
-                      <div className="flex items-center gap-2">
-                        <div className="min-w-0">
-                          <Link to={`/leads/${lead.id}`} className="font-medium text-gray-900 hover:text-brand-600 block truncate">
-                            {lead.company_name}
-                          </Link>
-                          <div className="flex items-center gap-1.5 mt-0.5">
-                            {lead.domain && <span className="text-[11px] text-gray-400 truncate">{lead.domain}</span>}
-                            {lead.segment && (
-                              <span className={`text-[9px] font-bold uppercase px-1.5 py-0 rounded ${
-                                lead.segment === 'ENT' ? 'text-purple-600 bg-purple-50' :
-                                lead.segment === 'MM' ? 'text-blue-600 bg-blue-50' :
-                                'text-teal-600 bg-teal-50'
-                              }`}>{lead.segment}</span>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    </td>
-                    {/* Score + Dimensions merged */}
-                    <td className="px-3 py-2.5">
-                      <InlineScoreStrip
-                        score={lead.fit_score}
-                        potential={lead.potential_score}
-                        urgency={lead.urgency_score}
-                        evidenceModifier={lead.evidence_modifier}
-                        compositeVersion={lead.composite_version}
-                      />
-                    </td>
-                    {/* Campaign */}
-                    <td className="px-3 py-2.5">
-                      {lead.campaign_name ? (
-                        <Link to={`/campaigns/${lead.campaign_id}`} className="text-xs text-brand-600 hover:text-brand-700 truncate max-w-[200px] block">
-                          {lead.campaign_name}
-                        </Link>
-                      ) : (
-                        <span className="text-xs text-gray-400">—</span>
-                      )}
-                    </td>
-                    {/* Feedback */}
-                    <td className="px-3 py-2.5">
-                      {feedback ? (
-                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border ${FEEDBACK_COLORS[feedback] || 'bg-gray-100 text-gray-600 border-gray-200'}`}>
-                          {FEEDBACK_LABELS[feedback] || feedback}
-                        </span>
-                      ) : action && actionCfg ? (
-                        <span className={`text-[10px] font-medium ${
-                          action === 'engage' ? 'text-emerald-600' :
-                          action === 'watch' ? 'text-amber-600' :
-                          action === 'research' ? 'text-sky-600' :
-                          'text-gray-400'
-                        }`}>
-                          {actionCfg.label}
-                        </span>
-                      ) : null}
-                    </td>
-                    {/* Date */}
-                    <td className="px-3 py-2.5 text-[11px] text-gray-400 tabular-nums">
-                      {formatDate(lead.updated_at || lead.created_at)}
-                    </td>
+                    {activeColumns.map((col, i) => (
+                      <td
+                        key={col.id}
+                        className={`px-3 py-2.5 ${col.width || ''}`}
+                        style={i === 0 && !showCheckboxes ? actionShadow : undefined}
+                      >
+                        {renderCell(col.id, lead, feedback, action, actionCfg)}
+                      </td>
+                    ))}
                   </tr>
                 );
               })

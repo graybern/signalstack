@@ -31,3 +31,11 @@ coverage/
 
 # Company-specific ICP seed files
 *-icp-seed.json
+
+# Test artifacts
+test-results/
+packages/web/test-results/
+
+# Scratch scripts
+ss*.js
+packages/web/ss*.cjs

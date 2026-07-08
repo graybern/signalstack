@@ -21,7 +21,7 @@ export function getAIConfig(): AIConfig {
   const defaultModel = getSetting('vertex.default_model', null) || config.defaultModel;
 
   const effectiveProvider = dbProvider
-    || (envApiKey && !projectId ? 'anthropic' : 'vertex');
+    || (envApiKey ? 'anthropic' : 'vertex');
 
   if (effectiveProvider === 'anthropic') {
     return {
@@ -41,8 +41,9 @@ export function getAIConfig(): AIConfig {
 
 export function resolveModel(modelId: string, provider: AIProvider): string {
   if (provider === 'anthropic') {
+    // Strip Vertex-style version suffixes (@default, @20251001)
     if (modelId.includes('@')) {
-      return modelId.replace(/@.*$/, '-latest');
+      return modelId.replace(/@.*$/, '');
     }
     return modelId;
   }

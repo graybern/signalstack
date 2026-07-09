@@ -288,7 +288,8 @@ function buildSlackCompleted(campaignName: string, campaignId: string, runId: st
     const l = leads[0];
     const verdict = ACTION_LABELS[l.action_state];
     const headline = `:mag: *Research Complete: ${l.company_name}* (${campaignName})`;
-    const previewText = `Research: ${l.company_name} — ${verdict} (score ${l.fit_score}, ${l.segment})`;
+    const verdictForPreview = l.action_state === 'research' ? 'Needs Data' : verdict;
+    const previewText = `${l.company_name} — ${verdictForPreview} (score ${l.fit_score}, ${l.segment})`;
 
     const fields: { title: string; value: string; short: boolean }[] = [
       { title: 'Score', value: `${l.fit_score}/100`, short: true },

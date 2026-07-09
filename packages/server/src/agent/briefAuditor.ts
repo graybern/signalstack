@@ -562,7 +562,10 @@ export function auditBrief(input: AuditInput, threshold: number = 78): AuditResu
     score_fact_alignment: checkScoreFactAlignment(score),
   };
 
-  const totalScore = Object.values(results).reduce((sum, r) => sum + r.score, 0);
+  const rawScore = Object.values(results).reduce((sum, r) => sum + r.score, 0);
+  const maxPossible = Object.values(WEIGHTS).reduce((sum, w) => sum + w, 0);
+  const normalizedScore = Math.min(100, Math.round((rawScore / maxPossible) * 100));
+  const normalizedThreshold = Math.min(100, Math.round((threshold / maxPossible) * 100));
   const allIssues = Object.values(results).flatMap(r => r.issues);
 
   const checks: Record<string, { passed: boolean; score: number; details?: string }> = {};
@@ -576,8 +579,8 @@ export function auditBrief(input: AuditInput, threshold: number = 78): AuditResu
   }
 
   return {
-    score: totalScore,
-    passed: totalScore >= threshold,
+    score: normalizedScore,
+    passed: rawScore >= threshold,
     issues: allIssues,
     checks,
   };

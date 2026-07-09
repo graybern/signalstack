@@ -1369,6 +1369,9 @@ function parseLead(row: any) {
   try { lead.signal_density_parsed = JSON.parse(row.signal_density); } catch { lead.signal_density_parsed = null; }
   try { lead.enrichment_metadata_parsed = JSON.parse(row.enrichment_metadata); } catch { lead.enrichment_metadata_parsed = null; }
   try { lead.scoring_breakdown_v2_parsed = JSON.parse(row.scoring_breakdown_v2); } catch { lead.scoring_breakdown_v2_parsed = null; }
+  try { lead.company_profile_parsed = JSON.parse(row.company_profile); } catch { lead.company_profile_parsed = null; }
+  try { lead.why_do_anything_parsed = JSON.parse(row.why_do_anything); } catch { lead.why_do_anything_parsed = null; }
+  try { lead.why_company_parsed = JSON.parse(row.why_company); } catch { lead.why_company_parsed = null; }
 
   if (row.scoring_version === 2 && row.icp_fit_score != null) {
     const potential = row.potential_score ?? null;

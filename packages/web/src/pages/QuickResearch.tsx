@@ -13,6 +13,7 @@ import {
   Globe, Target, ArrowRight, RefreshCw, Clock, Eye,
   ChevronUp, ChevronDown, Upload, FileSpreadsheet, Download,
   Layers, Plus, Minus, ChevronsRight, Info, PlayCircle,
+  Linkedin, Users,
 } from 'lucide-react';
 
 interface Campaign {
@@ -128,6 +129,9 @@ export function QuickResearch() {
   const [domain, setDomain] = useState('');
   const [campaignId, setCampaignId] = useState('');
   const [context, setContext] = useState('');
+  const [linkedinUrl, setLinkedinUrl] = useState('');
+  const [employeeHint, setEmployeeHint] = useState('');
+  const [showMoreOptions, setShowMoreOptions] = useState(false);
   const [forceBrief, setForceBrief] = useState(false);
   const [scoreOnly, setScoreOnly] = useState(false);
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
@@ -403,9 +407,13 @@ export function QuickResearch() {
     const campaign = campaigns.find(c => c.id === campaignId);
 
     try {
+      const payload: any = { domain: normalized, campaign_id: campaignId };
+      if (context.trim()) payload.context = context.trim();
+      if (linkedinUrl.trim()) payload.linkedin_url = linkedinUrl.trim();
+      if (employeeHint && Number(employeeHint) > 0) payload.employee_count_hint = Number(employeeHint);
       const result = await api('/research', {
         method: 'POST',
-        body: JSON.stringify({ domain: normalized, campaign_id: campaignId, ...(context.trim() ? { context: context.trim() } : {}) }),
+        body: JSON.stringify(payload),
       });
       setActive({
         runId: result.run_id,
@@ -419,6 +427,9 @@ export function QuickResearch() {
       });
       setDomain('');
       setContext('');
+      setLinkedinUrl('');
+      setEmployeeHint('');
+      setShowMoreOptions(false);
     } catch (err: any) {
       setError(err.message || 'Failed to start research');
     } finally {
@@ -641,6 +652,53 @@ export function QuickResearch() {
                 rows={2}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent text-sm resize-y"
               />
+            </div>
+            <div>
+              <button
+                type="button"
+                onClick={() => setShowMoreOptions(!showMoreOptions)}
+                className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 transition-colors"
+              >
+                {showMoreOptions ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                More options
+              </button>
+              {showMoreOptions && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-3 p-4 bg-gray-50 rounded-lg border border-gray-200">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      LinkedIn Company URL <span className="font-normal text-gray-400">(optional)</span>
+                    </label>
+                    <div className="relative">
+                      <Linkedin className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                      <input
+                        type="text"
+                        value={linkedinUrl}
+                        onChange={e => setLinkedinUrl(e.target.value)}
+                        placeholder="linkedin.com/company/acme-corp"
+                        className="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent text-sm"
+                      />
+                    </div>
+                    <p className="text-xs text-gray-400 mt-1">Improves employee count accuracy and contact discovery</p>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Estimated Employees <span className="font-normal text-gray-400">(optional)</span>
+                    </label>
+                    <div className="relative">
+                      <Users className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                      <input
+                        type="number"
+                        value={employeeHint}
+                        onChange={e => setEmployeeHint(e.target.value)}
+                        placeholder="e.g. 2500"
+                        min="1"
+                        className="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent text-sm"
+                      />
+                    </div>
+                    <p className="text-xs text-gray-400 mt-1">Sets initial segment (SMB/MM/ENT). Verified during enrichment.</p>
+                  </div>
+                </div>
+              )}
             </div>
             <div className="flex items-start gap-2 text-xs text-gray-400">
               <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" />

@@ -526,12 +526,14 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
         scoring_verdict, employee_count_source, scoring_icp_version,
         potential_score, urgency_score, signal_quality_score, evidence_modifier, composite_version,
         scoring_breakdown_v2,
+        company_profile, why_do_anything, why_company,
         created_at, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?,
         ?, ?, ?, ?, ?,
         ?,
+        ?, ?, ?,
         datetime('now'), datetime('now'))
       ON CONFLICT(id) DO UPDATE SET
         segment = excluded.segment,
@@ -581,6 +583,9 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
         evidence_modifier = COALESCE(excluded.evidence_modifier, leads.evidence_modifier),
         composite_version = COALESCE(excluded.composite_version, leads.composite_version),
         scoring_breakdown_v2 = COALESCE(excluded.scoring_breakdown_v2, leads.scoring_breakdown_v2),
+        company_profile = COALESCE(excluded.company_profile, leads.company_profile),
+        why_do_anything = COALESCE(excluded.why_do_anything, leads.why_do_anything),
+        why_company = COALESCE(excluded.why_company, leads.why_company),
         updated_at = datetime('now')`
     );
 
@@ -651,6 +656,9 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
             score?.dimensions?.evidence_modifier ?? null,
             score?.scoring_version === 2 ? 2 : null,
             score?.dimensions?.breakdowns ? JSON.stringify(score.dimensions.breakdowns) : null,
+            brief?.company_profile ? JSON.stringify(brief.company_profile) : null,
+            brief?.why_do_anything ? JSON.stringify(brief.why_do_anything) : null,
+            brief?.why_company ? JSON.stringify(brief.why_company) : null,
           );
         }
       });
@@ -1320,7 +1328,7 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
             const leadId = getLeadId(entry.candidate.company_name);
             const currentStage = resumeLeadStages.get(leadId);
             if (currentStage && STAGE_ORDER.indexOf(currentStage) >= STAGE_ORDER.indexOf('briefed')) {
-              const existingLead = db.prepare('SELECT brief_markdown, pain_hypotheses, tech_stack, competitive_displacement, outreach_strategy, source_citations, why_now, brief_thinking FROM leads WHERE id = ?').get(leadId) as any;
+              const existingLead = db.prepare('SELECT brief_markdown, pain_hypotheses, tech_stack, competitive_displacement, outreach_strategy, source_citations, why_now, brief_thinking, company_profile, why_do_anything, why_company FROM leads WHERE id = ?').get(leadId) as any;
               if (existingLead?.brief_markdown) {
                 briefResults.push({
                   candidate: entry.candidate,
@@ -1335,6 +1343,9 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
                     outreach_strategy: existingLead.outreach_strategy || '',
                     source_citations: existingLead.source_citations ? JSON.parse(existingLead.source_citations) : [],
                     why_now: existingLead.why_now ? JSON.parse(existingLead.why_now) : [],
+                    company_profile: existingLead.company_profile ? JSON.parse(existingLead.company_profile) : undefined,
+                    why_do_anything: existingLead.why_do_anything ? JSON.parse(existingLead.why_do_anything) : undefined,
+                    why_company: existingLead.why_company ? JSON.parse(existingLead.why_company) : undefined,
                   } as any,
                 });
                 resumeSkippedBrief++;
@@ -1710,6 +1721,7 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
       lead_count: totalLeads,
       estimated_cost: usage.estimated_cost,
       run_type: runType || 'campaign',
+      triggered_by: triggeredBy || 'system',
     });
 
     logger.milestone(`Campaign complete — ${totalLeads} leads generated`, {
@@ -1739,6 +1751,7 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
         run_id: runId,
         partial_leads: partialLeadCount,
         run_type: runType || 'campaign',
+        triggered_by: triggeredBy || 'system',
       });
     } else {
       logger.error('campaign', 'Campaign run failed', errorMessage);
@@ -1752,6 +1765,7 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
         run_id: runId,
         error: errorMessage,
         run_type: runType || 'campaign',
+        triggered_by: triggeredBy || 'system',
       });
       throw err;
     }

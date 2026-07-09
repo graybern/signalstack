@@ -7,7 +7,7 @@ import { userHasPermission } from '../auth/permissions.js';
 const router = Router();
 
 router.post('/', authenticate, requirePermission('research:execute'), async (req: AuthRequest, res: Response) => {
-  const { domain, campaign_id, context } = req.body;
+  const { domain, campaign_id, context, linkedin_url, employee_count_hint } = req.body;
   if (!domain || !campaign_id) {
     return res.status(400).json({ error: 'domain and campaign_id are required' });
   }
@@ -40,6 +40,20 @@ router.post('/', authenticate, requirePermission('research:execute'), async (req
        VALUES (?, ?, ?, ?, 'MM', 0, 'discovered', 'pending', 'quick_research', datetime('now'), datetime('now'))`
     ).run(leadId, campaign_id, companyName, normalizedDomain);
     lead = { id: leadId };
+  }
+
+  if (linkedin_url?.trim()) {
+    const normalizedLi = linkedin_url.trim().replace(/^(https?:\/\/)?(www\.)?/, 'https://www.');
+    if (/linkedin\.com\/company\//i.test(normalizedLi)) {
+      db.prepare('UPDATE leads SET linkedin_company_url = ? WHERE id = ?').run(normalizedLi, lead.id);
+    }
+  }
+
+  if (employee_count_hint != null && Number.isFinite(Number(employee_count_hint)) && Number(employee_count_hint) > 0) {
+    const emp = Math.round(Number(employee_count_hint));
+    const segment = emp >= 651 ? 'ENT' : emp >= 351 ? 'MM' : 'SMB';
+    db.prepare('UPDATE leads SET employee_count = ?, segment = ?, employee_count_source = ? WHERE id = ?')
+      .run(emp, segment, 'user_provided', lead.id);
   }
 
   if (context?.trim()) {

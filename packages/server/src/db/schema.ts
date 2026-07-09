@@ -639,6 +639,17 @@ function initSchema(db: Database.Database) {
     db.exec("ALTER TABLE leads ADD COLUMN scoring_breakdown_v2 TEXT");
   }
 
+  // Brief enhancement columns — structured brief sections (Phase 3)
+  if (!leadColsV2b.find(c => c.name === 'company_profile')) {
+    db.exec("ALTER TABLE leads ADD COLUMN company_profile TEXT");
+  }
+  if (!leadColsV2b.find(c => c.name === 'why_do_anything')) {
+    db.exec("ALTER TABLE leads ADD COLUMN why_do_anything TEXT");
+  }
+  if (!leadColsV2b.find(c => c.name === 'why_company')) {
+    db.exec("ALTER TABLE leads ADD COLUMN why_company TEXT");
+  }
+
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_leads_potential ON leads(potential_score DESC);
     CREATE INDEX IF NOT EXISTS idx_leads_urgency ON leads(urgency_score DESC);

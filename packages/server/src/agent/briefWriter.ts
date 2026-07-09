@@ -9,6 +9,9 @@ import type {
   TechStackItem,
   CompetitiveDisplacement,
   SourceCitation,
+  CompanyProfile,
+  WhyDoAnything,
+  WhyCompany,
   FunnelStepConfig,
   PersonaRoleType,
   EvidenceConfidence,
@@ -91,6 +94,9 @@ function normalizeCompetitive(cd: any): CompetitiveDisplacement {
 }
 
 export interface BriefResult {
+  company_profile?: CompanyProfile;
+  why_do_anything?: WhyDoAnything;
+  why_company?: WhyCompany;
   company_snapshot: string;
   pain_hypotheses: PainHypothesis[];
   personas: PersonaBrief[];
@@ -294,6 +300,9 @@ ${candidate.key_people?.length ? `## Key People Found\nReal people identified at
     }
 
     return {
+      company_profile: result.company_profile || undefined,
+      why_do_anything: result.why_do_anything || undefined,
+      why_company: result.why_company || undefined,
       company_snapshot: result.company_snapshot || '',
       pain_hypotheses: result.pain_hypotheses || [],
       personas,

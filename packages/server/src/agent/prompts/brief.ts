@@ -113,6 +113,42 @@ ${dataDepthGuidance}${factsheetGating}${antiHallucination}${personaGuidance}${pr
 
 Generate a full lead brief with the following sections:
 
+### 0. Company Profile (Executive Summary)
+A structured analysis of the prospect company. Build this from enrichment data as the deterministic backbone, then layer in qualitative analysis where data is available. For each claim, tag with confidence:
+- **"confirmed"**: Directly from an enrichment source with a [N] citation
+- **"inferred"**: Synthesized from multiple signals without a single authoritative source
+- **"model_knowledge"**: Based on general industry knowledge (mark clearly — the AE should verify)
+
+Include these fields:
+- **what_they_do**: What the company does, their core business, and primary solutions (1-2 sentences)
+- **solutions_they_sell**: Array of their key products/services, each with confidence
+- **target_customers**: Who their customers are (industries, segments, use cases)
+- **where_they_win**: Their competitive strengths and market position
+- **potential_gaps**: Specific gaps relevant to THIS campaign's ICP and value proposition — e.g., for a Remote Access Replacement campaign, gaps around VPN modernization, distributed workforce support, or zero-trust readiness
+- **key_metrics**: { employee_count, founded, funding, hq } — each with value and confidence ("confirmed" if from enrichment, "inferred" otherwise)
+
+### 0.5. Why Do Anything
+The strategic business case for change. This is NOT pain_hypotheses (those are specific pain points). This is the meta-argument for why the status quo is dangerous for THIS company.
+- **thesis**: 2-3 sentence argument for why action is needed, grounded in THIS prospect's situation
+- **pain_drivers**: Array of strategic drivers (macro trends, competitive pressure, regulatory, technology shifts) with evidence_strength ("high"/"medium"/"low") and source_ref
+- **cost_of_inaction**: What happens if they do nothing for 12 months — be specific to their industry, scale, and growth trajectory
+- **risk_of_status_quo**: Specific risks of maintaining their current approach (security, operational, competitive)
+
+${srcCount < 1 ? 'With thin data, keep this section minimal — 1 thesis sentence, 1-2 pain_drivers with "low" evidence strength, and brief cost/risk statements. Prefix uncertain claims with "[INFERRED]".' : ''}
+
+### 0.6. Why ${companyName}
+Why ${companyName} (${productName}) specifically wins HERE. Not generic value props but tailored to THIS prospect's:
+- Current tech stack and detected solutions
+- Specific pain points identified above
+- Company scale, growth trajectory, and industry
+
+Fields:
+- **thesis**: 2-3 sentence tailored argument for why ${companyName} is the right fit for THIS company
+- **advantages**: Array of specific advantages, each tied to something about THIS prospect. E.g., "Their 3 AWS regions + contractor fleet makes ${companyName}'s resource-level policies faster than their current VPN approach". Each has evidence_strength ("high"/"medium"/"low")
+- **proof_points**: Relevant (anonymized) social proof — reference patterns and outcomes, never specific customer names
+
+Reference value_props and differentiators from the Product Context section below but make them specific to this prospect.
+
 ### 1. Company Snapshot
 A concise summary of the company including:
 - What they do (1-2 sentences)
@@ -217,6 +253,30 @@ A complete, formatted markdown version of the brief suitable for display in a da
 Return a JSON object with this exact structure:
 \`\`\`json
 {
+  "company_profile": {
+    "what_they_do": { "claim": "string", "confidence": "confirmed|inferred|model_knowledge", "source_ref": "[N]" },
+    "solutions_they_sell": [{ "claim": "string", "confidence": "confirmed|inferred|model_knowledge", "source_ref": "[N]" }],
+    "target_customers": { "claim": "string", "confidence": "confirmed|inferred|model_knowledge", "source_ref": "[N]" },
+    "where_they_win": { "claim": "string", "confidence": "confirmed|inferred|model_knowledge", "source_ref": "[N]" },
+    "potential_gaps": [{ "claim": "string", "confidence": "confirmed|inferred|model_knowledge", "source_ref": "[N]" }],
+    "key_metrics": {
+      "employee_count": { "value": null, "confidence": "confirmed|inferred" },
+      "founded": { "value": null, "confidence": "confirmed|inferred" },
+      "funding": { "value": null, "confidence": "confirmed|inferred" },
+      "hq": { "value": null, "confidence": "confirmed|inferred" }
+    }
+  },
+  "why_do_anything": {
+    "thesis": "string",
+    "pain_drivers": [{ "driver": "string", "evidence_strength": "high|medium|low", "source_ref": "[N]" }],
+    "cost_of_inaction": "string",
+    "risk_of_status_quo": "string"
+  },
+  "why_company": {
+    "thesis": "string",
+    "advantages": [{ "advantage": "string", "specific_to": "string", "evidence_strength": "high|medium|low" }],
+    "proof_points": ["string"]
+  },
   "company_snapshot": "string",
   "pain_hypotheses": [
     { "claim": "string", "why_it_matters": "string" }

@@ -53,12 +53,21 @@ interface LeadSummary {
   top_signal: string;
   pitch: string;
   displaces: string;
+  potential_score: number | null;
+  urgency_score: number | null;
+  icp_fit_score: number | null;
+  timing_score: number | null;
+  data_confidence: string | null;
+  scoring_version: number | null;
 }
 
 function getLeadSummaries(runId: string): LeadSummary[] {
   const db = getDb();
   const leads = db.prepare(
-    'SELECT company_name, employee_count, fit_score, segment, why_now, pain_hypotheses, competitive_displacement, outreach_strategy FROM leads WHERE run_id = ? ORDER BY fit_score DESC'
+    `SELECT company_name, employee_count, fit_score, segment, why_now, pain_hypotheses,
+     competitive_displacement, outreach_strategy, potential_score, urgency_score,
+     icp_fit_score, timing_score, data_confidence, scoring_version
+     FROM leads WHERE run_id = ? ORDER BY fit_score DESC`
   ).all(runId) as any[];
 
   return leads.map(l => {
@@ -75,8 +84,23 @@ function getLeadSummaries(runId: string): LeadSummary[] {
       top_signal: whyNow[0] || '',
       pitch: outreach.one_line_pitch || '',
       displaces: (competitive.likely_current || []).filter(Boolean).join(', '),
+      potential_score: l.potential_score,
+      urgency_score: l.urgency_score,
+      icp_fit_score: l.icp_fit_score,
+      timing_score: l.timing_score,
+      data_confidence: l.data_confidence,
+      scoring_version: l.scoring_version,
     };
   });
+}
+
+function getTriggeredByLabel(triggeredBy: string | undefined): string {
+  if (!triggeredBy || triggeredBy === 'system') return 'System';
+  if (triggeredBy === 'scheduled' || triggeredBy === 'cron') return 'Scheduled';
+  const db = getDb();
+  const user = db.prepare('SELECT display_name, email FROM users WHERE id = ?').get(triggeredBy) as any;
+  if (user) return user.display_name || user.email?.split('@')[0] || 'Unknown';
+  return triggeredBy;
 }
 
 function stripMarkdown(text: string): string {
@@ -101,10 +125,19 @@ function shortDisplaces(displaces: string): string {
     .join(', ');
 }
 
+function formatScoreDisplay(l: LeadSummary): string {
+  if (l.scoring_version === 2 && l.potential_score != null) {
+    const parts = [`${l.fit_score} (P:${l.potential_score} U:${l.urgency_score ?? '?'})`];
+    if (l.data_confidence) parts.push(`Data:${l.data_confidence}`);
+    return parts.join(' · ');
+  }
+  return scoreToStars(l.fit_score);
+}
+
 function formatLeadLine(l: LeadSummary): string {
-  const stars = scoreToStars(l.fit_score);
+  const score = formatScoreDisplay(l);
   const empLabel = l.employee_count ? `, ${l.employee_count.toLocaleString()} emp` : '';
-  let line = `${stars} ${l.company_name} (${l.segment}${empLabel}) · ${l.signal_count} signals`;
+  let line = `${score} *${l.company_name}* (${l.segment}${empLabel}) · ${l.signal_count} signals`;
   if (l.top_signal) line += `\nWhy now: ${truncate(l.top_signal, 120)}`;
   if (l.displaces) line += `\nDisplaces: ${shortDisplaces(l.displaces)}`;
   return line;
@@ -112,9 +145,13 @@ function formatLeadLine(l: LeadSummary): string {
 
 function leadStats(leads: LeadSummary[]) {
   const avgScore = leads.length > 0 ? Math.round(leads.reduce((s, l) => s + l.fit_score, 0) / leads.length) : 0;
+  const hasV2 = leads.some(l => l.scoring_version === 2 && l.potential_score != null);
+  const avgPotential = hasV2 ? Math.round(leads.reduce((s, l) => s + (l.potential_score || 0), 0) / leads.length) : null;
+  const avgUrgency = hasV2 ? Math.round(leads.reduce((s, l) => s + (l.urgency_score || 0), 0) / leads.length) : null;
+  const avgScoreDisplay = hasV2 ? `${avgScore} (P:${avgPotential} U:${avgUrgency})` : scoreToStars(avgScore);
   const segments = leads.reduce((acc: Record<string, number>, l) => { acc[l.segment] = (acc[l.segment] || 0) + 1; return acc; }, {});
   const segmentSummary = Object.entries(segments).map(([s, c]) => `${c} ${s}`).join(', ');
-  return { avgScore, segmentSummary };
+  return { avgScore, avgScoreDisplay, segmentSummary };
 }
 
 function rerunLabel(runType?: string): string {
@@ -192,50 +229,75 @@ function buildGenericTest(campaignName: string, campaignId: string, link: string
 
 // ── Slack incoming webhook payloads (attachments format) ─────────
 
-function slackAttachment(color: string, pretext: string, fields: { title: string; value: string; short: boolean }[], link: string, linkLabel?: string, ts?: number): any {
+function slackAttachment(color: string, pretext: string, fields: { title: string; value: string; short: boolean }[], link: string, linkLabel?: string, ts?: number, text?: string): any {
+  const fallbackText = text || pretext.replace(/:[a-z_]+:/g, '').replace(/\*/g, '').trim();
   const attachment: any = { color, pretext, fields, footer: 'SignalStack', ts: ts || Math.floor(Date.now() / 1000) };
   if (link) {
     const label = linkLabel || 'View in Dashboard';
     attachment.fields = [...fields, { title: '', value: `<${link}|${label}>`, short: false }];
   }
-  return { attachments: [attachment] };
+  return { text: fallbackText, attachments: [attachment] };
 }
 
-function buildSlackCompleted(campaignName: string, campaignId: string, runId: string, link: string, runType?: string): any {
+function isResearchRun(runType?: string): boolean {
+  return runType === 'quick_research' || runType === 'batch_research' || runType === 'webhook_research';
+}
+
+function buildSlackCompleted(campaignName: string, campaignId: string, runId: string, link: string, runType?: string, triggeredBy?: string, estimatedCost?: number): any {
   const leads = getLeadSummaries(runId);
   const topLeads = leads.slice(0, 5);
-  const { avgScore, segmentSummary } = leadStats(leads);
+  const { avgScoreDisplay, segmentSummary } = leadStats(leads);
   const remaining = leads.length - topLeads.length;
 
-  const topLeadLines = topLeads.map(l => {
-    const empLabel = l.employee_count ? `, ${l.employee_count.toLocaleString()} emp` : '';
-    return `${scoreToStars(l.fit_score)} *${l.company_name}* (${l.segment}${empLabel}) · ${l.signal_count} signals`;
-  }).join('\n');
+  const topLeadLines = topLeads.map(l => formatLeadLine(l)).join('\n');
   const topLeadValue = topLeadLines + (remaining > 0 ? `\n_+ ${remaining} more in dashboard_` : '');
 
   const rerun = rerunLabel(runType);
-  return slackAttachment('#36a64f', `:white_check_mark: *Campaign Completed${rerun}: ${campaignName}*`, [
+  const isResearch = isResearchRun(runType);
+  const emoji = isResearch ? ':mag:' : ':white_check_mark:';
+  const label = isResearch ? 'Research Complete' : `Campaign Complete${rerun}`;
+  const headline = isResearch && leads.length === 1
+    ? `${emoji} *${label}: ${leads[0].company_name}* (${campaignName})`
+    : `${emoji} *${label}: ${campaignName}*`;
+
+  const topNames = topLeads.slice(0, 3).map(l => l.company_name).join(', ');
+  const previewText = isResearch && leads.length === 1
+    ? `Research: ${leads[0].company_name} — Score ${formatScoreDisplay(leads[0])}`
+    : `${campaignName} — ${leads.length} leads (avg ${avgScoreDisplay}). Top: ${topNames}`;
+
+  const triggeredByLabel = getTriggeredByLabel(triggeredBy);
+
+  const fields: { title: string; value: string; short: boolean }[] = [
     { title: 'Leads', value: String(leads.length), short: true },
-    { title: 'Avg Score', value: scoreToStars(avgScore), short: true },
+    { title: 'Avg Score', value: avgScoreDisplay, short: true },
     { title: 'Segments', value: segmentSummary || 'None', short: true },
-    { title: 'Top Leads', value: topLeadValue || 'None', short: false },
-  ], link, 'View Leads');
+    { title: 'Triggered by', value: triggeredByLabel, short: true },
+  ];
+  if (estimatedCost != null && estimatedCost > 0) {
+    fields.push({ title: 'Cost', value: `$${estimatedCost.toFixed(2)}`, short: true });
+  }
+  fields.push({ title: 'Top Leads', value: topLeadValue || 'None', short: false });
+
+  return slackAttachment('#36a64f', headline, fields, link, 'View Leads', undefined, previewText);
 }
 
-function buildSlackFailed(campaignName: string, error: string, link: string, runType?: string): any {
+function buildSlackFailed(campaignName: string, error: string, link: string, runType?: string, triggeredBy?: string): any {
   const rerun = rerunLabel(runType);
+  const truncatedError = truncate(error || 'Pipeline run failed', 80);
   return slackAttachment('#E01E5A', `:x: *Campaign Failed${rerun}: ${campaignName}*`, [
     { title: 'Error', value: error || 'Pipeline run failed. Check the dashboard for details.', short: false },
+    { title: 'Triggered by', value: getTriggeredByLabel(triggeredBy), short: true },
     { title: 'Time', value: new Date().toLocaleString(), short: true },
-  ], link, 'View Run');
+  ], link, 'View Run', undefined, `${campaignName} failed: ${truncatedError}`);
 }
 
-function buildSlackCancelled(campaignName: string, link: string, runType?: string): any {
+function buildSlackCancelled(campaignName: string, link: string, runType?: string, triggeredBy?: string): any {
   const rerun = rerunLabel(runType);
   return slackAttachment('#FF9900', `:no_entry_sign: *Campaign Cancelled${rerun}: ${campaignName}*`, [
     { title: 'Status', value: 'Manually cancelled', short: true },
+    { title: 'Triggered by', value: getTriggeredByLabel(triggeredBy), short: true },
     { title: 'Time', value: new Date().toLocaleString(), short: true },
-  ], link, 'View Run');
+  ], link, 'View Run', undefined, `${campaignName} cancelled`);
 }
 
 function buildSlackMissed(campaignName: string, missedCount: number, missedTimes: string[], link: string): any {
@@ -244,14 +306,14 @@ function buildSlackMissed(campaignName: string, missedCount: number, missedTimes
     { title: 'Missed Runs', value: String(missedCount), short: true },
     { title: 'Most Recent', value: mostRecent, short: true },
     { title: 'Reason', value: 'Server was not running at scheduled time', short: false },
-  ], link, 'View Run History');
+  ], link, 'View Run History', undefined, `${missedCount} missed runs for ${campaignName}`);
 }
 
 function buildSlackTest(campaignName: string, campaignId: string, link: string, runId?: string): any {
   if (runId) return buildSlackCompleted(campaignName, campaignId, runId, link);
   return slackAttachment('#4A90D9', `:bell: *Webhook Connected: ${campaignName}*`, [
     { title: 'Status', value: 'Notifications will appear here when campaign runs complete.', short: false },
-  ], link, 'View Campaign');
+  ], link, 'View Campaign', undefined, `Webhook connected: ${campaignName}`);
 }
 
 // ── Structured JSON webhook payloads ─────────────────────────────
@@ -420,16 +482,16 @@ type EventType = 'completed' | 'failed' | 'cancelled' | 'missed';
 
 function buildPayload(dest: NotificationDestination, eventType: EventType, data: any, baseUrl: string): any {
   if (dest.type === 'rss') return null;
-  const { campaign_name, campaign_id, run_id, run_type } = data;
+  const { campaign_name, campaign_id, run_id, run_type, triggered_by, estimated_cost } = data;
   const format = dest.config.format || 'json';
   const rLink = run_id ? runLink(baseUrl, run_id) : '';
   const cLink = campaignRunsLink(baseUrl, campaign_id);
 
   if (format === 'slack') {
-    if (eventType === 'completed') return buildSlackCompleted(campaign_name, campaign_id, run_id, rLink, run_type);
-    if (eventType === 'failed') return buildSlackFailed(campaign_name, data.error, rLink, run_type);
+    if (eventType === 'completed') return buildSlackCompleted(campaign_name, campaign_id, run_id, rLink, run_type, triggered_by, estimated_cost);
+    if (eventType === 'failed') return buildSlackFailed(campaign_name, data.error, rLink, run_type, triggered_by);
     if (eventType === 'missed') return buildSlackMissed(campaign_name, data.missed_count, data.missed_times, cLink);
-    return buildSlackCancelled(campaign_name, rLink, run_type);
+    return buildSlackCancelled(campaign_name, rLink, run_type, triggered_by);
   }
 
   if (format === 'generic') {

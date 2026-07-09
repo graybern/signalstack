@@ -438,6 +438,39 @@ export interface SourceCitation {
   confidence?: EvidenceConfidence | 'confirmed' | 'inferred'; // legacy compat
 }
 
+export interface CompanyProfileClaim {
+  claim: string;
+  confidence: 'confirmed' | 'inferred' | 'model_knowledge';
+  source_ref?: string;
+}
+
+export interface CompanyProfile {
+  what_they_do: CompanyProfileClaim;
+  solutions_they_sell: CompanyProfileClaim[];
+  target_customers: CompanyProfileClaim;
+  where_they_win: CompanyProfileClaim;
+  potential_gaps: CompanyProfileClaim[];
+  key_metrics: {
+    employee_count: { value: number | null; confidence: 'confirmed' | 'inferred' };
+    founded: { value: number | null; confidence: 'confirmed' | 'inferred' };
+    funding: { value: string | null; confidence: 'confirmed' | 'inferred' };
+    hq: { value: string | null; confidence: 'confirmed' | 'inferred' };
+  };
+}
+
+export interface WhyDoAnything {
+  thesis: string;
+  pain_drivers: { driver: string; evidence_strength: EvidenceConfidence; source_ref?: string }[];
+  cost_of_inaction: string;
+  risk_of_status_quo: string;
+}
+
+export interface WhyCompany {
+  thesis: string;
+  advantages: { advantage: string; specific_to: string; evidence_strength: EvidenceConfidence }[];
+  proof_points: string[];
+}
+
 export interface LeadBriefFull extends Lead {
   personas: Persona[];
   feedback: LeadFeedback[];

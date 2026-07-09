@@ -97,6 +97,7 @@ export interface EventPayloads {
     lead_count: number;
     estimated_cost: number;
     run_type?: string;
+    triggered_by?: string;
   };
   'campaign.failed': {
     campaign_id: string;
@@ -104,6 +105,7 @@ export interface EventPayloads {
     run_id: string;
     error: string;
     run_type?: string;
+    triggered_by?: string;
   };
   'campaign.cancelled': {
     campaign_id: string;
@@ -111,6 +113,7 @@ export interface EventPayloads {
     run_id: string;
     partial_leads: number;
     run_type?: string;
+    triggered_by?: string;
   };
   'campaign.missed': {
     campaign_id: string;

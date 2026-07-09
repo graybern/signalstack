@@ -45,6 +45,7 @@ function campaignRunsLink(baseUrl: string, campaignId: string): string {
 // ── Lead data helpers ────────────────────────────────────────────
 
 interface LeadSummary {
+  id: string;
   company_name: string;
   segment: string;
   employee_count: number | null;
@@ -61,37 +62,54 @@ interface LeadSummary {
   scoring_version: number | null;
 }
 
+function mapLeadRow(l: any): LeadSummary {
+  const whyNow = safeJsonParse(l.why_now, []);
+  const pains = safeJsonParse(l.pain_hypotheses, []);
+  const competitive = safeJsonParse(l.competitive_displacement, {});
+  const outreach = safeJsonParse(l.outreach_strategy, {});
+  return {
+    id: l.id,
+    company_name: l.company_name,
+    segment: l.segment,
+    employee_count: l.employee_count,
+    fit_score: l.fit_score,
+    signal_count: whyNow.length + pains.length,
+    top_signal: whyNow[0] || '',
+    pitch: outreach.one_line_pitch || '',
+    displaces: (competitive.likely_current || []).filter(Boolean).join(', '),
+    potential_score: l.potential_score,
+    urgency_score: l.urgency_score,
+    icp_fit_score: l.icp_fit_score,
+    timing_score: l.timing_score,
+    data_confidence: l.data_confidence,
+    scoring_version: l.scoring_version,
+  };
+}
+
+const LEAD_SUMMARY_COLS = `id, company_name, employee_count, fit_score, segment, why_now, pain_hypotheses,
+     competitive_displacement, outreach_strategy, potential_score, urgency_score,
+     icp_fit_score, timing_score, data_confidence, scoring_version`;
+
 function getLeadSummaries(runId: string): LeadSummary[] {
   const db = getDb();
-  const leads = db.prepare(
-    `SELECT company_name, employee_count, fit_score, segment, why_now, pain_hypotheses,
-     competitive_displacement, outreach_strategy, potential_score, urgency_score,
-     icp_fit_score, timing_score, data_confidence, scoring_version
-     FROM leads WHERE run_id = ? ORDER BY fit_score DESC`
+  let leads = db.prepare(
+    `SELECT ${LEAD_SUMMARY_COLS} FROM leads WHERE run_id = ? ORDER BY fit_score DESC`
   ).all(runId) as any[];
 
-  return leads.map(l => {
-    const whyNow = safeJsonParse(l.why_now, []);
-    const pains = safeJsonParse(l.pain_hypotheses, []);
-    const competitive = safeJsonParse(l.competitive_displacement, {});
-    const outreach = safeJsonParse(l.outreach_strategy, {});
-    return {
-      company_name: l.company_name,
-      segment: l.segment,
-      employee_count: l.employee_count,
-      fit_score: l.fit_score,
-      signal_count: whyNow.length + pains.length,
-      top_signal: whyNow[0] || '',
-      pitch: outreach.one_line_pitch || '',
-      displaces: (competitive.likely_current || []).filter(Boolean).join(', '),
-      potential_score: l.potential_score,
-      urgency_score: l.urgency_score,
-      icp_fit_score: l.icp_fit_score,
-      timing_score: l.timing_score,
-      data_confidence: l.data_confidence,
-      scoring_version: l.scoring_version,
-    };
-  });
+  if (leads.length === 0) {
+    const run = db.prepare('SELECT target_lead_ids FROM pipeline_runs WHERE id = ?').get(runId) as any;
+    if (run?.target_lead_ids) {
+      const ids: string[] = safeJsonParse(run.target_lead_ids, []);
+      if (ids.length > 0) {
+        const placeholders = ids.map(() => '?').join(',');
+        leads = db.prepare(
+          `SELECT ${LEAD_SUMMARY_COLS} FROM leads WHERE id IN (${placeholders}) ORDER BY fit_score DESC`
+        ).all(...ids) as any[];
+      }
+    }
+  }
+
+  return leads.map(mapLeadRow);
 }
 
 function getTriggeredByLabel(triggeredBy: string | undefined): string {
@@ -243,7 +261,12 @@ function isResearchRun(runType?: string): boolean {
   return runType === 'quick_research' || runType === 'batch_research' || runType === 'webhook_research';
 }
 
-function buildSlackCompleted(campaignName: string, campaignId: string, runId: string, link: string, runType?: string, triggeredBy?: string, estimatedCost?: number): any {
+function leadLink(baseUrl: string, leadId: string): string {
+  if (!baseUrl) return '';
+  return `${baseUrl}/leads/${leadId}`;
+}
+
+function buildSlackCompleted(campaignName: string, campaignId: string, runId: string, baseUrl: string, runType?: string, triggeredBy?: string): any {
   const leads = getLeadSummaries(runId);
   const topLeads = leads.slice(0, 5);
   const { avgScoreDisplay, segmentSummary } = leadStats(leads);
@@ -273,12 +296,13 @@ function buildSlackCompleted(campaignName: string, campaignId: string, runId: st
     { title: 'Segments', value: segmentSummary || 'None', short: true },
     { title: 'Triggered by', value: triggeredByLabel, short: true },
   ];
-  if (estimatedCost != null && estimatedCost > 0) {
-    fields.push({ title: 'Cost', value: `$${estimatedCost.toFixed(2)}`, short: true });
-  }
   fields.push({ title: 'Top Leads', value: topLeadValue || 'None', short: false });
 
-  return slackAttachment('#36a64f', headline, fields, link, 'View Leads', undefined, previewText);
+  const isSingleResearch = isResearch && leads.length === 1;
+  const link = isSingleResearch ? leadLink(baseUrl, leads[0].id) : runLink(baseUrl, runId);
+  const linkLabel = isSingleResearch ? 'View Lead' : 'View Leads';
+
+  return slackAttachment('#36a64f', headline, fields, link, linkLabel, undefined, previewText);
 }
 
 function buildSlackFailed(campaignName: string, error: string, link: string, runType?: string, triggeredBy?: string): any {
@@ -309,11 +333,12 @@ function buildSlackMissed(campaignName: string, missedCount: number, missedTimes
   ], link, 'View Run History', undefined, `${missedCount} missed runs for ${campaignName}`);
 }
 
-function buildSlackTest(campaignName: string, campaignId: string, link: string, runId?: string): any {
-  if (runId) return buildSlackCompleted(campaignName, campaignId, runId, link);
+function buildSlackTest(campaignName: string, campaignId: string, baseUrl: string, runId?: string): any {
+  if (runId) return buildSlackCompleted(campaignName, campaignId, runId, baseUrl);
+  const cLink = campaignRunsLink(baseUrl, campaignId);
   return slackAttachment('#4A90D9', `:bell: *Webhook Connected: ${campaignName}*`, [
     { title: 'Status', value: 'Notifications will appear here when campaign runs complete.', short: false },
-  ], link, 'View Campaign', undefined, `Webhook connected: ${campaignName}`);
+  ], cLink, 'View Campaign', undefined, `Webhook connected: ${campaignName}`);
 }
 
 // ── Structured JSON webhook payloads ─────────────────────────────
@@ -488,7 +513,7 @@ function buildPayload(dest: NotificationDestination, eventType: EventType, data:
   const cLink = campaignRunsLink(baseUrl, campaign_id);
 
   if (format === 'slack') {
-    if (eventType === 'completed') return buildSlackCompleted(campaign_name, campaign_id, run_id, rLink, run_type, triggered_by, estimated_cost);
+    if (eventType === 'completed') return buildSlackCompleted(campaign_name, campaign_id, run_id, baseUrl, run_type, triggered_by);
     if (eventType === 'failed') return buildSlackFailed(campaign_name, data.error, rLink, run_type, triggered_by);
     if (eventType === 'missed') return buildSlackMissed(campaign_name, data.missed_count, data.missed_times, cLink);
     return buildSlackCancelled(campaign_name, rLink, run_type, triggered_by);
@@ -579,7 +604,7 @@ export async function sendTestNotification(campaignId: string, destinationId: st
   const format = dest.type === 'webhook' ? (dest.config.format || 'json') : 'json';
   let payload: any;
   if (format === 'slack') {
-    payload = buildSlackTest(campaign.name, campaignId, testLink, lastRun?.id);
+    payload = buildSlackTest(campaign.name, campaignId, baseUrl, lastRun?.id);
   } else if (format === 'generic') {
     payload = buildGenericTest(campaign.name, campaignId, testLink, lastRun?.id);
   } else if (format === 'teams') {

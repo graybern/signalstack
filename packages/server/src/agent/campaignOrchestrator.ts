@@ -536,6 +536,7 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
         ?, ?, ?,
         datetime('now'), datetime('now'))
       ON CONFLICT(id) DO UPDATE SET
+        run_id = excluded.run_id,
         segment = excluded.segment,
         hq_location = excluded.hq_location,
         employee_count = excluded.employee_count,

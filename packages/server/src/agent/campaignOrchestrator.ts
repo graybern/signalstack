@@ -546,18 +546,18 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
         investors = excluded.investors,
         website = excluded.website,
         domain = excluded.domain,
-        fit_score = excluded.fit_score,
-        fit_score_label = excluded.fit_score_label,
-        confidence = excluded.confidence,
-        why_now = excluded.why_now,
-        score_breakdown = excluded.score_breakdown,
-        pain_hypotheses = excluded.pain_hypotheses,
-        tech_stack = excluded.tech_stack,
-        competitive_displacement = excluded.competitive_displacement,
-        outreach_strategy = excluded.outreach_strategy,
-        source_citations = excluded.source_citations,
-        brief_markdown = excluded.brief_markdown,
-        signal_count = excluded.signal_count,
+        fit_score = COALESCE(NULLIF(excluded.fit_score, 0), leads.fit_score),
+        fit_score_label = COALESCE(excluded.fit_score_label, leads.fit_score_label),
+        confidence = COALESCE(excluded.confidence, leads.confidence),
+        why_now = COALESCE(excluded.why_now, leads.why_now),
+        score_breakdown = COALESCE(excluded.score_breakdown, leads.score_breakdown),
+        pain_hypotheses = COALESCE(excluded.pain_hypotheses, leads.pain_hypotheses),
+        tech_stack = COALESCE(excluded.tech_stack, leads.tech_stack),
+        competitive_displacement = COALESCE(excluded.competitive_displacement, leads.competitive_displacement),
+        outreach_strategy = COALESCE(excluded.outreach_strategy, leads.outreach_strategy),
+        source_citations = COALESCE(excluded.source_citations, leads.source_citations),
+        brief_markdown = COALESCE(excluded.brief_markdown, leads.brief_markdown),
+        signal_count = COALESCE(excluded.signal_count, leads.signal_count),
         pipeline_stage = excluded.pipeline_stage,
         candidate_data = excluded.candidate_data,
         lead_status = excluded.lead_status,
@@ -604,10 +604,10 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
           const score = scores?.get(c.company_name);
           const brief = briefs?.get(c.company_name);
           const thinking = thinkingMap?.get(c.company_name);
-          const sourceCitations = brief?.source_citations || [];
-          const signalCount = (brief && sourceCitations.length > 0)
+          const sourceCitations = brief?.source_citations?.length ? brief.source_citations : null;
+          const signalCount = sourceCitations
             ? sourceCitations.length
-            : (Array.isArray(c.signals) ? c.signals.length : 0);
+            : (Array.isArray(c.signals) && c.signals.length > 0 ? c.signals.length : null);
           const leadStatus = stage === 'briefed' ? 'scored' : stage;
           const candidateData: Record<string, any> = { signals: c.signals, sources: c.sources, notes: c.notes };
           if (score?.score_breakdown) candidateData.score_breakdown = score.score_breakdown;
@@ -627,7 +627,7 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
             brief?.tech_stack ? JSON.stringify(brief.tech_stack) : null,
             brief?.competitive_displacement ? JSON.stringify(brief.competitive_displacement) : null,
             brief?.outreach_strategy || null,
-            JSON.stringify(sourceCitations),
+            sourceCitations ? JSON.stringify(sourceCitations) : null,
             brief?.brief_markdown || null,
             signalCount,
             stage,

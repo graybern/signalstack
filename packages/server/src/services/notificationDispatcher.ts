@@ -76,6 +76,7 @@ function deriveActionState(l: { potential_score: number | null; urgency_score: n
 }
 
 const ACTION_LABELS: Record<string, string> = { engage: 'Engage', watch: 'Watch', research: 'Research', pass: 'Pass' };
+const ACTION_DETAIL: Record<string, string> = { engage: 'Engage — ready to contact', watch: 'Watch — good fit, bad timing', research: 'Research — needs more data', pass: 'Pass — weak fit' };
 const ACTION_EMOJI: Record<string, string> = { engage: ':large_green_circle:', watch: ':large_yellow_circle:', research: ':mag:', pass: ':red_circle:' };
 
 function mapLeadRow(l: any): LeadSummary {
@@ -155,8 +156,7 @@ function truncate(text: string, maxLen: number): string {
 function formatLeadLine(l: LeadSummary): string {
   const emoji = ACTION_EMOJI[l.action_state] || ':white_circle:';
   const label = ACTION_LABELS[l.action_state] || 'Unknown';
-  const empLabel = l.employee_count ? ` · ${l.employee_count.toLocaleString()} emp` : '';
-  return `${emoji} *${l.company_name}* — ${label} · ${l.segment}${empLabel} · Score ${l.fit_score}`;
+  return `${emoji} *${l.company_name}* — ${label} · ${l.segment} · Score ${l.fit_score}`;
 }
 
 function actionBreakdown(leads: LeadSummary[]): string {
@@ -286,14 +286,13 @@ function buildSlackCompleted(campaignName: string, campaignId: string, runId: st
 
   if (singleLead) {
     const l = leads[0];
-    const verdict = ACTION_LABELS[l.action_state];
+    const detail = ACTION_DETAIL[l.action_state];
     const headline = `:mag: *Research Complete: ${l.company_name}* (${campaignName})`;
-    const verdictForPreview = l.action_state === 'research' ? 'Needs Data' : verdict;
-    const previewText = `${l.company_name} — ${verdictForPreview} (score ${l.fit_score}, ${l.segment})`;
+    const previewText = `${l.company_name} — ${detail} (score ${l.fit_score}, ${l.segment})`;
 
     const fields: { title: string; value: string; short: boolean }[] = [
       { title: 'Score', value: `${l.fit_score}/100`, short: true },
-      { title: 'Verdict', value: `${ACTION_EMOJI[l.action_state]} ${verdict}`, short: true },
+      { title: 'Verdict', value: `${ACTION_EMOJI[l.action_state]} ${detail}`, short: true },
       { title: 'Segment', value: segmentLabel(l), short: true },
       { title: 'Triggered by', value: triggeredByLabel, short: true },
     ];

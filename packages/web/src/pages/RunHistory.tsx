@@ -7,7 +7,7 @@ import {
   Clock, CheckCircle, XCircle, AlertCircle, RefreshCw, Target,
   DollarSign, ChevronDown, ChevronUp, Calendar, Download,
   TrendingUp, Users, Loader2, Activity, Eye, Trash2, AlertTriangle,
-  X, PlayCircle, MoreHorizontal,
+  X, PlayCircle, MoreHorizontal, ExternalLink,
 } from 'lucide-react';
 import { ScoreBadge, SegmentBadge, deriveActionState, ACTION_CONFIG, InlineScoreStrip } from '../components/ScoreBadge';
 import { TokenCounter } from '../components/TokenCounter';
@@ -977,16 +977,21 @@ function CompletedRunRow({ run, expanded, leads, loadingLeads, onToggle, onViewL
                     const actionCfg = action ? ACTION_CONFIG[action] : null;
 
                     return (
-                      <Link key={lead.id} to={`/leads/${lead.id}`} className="bg-white border border-gray-200 rounded-lg p-3 hover:border-brand-200 transition-colors">
+                      <Link key={lead.id} to={`/runs/${run.id}`} className="bg-white border border-gray-200 rounded-lg p-3 hover:border-brand-200 transition-colors">
                         <div className="flex items-center justify-between mb-1">
                           <span className="text-sm font-medium text-gray-900 truncate">{lead.company_name}</span>
-                          <InlineScoreStrip
-                            score={lead.fit_score}
-                            potential={lead.potential_score}
-                            urgency={lead.urgency_score}
-                            evidenceModifier={lead.evidence_modifier}
-                            compositeVersion={lead.scoring_version}
-                          />
+                          <div className="flex items-center gap-1.5">
+                            <InlineScoreStrip
+                              score={lead.fit_score}
+                              potential={lead.potential_score}
+                              urgency={lead.urgency_score}
+                              evidenceModifier={lead.evidence_modifier}
+                              compositeVersion={lead.scoring_version}
+                            />
+                            <Link to={`/leads/${lead.id}`} onClick={e => e.stopPropagation()} title="View lead details" className="p-0.5 rounded hover:bg-gray-100 text-gray-300 hover:text-brand-600">
+                              <ExternalLink className="w-3 h-3" />
+                            </Link>
+                          </div>
                         </div>
                         <div className="flex items-center gap-2 text-xs">
                           <SegmentBadge segment={lead.segment} />

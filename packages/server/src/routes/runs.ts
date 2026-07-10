@@ -169,7 +169,7 @@ router.get('/:id', authenticate, (req: AuthRequest, res: Response) => {
   }
 
   let leads: any[];
-  if (run.run_type === 'stage_rerun' && run.target_lead_ids) {
+  if (run.target_lead_ids) {
     try {
       const ids: string[] = JSON.parse(run.target_lead_ids);
       if (ids.length > 0) {

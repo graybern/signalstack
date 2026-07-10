@@ -5,14 +5,16 @@ import { formatDateTime, timeAgo } from '../utils/dates';
 import { useEventStream, SSEEvent } from '../hooks/useEventStream';
 import { ScoreBadge } from '../components/ScoreBadge';
 import { ActivityPanel } from '../components/ActivityPanel';
-import { ResumeModal } from '../components/ResumeModal';
+import { classifyError } from '../components/ResumeModal';
+import { RetryConfirmDialog } from '../components/RetryConfirmDialog';
+import { useToast } from '../components/Toast';
 import { useAuthContext } from '../App';
 import { permissions } from '../utils/permissions';
 import {
   Search, Loader2, CheckCircle, XCircle, ExternalLink,
   Globe, Target, ArrowRight, RefreshCw, Clock, Eye,
   ChevronUp, ChevronDown, Upload, FileSpreadsheet, Download,
-  Layers, Plus, Minus, ChevronsRight, Info, PlayCircle,
+  Layers, Plus, Minus, ChevronsRight, Info,
   Linkedin, Users,
 } from 'lucide-react';
 
@@ -125,6 +127,7 @@ function parseCSVLine(line: string): string[] {
 
 export function QuickResearch() {
   const { user } = useAuthContext();
+  const { showToast } = useToast();
   const [mode, setMode] = useState<'single' | 'batch'>('single');
   const [domain, setDomain] = useState('');
   const [campaignId, setCampaignId] = useState('');
@@ -184,23 +187,23 @@ export function QuickResearch() {
 
   const [resumeModal, setResumeModal] = useState<{ entry: ResearchEntry; analysis: any } | null>(null);
 
-  const handleResume = async (entry: ResearchEntry) => {
+  const handleResume = useCallback(async (entry: ResearchEntry) => {
     if (!entry.campaign_id) return;
     setResumingId(entry.id);
     try {
       const analysis = await api(`/runs/${entry.id}/resume-analysis`) as any;
       if (!analysis.resumable) {
-        alert(`Cannot resume: ${analysis.reason}`);
+        showToast('error', 'Cannot retry this run', analysis.reason);
         setResumingId(null);
         return;
       }
       setResumeModal({ entry, analysis });
     } catch (err: any) {
-      alert(err.message || 'Failed to analyze for resume');
+      showToast('error', 'Failed to check run status', err.message || undefined);
     } finally {
       setResumingId(null);
     }
-  };
+  }, [showToast]);
 
   const confirmResume = async () => {
     if (!resumeModal) return;
@@ -225,11 +228,27 @@ export function QuickResearch() {
       setShowActiveLog(true);
       loadHistory();
     } catch (err: any) {
-      alert(err.message || 'Failed to resume');
+      showToast('error', 'Retry failed', err.message || 'Please try again in a moment.');
     } finally {
       setResumingId(null);
     }
   };
+
+  const handleRetryFromActive = useCallback(async () => {
+    if (!active?.runId) return;
+    try {
+      const data = await api('/research/history') as ResearchEntry[];
+      const entry = (data || []).find(e => e.id === active.runId);
+      if (entry) {
+        setHistory(data || []);
+        handleResume(entry);
+      } else {
+        showToast('error', 'Run not found', 'Try refreshing the page.');
+      }
+    } catch {
+      showToast('error', 'Failed to load run data');
+    }
+  }, [active?.runId, handleResume, showToast]);
 
   useEffect(() => {
     api('/campaigns').then((data: any) => {
@@ -939,10 +958,10 @@ export function QuickResearch() {
 
       {/* Active Research Status */}
       {active && active.mode === 'single' && (
-        <SingleActivePanel active={active} showLog={showActiveLog} setShowLog={setShowActiveLog} phaseLabels={PHASE_LABELS} />
+        <SingleActivePanel active={active} showLog={showActiveLog} setShowLog={setShowActiveLog} phaseLabels={PHASE_LABELS} onRetry={handleRetryFromActive} retrying={resumingId === active.runId} />
       )}
       {active && active.mode === 'batch' && (
-        <BatchActivePanel active={active} showLog={showActiveLog} setShowLog={setShowActiveLog} phaseLabels={PHASE_LABELS} />
+        <BatchActivePanel active={active} showLog={showActiveLog} setShowLog={setShowActiveLog} phaseLabels={PHASE_LABELS} onRetry={handleRetryFromActive} retrying={resumingId === active.runId} />
       )}
 
       {/* Next Batch Prompt */}
@@ -1035,20 +1054,15 @@ export function QuickResearch() {
         )}
       </div>
 
-      {/* Resume Modal */}
+      {/* Retry Confirm Dialog */}
       {resumeModal && (
-        <ResumeModal
+        <RetryConfirmDialog
           analysis={resumeModal.analysis}
-          run={{
-            error_message: resumeModal.entry.error_message || undefined,
-            campaign_name: resumeModal.entry.campaign_name || undefined,
-            steps_run: resumeModal.entry.steps_run,
-            run_type: resumeModal.entry.run_type,
-            status: resumeModal.entry.status,
-          }}
+          errorMessage={resumeModal.entry.error_message}
+          status={resumeModal.entry.status}
           onConfirm={confirmResume}
           onCancel={() => setResumeModal(null)}
-          resuming={resumingId === resumeModal.entry.id}
+          confirming={resumingId === resumeModal.entry.id}
         />
       )}
     </div>
@@ -1057,11 +1071,13 @@ export function QuickResearch() {
 
 // ── Single Active Research Panel ─────────────────────────────────
 
-function SingleActivePanel({ active, showLog, setShowLog, phaseLabels }: {
+function SingleActivePanel({ active, showLog, setShowLog, phaseLabels, onRetry, retrying }: {
   active: ActiveResearch;
   showLog: boolean;
   setShowLog: (v: boolean) => void;
   phaseLabels: Record<string, string>;
+  onRetry?: () => void;
+  retrying?: boolean;
 }) {
   return (
     <div className={`rounded-xl border mb-6 overflow-hidden ${
@@ -1098,6 +1114,16 @@ function SingleActivePanel({ active, showLog, setShowLog, phaseLabels }: {
             <Eye className="w-3 h-3" />
             {showLog ? 'Hide Log' : 'Show Log'}
           </button>
+          {active.status === 'failed' && onRetry && (
+            <button
+              onClick={onRetry}
+              disabled={retrying}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 disabled:opacity-50 transition-colors"
+            >
+              {retrying ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+              Retry
+            </button>
+          )}
           {active.leadId && (
             <Link
               to={`/leads/${active.leadId}`}
@@ -1120,11 +1146,13 @@ function SingleActivePanel({ active, showLog, setShowLog, phaseLabels }: {
 
 // ── Batch Active Research Panel ──────────────────────────────────
 
-function BatchActivePanel({ active, showLog, setShowLog, phaseLabels }: {
+function BatchActivePanel({ active, showLog, setShowLog, phaseLabels, onRetry, retrying }: {
   active: ActiveResearch;
   showLog: boolean;
   setShowLog: (v: boolean) => void;
   phaseLabels: Record<string, string>;
+  onRetry?: () => void;
+  retrying?: boolean;
 }) {
   const totalDomains = active.domains?.length || 0;
   const domainCompleted = (active.completedDomains?.size || 0) + (active.status === 'completed' ? totalDomains - (active.completedDomains?.size || 0) : 0);
@@ -1166,6 +1194,16 @@ function BatchActivePanel({ active, showLog, setShowLog, phaseLabels }: {
               <Eye className="w-3 h-3" />
               {showLog ? 'Hide Log' : 'Show Log'}
             </button>
+            {active.status === 'failed' && onRetry && (
+              <button
+                onClick={onRetry}
+                disabled={retrying}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 disabled:opacity-50 transition-colors"
+              >
+                {retrying ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                Retry
+              </button>
+            )}
             {active.status === 'completed' && active.runId && (
               <button
                 onClick={() => downloadFile(`/research/batch/${active.runId}/export`, `signalstack-batch-${new Date().toISOString().split('T')[0]}.csv`)}
@@ -1297,7 +1335,15 @@ function PhaseDisplay({ active, phaseLabels }: { active: ActiveResearch; phaseLa
     );
   }
   if (active.status === 'completed') return <p className="text-xs text-emerald-700">Research complete</p>;
-  if (active.status === 'failed') return <p className="text-xs text-red-700">{active.error || 'Research failed'}</p>;
+  if (active.status === 'failed') {
+    const classified = classifyError(active.error || 'Research failed');
+    return (
+      <div className="mt-0.5">
+        <p className="text-xs font-medium text-red-700">{classified.headline}</p>
+        <p className="text-[10px] text-red-600/70 mt-0.5">{classified.advice}</p>
+      </div>
+    );
+  }
   return null;
 }
 
@@ -1463,10 +1509,10 @@ function HistoryRow({ entry, isBatch, expandedLog, expandedBatch, onToggleLog, o
               <button
                 onClick={onResume}
                 disabled={resuming}
-                className="p-1 rounded hover:bg-green-50 text-gray-400 hover:text-green-600 transition-colors"
-                title="Resume from where it stopped"
+                className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium text-green-700 bg-green-50 hover:bg-green-100 border border-green-200 rounded-full transition-colors disabled:opacity-50"
               >
-                <PlayCircle className={`w-3.5 h-3.5 ${resuming ? 'animate-pulse' : ''}`} />
+                {resuming ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                Retry
               </button>
             )}
             <Link to={`/runs/${entry.id}`} className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-brand-600 inline-flex" title="View run details">

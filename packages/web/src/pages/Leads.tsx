@@ -16,7 +16,6 @@ import {
   RotateCcw,
   BarChart3,
   RefreshCw,
-  Calendar,
   X,
   Trash2,
   AlertTriangle,
@@ -226,6 +225,31 @@ function scoreCellColor(val: number): string {
   return 'text-gray-500 bg-gray-50';
 }
 
+function relativeTime(dateStr: string): string {
+  const now = Date.now();
+  const then = new Date(dateStr.endsWith('Z') ? dateStr : dateStr + 'Z').getTime();
+  const diffMs = now - then;
+  if (diffMs < 0) return 'just now';
+  const mins = Math.floor(diffMs / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days}d ago`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months}mo ago`;
+  return `${Math.floor(months / 12)}y ago`;
+}
+
+const VERDICT_COLORS: Record<string, string> = {
+  engage: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+  watch: 'bg-amber-50 text-amber-700 border-amber-200',
+  research: 'bg-sky-50 text-sky-700 border-sky-200',
+  pass: 'bg-gray-100 text-gray-500 border-gray-200',
+  watching: 'bg-amber-50 text-amber-600 border-amber-200',
+};
+
 interface ColumnDef {
   id: string;
   label: string;
@@ -233,23 +257,19 @@ interface ColumnDef {
   width?: string;
   alwaysVisible?: boolean;
   defaultVisible?: boolean;
-  group: 'core' | 'dimensions' | 'meta';
+  group: 'core' | 'detail';
 }
 
 const COLUMNS: ColumnDef[] = [
   { id: 'company',          label: 'Company',          sortKey: 'company_name',       alwaysVisible: true, group: 'core' },
   { id: 'score',            label: 'Score',            sortKey: 'fit_score',          defaultVisible: true, group: 'core',       width: 'w-[160px]' },
+  { id: 'verdict',          label: 'Verdict',          sortKey: 'potential_score',    defaultVisible: true, group: 'core',       width: 'w-[140px]' },
   { id: 'campaign',         label: 'Campaign',                                        defaultVisible: true, group: 'core',       width: 'w-[160px]' },
   { id: 'status',           label: 'Status',           sortKey: 'current_feedback',   defaultVisible: true, group: 'core',       width: 'w-[100px]' },
   { id: 'updated',          label: 'Updated',          sortKey: 'created_at',         defaultVisible: true, group: 'core',       width: 'w-[90px]' },
-  { id: 'potential',        label: 'Potential',        sortKey: 'potential_score',     group: 'dimensions', width: 'w-[80px]' },
-  { id: 'urgency',          label: 'Urgency',          sortKey: 'urgency_score',       group: 'dimensions', width: 'w-[80px]' },
-  { id: 'icp_fit',          label: 'ICP Fit',          sortKey: 'icp_fit_score',       group: 'dimensions', width: 'w-[80px]' },
-  { id: 'signal_quality',   label: 'Signal Quality',   sortKey: 'signal_quality_score', group: 'dimensions', width: 'w-[80px]' },
-  { id: 'reachability',     label: 'Reachability',     sortKey: 'reachability_score',  group: 'dimensions', width: 'w-[80px]' },
-  { id: 'data_confidence',  label: 'Confidence',       sortKey: 'data_confidence_score', group: 'dimensions', width: 'w-[80px]' },
-  { id: 'segment',          label: 'Segment',                                          group: 'meta',       width: 'w-[70px]' },
-  { id: 'signals',          label: 'Signals',                                          group: 'meta',       width: 'w-[70px]' },
+  { id: 'dimensions',       label: 'Dimensions',       sortKey: 'potential_score',    group: 'detail',     width: 'w-[180px]' },
+  { id: 'segment',          label: 'Segment',                                          group: 'detail',     width: 'w-[70px]' },
+  { id: 'signals',          label: 'Signals',                                          group: 'detail',     width: 'w-[70px]' },
 ];
 
 const COLUMNS_STORAGE_KEY = 'signalstack:leads:columns';
@@ -750,6 +770,7 @@ export function Leads() {
 
   // Computed values
   const activeFilterCount = [
+    segment, campaignId, feedbackFilter, needsReoutreach ? 'yes' : '',
     minScore, maxScore, dateFrom, dateTo, minSignals,
     minPotential, maxPotential, minUrgency, maxUrgency,
     minIcpFit, maxIcpFit, minReachability, maxReachability,
@@ -770,6 +791,8 @@ export function Leads() {
   };
 
   const clearAllFilters = () => {
+    setSegment(''); setCampaignId(''); setRunId('');
+    setFeedbackFilter(''); setNeedsReoutreach(false);
     setMinScore(''); setMaxScore('');
     setDateFrom(''); setDateTo('');
     setMinSignals('');
@@ -830,7 +853,6 @@ export function Leads() {
     if (c.max_signal_quality) setMaxSignalQuality(c.max_signal_quality);
     if (c.composite_version) setCompositeVersion(c.composite_version);
     setActivePreset(preset.id);
-    setShowAdvancedFilters(true);
     setPage(1);
   };
 
@@ -856,7 +878,6 @@ export function Leads() {
     if (c.data_confidence) setDataConfidenceGrades(new Set(c.data_confidence.split(',')));
     if (c.composite_version) setCompositeVersion(c.composite_version);
     setActivePreset(sf.id);
-    setShowAdvancedFilters(true);
     setPage(1);
   };
 
@@ -950,7 +971,7 @@ export function Leads() {
   }, [showColumnPicker]);
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { if (hasDimensionFilters) setShowAdvancedFilters(true); }, []);
+  useEffect(() => { if (hasDimensionFilters) setShowAdvancedFilters(false); }, []);
 
   const renderCell = (colId: string, lead: Lead, feedback: string | null, action: ActionState | null, actionCfg: typeof ACTION_CONFIG[ActionState] | null) => {
     switch (colId) {
@@ -1007,42 +1028,52 @@ export function Leads() {
             {actionCfg.label}
           </span>
         ) : null;
-      case 'updated':
-        return <span className="text-[11px] text-gray-400 tabular-nums">{formatDate(lead.updated_at || lead.created_at)}</span>;
-      case 'potential': {
-        const val = lead.potential_score;
-        return val != null ? (
-          <span className={`text-xs font-semibold tabular-nums px-1.5 py-0.5 rounded ${scoreCellColor(val)}`}>{val}</span>
-        ) : <span className="text-xs text-gray-300">—</span>;
+      case 'verdict': {
+        if (!action || !actionCfg) return <span className="text-xs text-gray-300">—</span>;
+        return (
+          <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border ${VERDICT_COLORS[action] || ''}`}>
+            {actionCfg.label}
+            {action === 'watch' && <span className="font-normal opacity-70">· good fit, bad timing</span>}
+            {action === 'research' && <span className="font-normal opacity-70">· needs data</span>}
+          </span>
+        );
       }
-      case 'urgency': {
-        const val = lead.urgency_score;
-        return val != null ? (
-          <span className={`text-xs font-semibold tabular-nums px-1.5 py-0.5 rounded ${scoreCellColor(val)}`}>{val}</span>
-        ) : <span className="text-xs text-gray-300">—</span>;
+      case 'updated': {
+        const ts = lead.updated_at || lead.created_at;
+        return (
+          <span className="text-[11px] text-gray-400 tabular-nums" title={formatDate(ts)}>
+            {relativeTime(ts)}
+          </span>
+        );
       }
-      case 'icp_fit': {
-        const val = lead.icp_fit_score;
-        return val != null ? (
-          <span className={`text-xs font-semibold tabular-nums px-1.5 py-0.5 rounded ${scoreCellColor(val)}`}>{val}</span>
-        ) : <span className="text-xs text-gray-300">—</span>;
+      case 'dimensions': {
+        const p = lead.potential_score;
+        const u = lead.urgency_score;
+        const e = lead.evidence_modifier;
+        if (p == null && u == null) return <span className="text-xs text-gray-300">—</span>;
+        return (
+          <div className="flex items-center gap-1.5">
+            {p != null && (
+              <span className={`text-[10px] font-semibold tabular-nums px-1.5 py-0.5 rounded ${scoreCellColor(p)}`} title="Potential (Fit)">
+                F:{p}
+              </span>
+            )}
+            {u != null && (
+              <span className={`text-[10px] font-semibold tabular-nums px-1.5 py-0.5 rounded ${scoreCellColor(u)}`} title="Urgency (Intent)">
+                I:{u}
+              </span>
+            )}
+            {e != null && (
+              <span className="text-[10px] font-medium tabular-nums text-slate-500" title="Evidence modifier">
+                {Math.round(e * 100)}%
+              </span>
+            )}
+            {lead.data_confidence && (
+              <GradeBadge grade={lead.data_confidence} size="sm" />
+            )}
+          </div>
+        );
       }
-      case 'signal_quality': {
-        const val = lead.signal_quality_score;
-        return val != null ? (
-          <span className={`text-xs font-semibold tabular-nums px-1.5 py-0.5 rounded ${scoreCellColor(val)}`}>{val}</span>
-        ) : <span className="text-xs text-gray-300">—</span>;
-      }
-      case 'reachability': {
-        const val = lead.reachability_score;
-        return val != null ? (
-          <span className={`text-xs font-semibold tabular-nums px-1.5 py-0.5 rounded ${scoreCellColor(val)}`}>{val}</span>
-        ) : <span className="text-xs text-gray-300">—</span>;
-      }
-      case 'data_confidence':
-        return lead.data_confidence ? (
-          <GradeBadge grade={lead.data_confidence} size="sm" />
-        ) : <span className="text-xs text-gray-300">—</span>;
       case 'segment':
         return lead.segment ? (
           <span className={`text-[9px] font-bold uppercase px-1.5 py-0 rounded ${
@@ -1291,13 +1322,13 @@ export function Leads() {
                   <button onClick={resetColumns} className="text-[10px] text-gray-500 hover:underline">Reset</button>
                 </div>
               </div>
-              {(['core', 'dimensions', 'meta'] as const).map(group => {
+              {(['core', 'detail'] as const).map(group => {
                 const groupCols = COLUMNS.filter(c => c.group === group && !c.alwaysVisible);
                 if (groupCols.length === 0) return null;
                 return (
                   <div key={group}>
                     <div className="px-3 py-1 text-[9px] font-bold uppercase tracking-wider text-gray-300 mt-1">
-                      {group === 'core' ? 'Core' : group === 'dimensions' ? 'Dimensions' : 'Meta'}
+                      {group === 'core' ? 'Core' : 'Detail'}
                     </div>
                     {groupCols.map(col => (
                       <label key={col.id} className="flex items-center gap-2 px-3 py-1.5 text-xs text-gray-700 cursor-pointer hover:bg-gray-50">
@@ -1359,169 +1390,206 @@ export function Leads() {
         </div>
       )}
 
-      {/* ── Collapsible Filters Panel ──────────────────────────── */}
+      {/* ── Right Slide-out Filter Panel ──────────────────────────── */}
       {showAdvancedFilters && (
-        <div className="mb-4 bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden">
-          {/* Section: Filter by */}
-          <div className="flex items-center gap-3 p-3 flex-wrap border-b border-gray-100">
-            <span className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 w-14 shrink-0">Filter by</span>
-            <select value={segment} onChange={e => { setSegment(e.target.value); setPage(1); }} className="px-2.5 py-1.5 text-xs border border-gray-200 rounded-lg bg-gray-50">
-              <option value="">All Segments</option>
-              {SEGMENTS.filter(Boolean).map(s => <option key={s} value={s}>{s === 'ENT' ? 'Enterprise' : s === 'MM' ? 'Mid-Market' : 'SMB'}</option>)}
-            </select>
-            <select value={campaignId} onChange={e => { setCampaignId(e.target.value); setRunId(''); setPage(1); }} className="px-2.5 py-1.5 text-xs border border-gray-200 rounded-lg bg-gray-50">
-              <option value="">All Campaigns</option>
-              {campaigns.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
-            {runs.length > 0 && (
-              <select value={runId} onChange={e => { setRunId(e.target.value); setPage(1); }} className="px-2.5 py-1.5 text-xs border border-gray-200 rounded-lg bg-gray-50 max-w-[200px]">
-                <option value="">All Runs</option>
-                {runs.map(r => <option key={r.id} value={r.id}>{r.label}</option>)}
-              </select>
-            )}
-            <select value={feedbackFilter} onChange={e => { setFeedbackFilter(e.target.value); setNeedsReoutreach(false); setPage(1); }} className="px-2.5 py-1.5 text-xs border border-gray-200 rounded-lg bg-gray-50">
-              {FEEDBACK_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-            </select>
-            <button
-              onClick={() => { setNeedsReoutreach(!needsReoutreach); setFeedbackFilter(''); setPage(1); }}
-              className={`flex items-center gap-1 px-2.5 py-1.5 text-xs rounded-lg border transition-colors ${
-                needsReoutreach
-                  ? 'bg-amber-50 border-amber-300 text-amber-700 font-medium'
-                  : 'border-gray-200 text-gray-500 hover:bg-gray-50'
-              }`}
-            >
-              <RefreshCw className="w-3 h-3" />
-              Re-outreach
-            </button>
-          </div>
+        <>
+          <div className="fixed inset-0 bg-black/20 z-40" onClick={() => setShowAdvancedFilters(false)} />
+          <div className="fixed top-0 right-0 bottom-0 w-[340px] bg-white shadow-2xl z-50 flex flex-col overflow-hidden">
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
+              <div className="flex items-center gap-2">
+                <Filter className="w-4 h-4 text-gray-500" />
+                <h2 className="font-semibold text-gray-900 text-sm">Filters</h2>
+                {activeFilterCount > 0 && (
+                  <span className="min-w-[20px] h-5 text-[10px] leading-5 text-center rounded-full bg-brand-600 text-white px-1.5">
+                    {activeFilterCount}
+                  </span>
+                )}
+              </div>
+              <button onClick={() => setShowAdvancedFilters(false)} className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
 
-          {/* Section: Refine */}
-          <div className="flex items-center gap-3 p-3 flex-wrap border-b border-gray-100">
-            <span className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 w-14 shrink-0">Refine</span>
-            <div className="flex items-center gap-1.5">
-              <label className="text-[10px] font-medium text-gray-500 uppercase">Score</label>
-              <input type="number" min="0" max="100" placeholder="Min" value={minScore}
-                onChange={e => { setMinScore(e.target.value); setActivePreset(null); setPage(1); }}
-                className="w-14 px-2 py-1.5 text-xs border border-gray-200 rounded bg-gray-50" />
-              <span className="text-gray-300 text-xs">–</span>
-              <input type="number" min="0" max="100" placeholder="Max" value={maxScore}
-                onChange={e => { setMaxScore(e.target.value); setActivePreset(null); setPage(1); }}
-                className="w-14 px-2 py-1.5 text-xs border border-gray-200 rounded bg-gray-50" />
-            </div>
-            <div className="w-px h-5 bg-gray-200" />
-            <div className="flex items-center gap-1.5">
-              <label className="text-[10px] font-medium text-gray-500 uppercase">
-                <Calendar className="w-3 h-3 inline mr-0.5" />Date
-              </label>
-              <input type="date" value={dateFrom}
-                onChange={e => { setDateFrom(e.target.value); setActivePreset(null); setPage(1); }}
-                className="px-2 py-1.5 text-xs border border-gray-200 rounded bg-gray-50" />
-              <span className="text-gray-300 text-xs">to</span>
-              <input type="date" value={dateTo}
-                onChange={e => { setDateTo(e.target.value); setActivePreset(null); setPage(1); }}
-                className="px-2 py-1.5 text-xs border border-gray-200 rounded bg-gray-50" />
-            </div>
-            <div className="w-px h-5 bg-gray-200" />
-            <div className="flex items-center gap-1.5">
-              <label className="text-[10px] font-medium text-gray-500 uppercase">Signals</label>
-              <input type="number" min="0" placeholder="Min" value={minSignals}
-                onChange={e => { setMinSignals(e.target.value); setActivePreset(null); setPage(1); }}
-                className="w-12 px-2 py-1.5 text-xs border border-gray-200 rounded bg-gray-50" />
-            </div>
-          </div>
+            {/* Scrollable content */}
+            <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5">
+              {/* Campaign */}
+              <div>
+                <label className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-1.5 block">Campaign</label>
+                <select value={campaignId} onChange={e => { setCampaignId(e.target.value); setRunId(''); setPage(1); }} className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-gray-50">
+                  <option value="">All Campaigns</option>
+                  {campaigns.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+                {runs.length > 0 && (
+                  <select value={runId} onChange={e => { setRunId(e.target.value); setPage(1); }} className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-gray-50 mt-2">
+                    <option value="">All Runs</option>
+                    {runs.map(r => <option key={r.id} value={r.id}>{r.label}</option>)}
+                  </select>
+                )}
+              </div>
 
-          {/* Section: Dimensions */}
-          <div className="p-3">
-            <div className="flex items-center justify-between mb-2.5">
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">Dimensions</span>
-              <div className="flex items-center gap-0.5 bg-gray-100 rounded-md p-0.5">
-                {[
-                  { value: '', label: 'All' },
-                  { value: '1', label: 'v1' },
-                  { value: '2', label: 'v2' },
-                ].map(opt => (
-                  <button
-                    key={opt.value}
-                    onClick={() => { setCompositeVersion(opt.value); setPage(1); }}
-                    className={`px-2 py-0.5 text-[10px] font-medium rounded transition-colors ${
-                      compositeVersion === opt.value
-                        ? 'bg-white text-gray-900 shadow-sm'
-                        : 'text-gray-500 hover:text-gray-700'
-                    }`}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
+              {/* Segment */}
+              <div>
+                <label className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-1.5 block">Segment</label>
+                <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
+                  {[{ value: '', label: 'All' }, ...SEGMENTS.filter(Boolean).map(s => ({ value: s, label: s }))].map(opt => (
+                    <button
+                      key={opt.value}
+                      onClick={() => { setSegment(opt.value); setPage(1); }}
+                      className={`flex-1 px-2 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                        segment === opt.value ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+                      }`}
+                    >
+                      {opt.label || 'All'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Feedback */}
+              <div>
+                <label className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-1.5 block">Feedback</label>
+                <select value={feedbackFilter} onChange={e => { setFeedbackFilter(e.target.value); setNeedsReoutreach(false); setPage(1); }} className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-gray-50">
+                  {FEEDBACK_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+                <button
+                  onClick={() => { setNeedsReoutreach(!needsReoutreach); setFeedbackFilter(''); setPage(1); }}
+                  className={`flex items-center gap-1.5 mt-2 px-3 py-1.5 text-xs rounded-lg border transition-colors w-full ${
+                    needsReoutreach
+                      ? 'bg-amber-50 border-amber-300 text-amber-700 font-medium'
+                      : 'border-gray-200 text-gray-500 hover:bg-gray-50'
+                  }`}
+                >
+                  <RefreshCw className="w-3 h-3" />
+                  Needs re-outreach
+                </button>
+              </div>
+
+              {/* Score & Date */}
+              <div>
+                <label className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-2 block">Score & Date</label>
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-gray-500 w-14 shrink-0">Score</span>
+                    <input type="number" min="0" max="100" placeholder="Min" value={minScore}
+                      onChange={e => { setMinScore(e.target.value); setActivePreset(null); setPage(1); }}
+                      className="flex-1 px-2.5 py-1.5 text-xs border border-gray-200 rounded-lg bg-gray-50" />
+                    <span className="text-gray-300 text-xs">–</span>
+                    <input type="number" min="0" max="100" placeholder="Max" value={maxScore}
+                      onChange={e => { setMaxScore(e.target.value); setActivePreset(null); setPage(1); }}
+                      className="flex-1 px-2.5 py-1.5 text-xs border border-gray-200 rounded-lg bg-gray-50" />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-gray-500 w-14 shrink-0">Date</span>
+                    <input type="date" value={dateFrom}
+                      onChange={e => { setDateFrom(e.target.value); setActivePreset(null); setPage(1); }}
+                      className="flex-1 px-2.5 py-1.5 text-xs border border-gray-200 rounded-lg bg-gray-50" />
+                    <span className="text-gray-300 text-xs">–</span>
+                    <input type="date" value={dateTo}
+                      onChange={e => { setDateTo(e.target.value); setActivePreset(null); setPage(1); }}
+                      className="flex-1 px-2.5 py-1.5 text-xs border border-gray-200 rounded-lg bg-gray-50" />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-gray-500 w-14 shrink-0">Signals</span>
+                    <input type="number" min="0" placeholder="Min" value={minSignals}
+                      onChange={e => { setMinSignals(e.target.value); setActivePreset(null); setPage(1); }}
+                      className="w-20 px-2.5 py-1.5 text-xs border border-gray-200 rounded-lg bg-gray-50" />
+                  </div>
+                </div>
+              </div>
+
+              {/* Dimensions (Advanced) */}
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">Dimensions</label>
+                  <div className="flex items-center gap-0.5 bg-gray-100 rounded-md p-0.5">
+                    {[
+                      { value: '', label: 'All' },
+                      { value: '1', label: 'v1' },
+                      { value: '2', label: 'v2' },
+                    ].map(opt => (
+                      <button
+                        key={opt.value}
+                        onClick={() => { setCompositeVersion(opt.value); setPage(1); }}
+                        className={`px-2 py-0.5 text-[10px] font-medium rounded transition-colors ${
+                          compositeVersion === opt.value
+                            ? 'bg-white text-gray-900 shadow-sm'
+                            : 'text-gray-500 hover:text-gray-700'
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  {DIMENSION_FILTERS.map(dim => {
+                    const state = DIMENSION_STATE[dim.key];
+                    const borderColor = dim.color === 'sky' ? 'border-sky-200 focus:ring-sky-200' : 'border-amber-200 focus:ring-amber-200';
+                    const labelColor = dim.color === 'sky' ? 'text-sky-700' : 'text-amber-700';
+                    const dotColor = dim.color === 'sky' ? 'bg-sky-400' : 'bg-amber-400';
+                    return (
+                      <div key={dim.key} className="flex items-center gap-2">
+                        <div className="flex items-center gap-1.5 w-24 shrink-0">
+                          <span className={`w-1.5 h-1.5 rounded-full ${dotColor}`} />
+                          <span className={`text-[11px] font-semibold ${labelColor}`}>{dim.label}</span>
+                        </div>
+                        <input type="number" min="0" max="100" placeholder="Min" value={state.min}
+                          onChange={e => { state.setMin(e.target.value); setActivePreset(null); setPage(1); }}
+                          className={`flex-1 px-2 py-1.5 text-xs border rounded-lg bg-gray-50 focus:outline-none focus:ring-1 ${borderColor}`} />
+                        <span className="text-gray-300 text-xs">–</span>
+                        <input type="number" min="0" max="100" placeholder="Max" value={state.max}
+                          onChange={e => { state.setMax(e.target.value); setActivePreset(null); setPage(1); }}
+                          className={`flex-1 px-2 py-1.5 text-xs border rounded-lg bg-gray-50 focus:outline-none focus:ring-1 ${borderColor}`} />
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="flex items-center gap-2 flex-wrap mt-3">
+                  <span className="text-[11px] font-semibold text-slate-600 flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
+                    Confidence
+                  </span>
+                  {GRADE_OPTIONS.map(grade => {
+                    const isSelected = dataConfidenceGrades.has(grade);
+                    const gradeColors: Record<string, string> = {
+                      A: isSelected ? 'bg-emerald-100 text-emerald-800 border-emerald-400 shadow-sm' : 'bg-white text-emerald-700 border-emerald-200',
+                      B: isSelected ? 'bg-sky-100 text-sky-800 border-sky-400 shadow-sm' : 'bg-white text-sky-700 border-sky-200',
+                      C: isSelected ? 'bg-amber-100 text-amber-800 border-amber-400 shadow-sm' : 'bg-white text-amber-700 border-amber-200',
+                      D: isSelected ? 'bg-orange-100 text-orange-800 border-orange-400 shadow-sm' : 'bg-white text-orange-700 border-orange-200',
+                      F: isSelected ? 'bg-red-100 text-red-800 border-red-400 shadow-sm' : 'bg-white text-red-700 border-red-200',
+                    };
+                    return (
+                      <button
+                        key={grade}
+                        onClick={() => {
+                          const next = new Set(dataConfidenceGrades);
+                          next.has(grade) ? next.delete(grade) : next.add(grade);
+                          setDataConfidenceGrades(next);
+                          setActivePreset(null);
+                          setPage(1);
+                        }}
+                        title={GRADE_DESCRIPTIONS[grade]}
+                        className={`w-7 h-7 rounded-md border text-[10px] font-bold transition-all hover:scale-105 ${gradeColors[grade]}`}
+                      >
+                        {grade}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             </div>
 
-            <div className="grid grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-2 mb-3">
-              {DIMENSION_FILTERS.map(dim => {
-                const state = DIMENSION_STATE[dim.key];
-                const borderColor = dim.color === 'sky' ? 'border-sky-200 focus:ring-sky-200' : 'border-amber-200 focus:ring-amber-200';
-                const labelColor = dim.color === 'sky' ? 'text-sky-700' : 'text-amber-700';
-                const dotColor = dim.color === 'sky' ? 'bg-sky-400' : 'bg-amber-400';
-                return (
-                  <div key={dim.key} className="flex items-center gap-2">
-                    <div className="flex items-center gap-1.5 min-w-[100px]">
-                      <span className={`w-1.5 h-1.5 rounded-full ${dotColor}`} />
-                      <span className={`text-[11px] font-semibold ${labelColor}`}>{dim.label}</span>
-                    </div>
-                    <input type="number" min="0" max="100" placeholder="Min" value={state.min}
-                      onChange={e => { state.setMin(e.target.value); setActivePreset(null); setPage(1); }}
-                      className={`w-14 px-2 py-1 text-xs border rounded bg-gray-50 focus:outline-none focus:ring-1 ${borderColor}`} />
-                    <span className="text-gray-300 text-xs">–</span>
-                    <input type="number" min="0" max="100" placeholder="Max" value={state.max}
-                      onChange={e => { state.setMax(e.target.value); setActivePreset(null); setPage(1); }}
-                      className={`w-14 px-2 py-1 text-xs border rounded bg-gray-50 focus:outline-none focus:ring-1 ${borderColor}`} />
-                  </div>
-                );
-              })}
-            </div>
-
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-[11px] font-semibold text-slate-600 flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
-                Data Confidence
-              </span>
-              {GRADE_OPTIONS.map(grade => {
-                const isSelected = dataConfidenceGrades.has(grade);
-                const gradeColors: Record<string, string> = {
-                  A: isSelected ? 'bg-emerald-100 text-emerald-800 border-emerald-400 shadow-sm' : 'bg-white text-emerald-700 border-emerald-200',
-                  B: isSelected ? 'bg-sky-100 text-sky-800 border-sky-400 shadow-sm' : 'bg-white text-sky-700 border-sky-200',
-                  C: isSelected ? 'bg-amber-100 text-amber-800 border-amber-400 shadow-sm' : 'bg-white text-amber-700 border-amber-200',
-                  D: isSelected ? 'bg-orange-100 text-orange-800 border-orange-400 shadow-sm' : 'bg-white text-orange-700 border-orange-200',
-                  F: isSelected ? 'bg-red-100 text-red-800 border-red-400 shadow-sm' : 'bg-white text-red-700 border-red-200',
-                };
-                return (
-                  <button
-                    key={grade}
-                    onClick={() => {
-                      const next = new Set(dataConfidenceGrades);
-                      next.has(grade) ? next.delete(grade) : next.add(grade);
-                      setDataConfidenceGrades(next);
-                      setActivePreset(null);
-                      setPage(1);
-                    }}
-                    title={GRADE_DESCRIPTIONS[grade]}
-                    className={`w-7 h-7 rounded-md border text-[10px] font-bold transition-all hover:scale-105 ${gradeColors[grade]}`}
-                  >
-                    {grade}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Footer */}
-          {activeFilterCount > 0 && (
-            <div className="border-t border-gray-100 px-3 py-2 flex items-center justify-between">
+            {/* Footer */}
+            <div className="border-t border-gray-200 px-5 py-3 flex items-center justify-between bg-gray-50">
               <button onClick={clearAllFilters}
                 className="flex items-center gap-1.5 text-xs text-gray-500 hover:text-red-600 transition-colors">
                 <X className="w-3.5 h-3.5" />
-                Clear all <span className="text-gray-400">({activeFilterCount})</span>
+                Clear all
               </button>
-              {matchCount && hasDimensionFilters && (
+              {matchCount && (
                 <span className="text-xs text-gray-500 tabular-nums">
                   <span className="font-semibold text-gray-700">{matchCount.count}</span> match
                   {matchCount.v2_count < matchCount.count && (
@@ -1529,9 +1597,17 @@ export function Leads() {
                   )}
                 </span>
               )}
+              <button
+                onClick={() => setShowSaveModal(true)}
+                disabled={activeFilterCount === 0}
+                className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-brand-600 border border-brand-300 rounded-lg hover:bg-brand-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                <Bookmark className="w-3 h-3" />
+                Save
+              </button>
             </div>
-          )}
-        </div>
+          </div>
+        </>
       )}
 
       {/* V1/V2 Mixed State Banner */}

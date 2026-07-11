@@ -218,7 +218,7 @@ router.post('/batch', authenticate, requirePermission('research:execute'), async
 router.get('/history', authenticate, (req: AuthRequest, res: Response) => {
   const db = getDb();
   const runs = db.prepare(
-    `SELECT pr.id, pr.status, pr.campaign_id, pr.target_lead_ids, pr.started_at, pr.completed_at, pr.estimated_cost, pr.lead_count, pr.error_message, pr.created_at, pr.steps_run, pr.run_type,
+    `SELECT pr.id, pr.status, pr.campaign_id, pr.target_lead_ids, pr.started_at, pr.completed_at, pr.estimated_cost, pr.lead_count, pr.error_message, pr.created_at, pr.steps_run, pr.run_type, pr.batch_context,
             c.name as campaign_name,
             u.display_name as triggered_by_name
      FROM pipeline_runs pr
@@ -251,7 +251,12 @@ router.get('/history', authenticate, (req: AuthRequest, res: Response) => {
         }
       } catch {}
     }
-    return { ...run, lead: leadInfo, batch_leads: batchLeads };
+    let parsedBatchContext = null;
+    if (run.batch_context && (run.status === 'failed' || run.status === 'cancelled')) {
+      try { parsedBatchContext = JSON.parse(run.batch_context); } catch {}
+    }
+    const { batch_context: _bc, ...rest } = run;
+    return { ...rest, lead: leadInfo, batch_leads: batchLeads, batch_context: parsedBatchContext };
   });
 
   // Attach resumed_by info for failed/cancelled runs

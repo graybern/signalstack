@@ -59,6 +59,11 @@ interface ResearchEntry {
     segment: string | null;
     lead_status: string | null;
   }> | null;
+  batch_context: {
+    rows: Record<string, Record<string, string>>;
+    headers?: string[];
+    domain_column?: string;
+  } | null;
 }
 
 interface ActiveResearch {
@@ -185,7 +190,7 @@ export function QuickResearch() {
     }
   }, []);
 
-  const [resumeModal, setResumeModal] = useState<{ entry: ResearchEntry; analysis: any } | null>(null);
+  const [resumeModal, setResumeModal] = useState<{ entry: ResearchEntry; analysis: any; mode: 'resume' | 'rerun'; rerunDomains?: string[] } | null>(null);
 
   const handleResume = useCallback(async (entry: ResearchEntry) => {
     if (!entry.campaign_id) return;
@@ -193,11 +198,20 @@ export function QuickResearch() {
     try {
       const analysis = await api(`/runs/${entry.id}/resume-analysis`) as any;
       if (!analysis.resumable) {
-        showToast('error', 'Cannot retry this run', analysis.reason);
+        const domains = entry.batch_leads?.length
+          ? entry.batch_leads.map(l => l.domain)
+          : entry.batch_context?.rows
+            ? Object.keys(entry.batch_context.rows)
+            : [];
+        if (domains.length > 0) {
+          setResumeModal({ entry, analysis, mode: 'rerun', rerunDomains: domains });
+        } else {
+          showToast('error', 'Cannot retry this run', analysis.reason);
+        }
         setResumingId(null);
         return;
       }
-      setResumeModal({ entry, analysis });
+      setResumeModal({ entry, analysis, mode: 'resume' });
     } catch (err: any) {
       showToast('error', 'Failed to check run status', err.message || undefined);
     } finally {
@@ -207,26 +221,47 @@ export function QuickResearch() {
 
   const confirmResume = async () => {
     if (!resumeModal) return;
-    const { entry } = resumeModal;
+    const { entry, mode, rerunDomains } = resumeModal;
     setResumingId(entry.id);
     try {
-      const result = await api<any>(`/runs/${entry.id}/resume`, { method: 'POST' });
-      setResumeModal(null);
-      const isBatch = entry.run_type === 'batch_research' || entry.run_type === 'webhook_research' || (entry.batch_leads?.length || 0) > 1;
-      const domains = isBatch && entry.batch_leads ? entry.batch_leads.map(l => l.domain) : undefined;
-      setActive({
-        runId: result.run_id,
-        domain: !isBatch ? entry.batch_leads?.[0]?.domain : undefined,
-        domains,
-        campaignId: entry.campaign_id,
-        campaignName: entry.campaign_name || '',
-        status: 'running',
-        mode: isBatch ? 'batch' : 'single',
-        completedDomains: new Set(),
-        isResume: true,
-      });
-      setShowActiveLog(true);
-      loadHistory();
+      if (mode === 'rerun' && rerunDomains?.length) {
+        const stepsRun = entry.steps_run ? JSON.parse(entry.steps_run) as string[] : null;
+        const scoreOnly = stepsRun ? stepsRun.includes('score') && !stepsRun.includes('brief') : false;
+        const result = await api<any>('/research/batch', {
+          method: 'POST',
+          body: JSON.stringify({ domains: rerunDomains, campaign_id: entry.campaign_id, score_only: scoreOnly }),
+        });
+        setResumeModal(null);
+        setActive({
+          runId: result.run_id,
+          domains: rerunDomains,
+          campaignId: entry.campaign_id,
+          campaignName: entry.campaign_name || '',
+          status: 'running',
+          mode: 'batch',
+          completedDomains: new Set(),
+        });
+        setShowActiveLog(true);
+        loadHistory();
+      } else {
+        const result = await api<any>(`/runs/${entry.id}/resume`, { method: 'POST' });
+        setResumeModal(null);
+        const isBatch = entry.run_type === 'batch_research' || entry.run_type === 'webhook_research' || (entry.batch_leads?.length || 0) > 1;
+        const domains = isBatch && entry.batch_leads ? entry.batch_leads.map(l => l.domain) : undefined;
+        setActive({
+          runId: result.run_id,
+          domain: !isBatch ? entry.batch_leads?.[0]?.domain : undefined,
+          domains,
+          campaignId: entry.campaign_id,
+          campaignName: entry.campaign_name || '',
+          status: 'running',
+          mode: isBatch ? 'batch' : 'single',
+          completedDomains: new Set(),
+          isResume: true,
+        });
+        setShowActiveLog(true);
+        loadHistory();
+      }
     } catch (err: any) {
       showToast('error', 'Retry failed', err.message || 'Please try again in a moment.');
     } finally {
@@ -583,7 +618,7 @@ export function QuickResearch() {
     research: 'Researching',
   };
 
-  const COL_SPAN = 10;
+  const COL_SPAN = 6;
 
   return (
     <div>
@@ -1018,16 +1053,12 @@ export function QuickResearch() {
             <table className="w-full text-sm">
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Type</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Company</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Campaign</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Score</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Steps</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Cost</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">By</th>
-                  <th className="px-4 py-3 w-20"></th>
+                  <th className="px-4 py-3"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -1058,6 +1089,8 @@ export function QuickResearch() {
       {resumeModal && (
         <RetryConfirmDialog
           analysis={resumeModal.analysis}
+          mode={resumeModal.mode}
+          rerunCount={resumeModal.rerunDomains?.length}
           errorMessage={resumeModal.entry.error_message}
           status={resumeModal.entry.status}
           onConfirm={confirmResume}
@@ -1349,49 +1382,6 @@ function PhaseDisplay({ active, phaseLabels }: { active: ActiveResearch; phaseLa
 
 // ── History Row ──────────────────────────────────────────────────
 
-const STEP_LABELS: Record<string, { label: string; color: string }> = {
-  enrich: { label: 'E', color: 'bg-blue-100 text-blue-700' },
-  score: { label: 'S', color: 'bg-amber-100 text-amber-700' },
-  brief: { label: 'B', color: 'bg-purple-100 text-purple-700' },
-  audit: { label: 'A', color: 'bg-emerald-100 text-emerald-700' },
-  discover: { label: 'D', color: 'bg-cyan-100 text-cyan-700' },
-  qualify: { label: 'Q', color: 'bg-gray-100 text-gray-600' },
-};
-
-function StepsPills({ stepsRun }: { stepsRun: string | null }) {
-  if (!stepsRun) return <span className="text-xs text-gray-400">-</span>;
-  try {
-    const steps: string[] = JSON.parse(stepsRun);
-    const isScoreOnly = steps.includes('score') && !steps.includes('brief');
-    return (
-      <div className="flex items-center gap-0.5">
-        {isScoreOnly && (
-          <span className="text-[9px] px-1 py-0.5 rounded bg-amber-50 text-amber-600 font-medium mr-0.5" title="Score-only mode">
-            Score Only
-          </span>
-        )}
-        {steps.map(step => {
-          const isAuditInScoreOnly = step === 'audit' && isScoreOnly;
-          const info = isAuditInScoreOnly
-            ? { label: 'QC', color: 'bg-emerald-100 text-emerald-700' }
-            : STEP_LABELS[step] || { label: step[0]?.toUpperCase() || '?', color: 'bg-gray-100 text-gray-600' };
-          return (
-            <span
-              key={step}
-              className={`w-5 h-5 flex items-center justify-center text-[10px] font-bold rounded ${info.color}`}
-              title={isAuditInScoreOnly ? 'Quality Check' : step}
-            >
-              {info.label}
-            </span>
-          );
-        })}
-      </div>
-    );
-  } catch {
-    return <span className="text-xs text-gray-400">-</span>;
-  }
-}
-
 function HistoryRow({ entry, isBatch, expandedLog, expandedBatch, onToggleLog, onToggleBatch, colSpan, onResume, resuming }: {
   entry: ResearchEntry;
   isBatch: boolean;
@@ -1412,42 +1402,44 @@ function HistoryRow({ entry, isBatch, expandedLog, expandedBatch, onToggleLog, o
   return (
     <>
       <tr className={`hover:bg-gray-50 ${isFailed ? 'bg-red-50/30' : ''}`}>
-        {/* Type */}
+        {/* Company (with Type badge inline) */}
         <td className="px-4 py-3">
-          {isBatch ? (
-            <span className="inline-flex items-center gap-1 text-xs font-medium text-purple-700 bg-purple-50 px-2 py-0.5 rounded-full">
-              <Layers className="w-3 h-3" />
-              Batch ({batchCount})
-            </span>
-          ) : (
-            <span className="inline-flex items-center gap-1 text-xs font-medium text-blue-700 bg-blue-50 px-2 py-0.5 rounded-full">
-              <Globe className="w-3 h-3" />
-              Single
-            </span>
-          )}
-        </td>
-        {/* Company */}
-        <td className="px-4 py-3">
-          {isBatch ? (
-            <button onClick={onToggleBatch} className="text-left group">
-              <span className="text-sm font-medium text-gray-900 group-hover:text-brand-600">
-                {batchCount} domain{batchCount !== 1 ? 's' : ''}
-              </span>
-              <span className="block text-xs text-gray-400">
-                {entry.batch_leads?.slice(0, 3).map(l => l.domain).join(', ')}
-                {batchCount > 3 ? '...' : ''}
-              </span>
-            </button>
-          ) : entry.lead ? (
-            <Link to={`/leads/${entry.lead.id}`} className="group">
-              <span className="text-sm font-medium text-gray-900 group-hover:text-brand-600">
-                {entry.lead.company_name}
-              </span>
-              <span className="block text-xs text-gray-400 font-mono">{entry.lead.domain}</span>
-            </Link>
-          ) : (
-            <span className="text-sm text-gray-400">-</span>
-          )}
+          <div className="flex items-start gap-2">
+            {isBatch ? (
+              <>
+                <span className="inline-flex items-center gap-1 text-[10px] font-medium text-purple-700 bg-purple-50 px-1.5 py-0.5 rounded-full whitespace-nowrap mt-0.5">
+                  <Layers className="w-2.5 h-2.5" />
+                  {batchCount}
+                </span>
+                <button onClick={onToggleBatch} className="text-left group min-w-0">
+                  <span className="text-sm font-medium text-gray-900 group-hover:text-brand-600">
+                    {batchCount} domain{batchCount !== 1 ? 's' : ''}
+                  </span>
+                  <span className="block text-xs text-gray-400 truncate">
+                    {entry.batch_leads?.slice(0, 3).map(l => l.domain).join(', ')}
+                    {batchCount > 3 ? '...' : ''}
+                  </span>
+                </button>
+              </>
+            ) : (
+              <>
+                <span className="inline-flex items-center gap-1 text-[10px] font-medium text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded-full whitespace-nowrap mt-0.5">
+                  <Globe className="w-2.5 h-2.5" />
+                  1
+                </span>
+                {entry.lead ? (
+                  <Link to={`/leads/${entry.lead.id}`} className="group min-w-0">
+                    <span className="text-sm font-medium text-gray-900 group-hover:text-brand-600">
+                      {entry.lead.company_name}
+                    </span>
+                    <span className="block text-xs text-gray-400 font-mono truncate">{entry.lead.domain}</span>
+                  </Link>
+                ) : (
+                  <span className="text-sm text-gray-400">-</span>
+                )}
+              </>
+            )}
+          </div>
         </td>
         {/* Campaign */}
         <td className="px-4 py-3">
@@ -1475,25 +1467,23 @@ function HistoryRow({ entry, isBatch, expandedLog, expandedBatch, onToggleLog, o
             <span className="text-xs text-gray-400">{isRunning ? '...' : '-'}</span>
           )}
         </td>
-        {/* Steps */}
-        <td className="px-4 py-3">
-          <StepsPills stepsRun={entry.steps_run} />
-        </td>
-        {/* Status */}
+        {/* Status + Retry */}
         <td className="px-4 py-3">
           <StatusBadge status={entry.status} error={entry.error_message} resumedByStatus={entry.resumed_by_status} />
-        </td>
-        {/* Cost */}
-        <td className="px-4 py-3 text-xs text-gray-500">
-          {entry.estimated_cost > 0 ? `$${entry.estimated_cost.toFixed(2)}` : '-'}
+          {canResume && (
+            <button
+              onClick={onResume}
+              disabled={resuming}
+              className="mt-1.5 inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium text-green-700 bg-green-50 hover:bg-green-100 border border-green-200 rounded-full transition-colors disabled:opacity-50"
+            >
+              {resuming ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+              Retry
+            </button>
+          )}
         </td>
         {/* Date */}
         <td className="px-4 py-3 text-xs text-gray-500" title={formatDateTime(entry.created_at)}>
           {timeAgo(entry.created_at)}
-        </td>
-        {/* By */}
-        <td className="px-4 py-3 text-xs text-gray-500">
-          {entry.triggered_by_name || 'System'}
         </td>
         {/* Actions */}
         <td className="px-4 py-3">
@@ -1505,16 +1495,6 @@ function HistoryRow({ entry, isBatch, expandedLog, expandedBatch, onToggleLog, o
             >
               <Eye className="w-3.5 h-3.5" />
             </button>
-            {canResume && (
-              <button
-                onClick={onResume}
-                disabled={resuming}
-                className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium text-green-700 bg-green-50 hover:bg-green-100 border border-green-200 rounded-full transition-colors disabled:opacity-50"
-              >
-                {resuming ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
-                Retry
-              </button>
-            )}
             <Link to={`/runs/${entry.id}`} className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-brand-600 inline-flex" title="View run details">
               <ExternalLink className="w-3.5 h-3.5" />
             </Link>
@@ -1526,11 +1506,6 @@ function HistoryRow({ entry, isBatch, expandedLog, expandedBatch, onToggleLog, o
               >
                 <Download className="w-3.5 h-3.5" />
               </button>
-            )}
-            {!isBatch && entry.lead && (
-              <Link to={`/leads/${entry.lead.id}`} className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-brand-600 inline-flex">
-                <ExternalLink className="w-3.5 h-3.5" />
-              </Link>
             )}
             {expandedLog || expandedBatch ? <ChevronUp className="w-3.5 h-3.5 text-gray-400" /> : <ChevronDown className="w-3.5 h-3.5 text-gray-400" />}
           </div>

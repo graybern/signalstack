@@ -813,3 +813,117 @@ export async function enrichFromLinkedIn(
 
   return { enrichment, linkedinMatch };
 }
+
+// ── LinkedIn Pre-flight ─────────────────────────────────────────
+
+export interface PreflightResult {
+  domain: string;
+  companyName: string;
+  linkedinMatch: LinkedInMatch | null;
+}
+
+export interface PreflightResponse {
+  results: PreflightResult[];
+  summary: { total: number; high: number; medium: number; low: number; none: number };
+}
+
+export async function serperLinkedinSearch(
+  domain: string,
+  companyName: string,
+): Promise<PreflightResult> {
+  const configs = getDataSourceConfigs();
+  const serperConfig = configs.find(c => c.id === 'serper_search');
+  const apiKey = serperConfig?.api_key;
+
+  if (!apiKey) {
+    return { domain, companyName, linkedinMatch: null };
+  }
+
+  try {
+    const query = `${domain} linkedin company`;
+    const response = await fetch('https://google.serper.dev/search', {
+      method: 'POST',
+      headers: { 'X-API-KEY': apiKey, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ q: query, num: 5 }),
+      signal: AbortSignal.timeout(10000),
+    });
+
+    if (!response.ok) {
+      const errBody = await response.text().catch(() => '');
+      console.error(`[preflight] Serper API error for ${domain}: ${response.status} — ${errBody}`);
+      return { domain, companyName, linkedinMatch: null };
+    }
+
+    const data = await response.json();
+    const organic: any[] = data.organic || [];
+
+    let linkedinUrl: string | null = null;
+    let pageCompanyName: string | null = null;
+
+    for (const item of organic.slice(0, 5)) {
+      const url = (item.link || '').toLowerCase();
+      if (!url.includes('linkedin.com/company/')) continue;
+      const match = url.match(/linkedin\.com\/company\/([a-zA-Z0-9_-]+)/);
+      if (match) {
+        linkedinUrl = `https://www.linkedin.com/company/${match[1]}`;
+        const title = item.title || '';
+        const pipeIdx = title.indexOf('|');
+        const dashIdx = title.indexOf(' - ');
+        if (pipeIdx > 0) pageCompanyName = title.substring(0, pipeIdx).trim();
+        else if (dashIdx > 0) pageCompanyName = title.substring(0, dashIdx).trim();
+        break;
+      }
+    }
+
+    if (!linkedinUrl) {
+      return { domain, companyName, linkedinMatch: null };
+    }
+
+    const slug = linkedinUrl.match(/company\/([a-zA-Z0-9_-]+)/)?.[1] || '';
+    const linkedinMatch = computeLinkedInConfidence(slug, companyName, ['serper_search'], pageCompanyName);
+
+    return { domain, companyName, linkedinMatch };
+  } catch (err) {
+    console.error(`[preflight] Error for ${domain}:`, err);
+    return { domain, companyName, linkedinMatch: null };
+  }
+}
+
+export async function linkedinPreflight(
+  inputs: Array<{ domain: string; companyName?: string }>,
+): Promise<PreflightResponse> {
+  const CONCURRENCY = 5;
+  const results: PreflightResult[] = [];
+  let running = 0;
+  let idx = 0;
+
+  const items = inputs.map(inp => ({
+    domain: inp.domain,
+    companyName: inp.companyName || inp.domain.split('.')[0].charAt(0).toUpperCase() + inp.domain.split('.')[0].slice(1),
+  }));
+
+  await new Promise<void>(resolve => {
+    function next() {
+      if (results.length === items.length) { resolve(); return; }
+      while (running < CONCURRENCY && idx < items.length) {
+        const item = items[idx++];
+        running++;
+        serperLinkedinSearch(item.domain, item.companyName)
+          .then(r => { results.push(r); })
+          .catch(() => { results.push({ domain: item.domain, companyName: item.companyName, linkedinMatch: null }); })
+          .finally(() => { running--; next(); });
+      }
+    }
+    next();
+  });
+
+  const summary = { total: results.length, high: 0, medium: 0, low: 0, none: 0 };
+  for (const r of results) {
+    if (!r.linkedinMatch) summary.none++;
+    else if (r.linkedinMatch.confidence === 'high') summary.high++;
+    else if (r.linkedinMatch.confidence === 'medium') summary.medium++;
+    else summary.low++;
+  }
+
+  return { results, summary };
+}

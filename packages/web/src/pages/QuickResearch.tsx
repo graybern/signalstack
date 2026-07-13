@@ -100,10 +100,20 @@ function normalizeDomain(input: string): string {
 }
 
 const DOMAIN_COLUMN_NAMES = ['domain', 'website', 'url', 'company_domain', 'site', 'web'];
+const LINKEDIN_COLUMN_NAMES = ['linkedin', 'linkedin_url', 'linkedin_company_url', 'linkedin_page', 'company_linkedin'];
 
 function detectDomainColumn(headers: string[]): string | null {
   const lower = headers.map(h => h.toLowerCase().trim());
   for (const name of DOMAIN_COLUMN_NAMES) {
+    const idx = lower.indexOf(name);
+    if (idx !== -1) return headers[idx];
+  }
+  return null;
+}
+
+function detectLinkedinColumn(headers: string[]): string | null {
+  const lower = headers.map(h => h.toLowerCase().trim());
+  for (const name of LINKEDIN_COLUMN_NAMES) {
     const idx = lower.indexOf(name);
     if (idx !== -1) return headers[idx];
   }
@@ -153,6 +163,15 @@ export function QuickResearch() {
   const [expandedBatchId, setExpandedBatchId] = useState<string | null>(null);
   const [resumingId, setResumingId] = useState<string | null>(null);
 
+  // LinkedIn pre-flight state (single domain)
+  const [preflightLoading, setPreflightLoading] = useState(false);
+  const [preflightResult, setPreflightResult] = useState<{ url: string | null; confidence: string | null; companyName: string } | null>(null);
+
+  // LinkedIn pre-flight state (batch)
+  const [batchPreflight, setBatchPreflight] = useState<Array<{ domain: string; companyName: string; linkedinMatch: { url: string; confidence: string } | null }> | null>(null);
+  const [batchPreflightLoading, setBatchPreflightLoading] = useState(false);
+  const [batchPreflightCsvUrls, setBatchPreflightCsvUrls] = useState<Record<string, string> | null>(null);
+
   // Batch mode state
   const [batchText, setBatchText] = useState('');
   const [csvFile, setCsvFile] = useState<File | null>(null);
@@ -160,6 +179,7 @@ export function QuickResearch() {
   const [csvRows, setCsvRows] = useState<string[][]>([]);
   const [domainColumn, setDomainColumn] = useState<string | null>(null);
   const [dragActive, setDragActive] = useState(false);
+  const [linkedinColumn, setLinkedinColumn] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   // Priority selection state (for >50 domains)
@@ -392,6 +412,7 @@ export function QuickResearch() {
       setCsvRows(dataRows);
       const detected = detectDomainColumn(headers);
       setDomainColumn(detected);
+      setLinkedinColumn(detectLinkedinColumn(headers));
       if (!detected) {
         setError('Could not auto-detect domain column. Please select one.');
       }
@@ -404,18 +425,21 @@ export function QuickResearch() {
     setCsvHeaders([]);
     setCsvRows([]);
     setDomainColumn(null);
+    setLinkedinColumn(null);
     setShowPrioritySelector(false);
     setSelectedDomains([]);
   }
 
   // Parse batch domains from text or CSV
-  function getParsedDomains(): { domains: string[]; csvContext: CSVContext | null } {
+  function getParsedDomains(): { domains: string[]; csvContext: CSVContext | null; csvLinkedinUrls: Record<string, string> | null } {
     if (csvFile && csvHeaders.length > 0 && domainColumn) {
       const colIdx = csvHeaders.indexOf(domainColumn);
-      if (colIdx === -1) return { domains: [], csvContext: null };
+      if (colIdx === -1) return { domains: [], csvContext: null, csvLinkedinUrls: null };
 
+      const liColIdx = linkedinColumn ? csvHeaders.indexOf(linkedinColumn) : -1;
       const domains: string[] = [];
       const rows: Record<string, Record<string, string>> = {};
+      const csvLinkedinUrls: Record<string, string> = {};
       for (const row of csvRows) {
         const raw = row[colIdx];
         if (!raw) continue;
@@ -425,34 +449,33 @@ export function QuickResearch() {
           const rowData: Record<string, string> = {};
           csvHeaders.forEach((h, i) => { rowData[h] = row[i] || ''; });
           rows[norm] = rowData;
+          if (liColIdx >= 0 && row[liColIdx]?.trim()) {
+            const liUrl = row[liColIdx].trim();
+            if (/linkedin\.com\/company\//i.test(liUrl)) {
+              csvLinkedinUrls[norm] = liUrl;
+            }
+          }
         }
       }
-      return { domains, csvContext: { headers: csvHeaders, rows, domain_column: domainColumn || undefined } };
+      return {
+        domains,
+        csvContext: { headers: csvHeaders, rows, domain_column: domainColumn || undefined },
+        csvLinkedinUrls: Object.keys(csvLinkedinUrls).length > 0 ? csvLinkedinUrls : null,
+      };
     }
 
     // Text mode: split on commas, newlines, semicolons, spaces
     const raw = batchText.split(/[,;\n\r]+/).map(s => s.trim()).filter(Boolean);
     const domains = raw.map(normalizeDomain).filter(d => d && d.includes('.'));
-    return { domains, csvContext: null };
+    return { domains, csvContext: null, csvLinkedinUrls: null };
   }
 
-  const parsedBatch = mode === 'batch' ? getParsedDomains() : { domains: [], csvContext: null };
+  const parsedBatch = mode === 'batch' ? getParsedDomains() : { domains: [] as string[], csvContext: null, csvLinkedinUrls: null };
   const uniqueBatchDomains = [...new Set(parsedBatch.domains)];
   const batchDuplicates = parsedBatch.domains.length - uniqueBatchDomains.length;
 
-  // Single domain submit
-  const handleSingleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const normalized = normalizeDomain(domain);
-    if (!normalized || !normalized.includes('.')) {
-      setError('Enter a valid domain (e.g. workday.com)');
-      return;
-    }
-    if (!campaignId) {
-      setError('Select a campaign');
-      return;
-    }
-
+  // Actually submit single domain research (shared by direct and post-preflight flows)
+  const doSingleSubmit = async (normalized: string, liUrl?: string) => {
     setSubmitting(true);
     setError('');
     setActive(null);
@@ -463,7 +486,8 @@ export function QuickResearch() {
     try {
       const payload: any = { domain: normalized, campaign_id: campaignId };
       if (context.trim()) payload.context = context.trim();
-      if (linkedinUrl.trim()) payload.linkedin_url = linkedinUrl.trim();
+      const effectiveLi = liUrl ?? linkedinUrl.trim();
+      if (effectiveLi) payload.linkedin_url = effectiveLi;
       if (employeeHint && Number(employeeHint) > 0) payload.employee_count_hint = Number(employeeHint);
       const result = await api('/research', {
         method: 'POST',
@@ -484,6 +508,7 @@ export function QuickResearch() {
       setLinkedinUrl('');
       setEmployeeHint('');
       setShowMoreOptions(false);
+      setPreflightResult(null);
     } catch (err: any) {
       setError(err.message || 'Failed to start research');
     } finally {
@@ -491,25 +516,12 @@ export function QuickResearch() {
     }
   };
 
-  // Batch submit — handles both direct submit (<=50) and priority-selected submit
-  const handleBatchSubmit = async (e: React.FormEvent) => {
+  // Single domain submit — runs LinkedIn preflight first
+  const handleSingleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-
-    // If >50 domains and priority selector not yet shown, show it
-    if (uniqueBatchDomains.length > MAX_BATCH_SIZE && !showPrioritySelector) {
-      setShowPrioritySelector(true);
-      setSelectedDomains(uniqueBatchDomains.slice(0, MAX_BATCH_SIZE));
-      return;
-    }
-
-    const domainsToSubmit = showPrioritySelector ? selectedDomains : uniqueBatchDomains;
-
-    if (domainsToSubmit.length === 0) {
-      setError('Select at least one domain to research');
-      return;
-    }
-    if (domainsToSubmit.length > MAX_BATCH_SIZE) {
-      setError(`Maximum ${MAX_BATCH_SIZE} domains per batch. Please deselect some.`);
+    const normalized = normalizeDomain(domain);
+    if (!normalized || !normalized.includes('.')) {
+      setError('Enter a valid domain (e.g. workday.com)');
       return;
     }
     if (!campaignId) {
@@ -517,6 +529,45 @@ export function QuickResearch() {
       return;
     }
 
+    // Skip preflight if user already provided a LinkedIn URL
+    if (linkedinUrl.trim()) {
+      await doSingleSubmit(normalized);
+      return;
+    }
+
+    // Run LinkedIn preflight
+    setPreflightLoading(true);
+    setError('');
+    try {
+      const pf = await api<any>('/research/linkedin-preflight', {
+        method: 'POST',
+        body: JSON.stringify({ domains: [normalized] }),
+      });
+      const match = pf.results?.[0];
+      if (match?.linkedinMatch?.confidence === 'high') {
+        // Auto-proceed with the discovered URL
+        await doSingleSubmit(normalized, match.linkedinMatch.url);
+      } else {
+        // Show confirmation panel
+        setPreflightResult({
+          url: match?.linkedinMatch?.url || null,
+          confidence: match?.linkedinMatch?.confidence || null,
+          companyName: match?.companyName || normalized,
+        });
+        if (match?.linkedinMatch?.url) {
+          setLinkedinUrl(match.linkedinMatch.url);
+        }
+      }
+    } catch {
+      // Preflight failed — proceed without it
+      await doSingleSubmit(normalized);
+    } finally {
+      setPreflightLoading(false);
+    }
+  };
+
+  // Actually submit batch research (shared by direct and post-gate flows)
+  const doBatchSubmit = async (domainsToSubmit: string[], linkedinUrls?: Record<string, string>) => {
     setSubmitting(true);
     setError('');
     setActive(null);
@@ -524,8 +575,6 @@ export function QuickResearch() {
 
     const campaign = campaigns.find(c => c.id === campaignId);
 
-    // Build csv_context scoped to selected domains only
-    // Fall back to remainingCsvContext for subsequent batches after CSV file is cleared
     let sourceCsvContext = parsedBatch.csvContext || remainingCsvContext;
     let scopedCsvContext = sourceCsvContext;
     if (scopedCsvContext && showPrioritySelector) {
@@ -545,13 +594,13 @@ export function QuickResearch() {
       if (scopedCsvContext) body.csv_context = scopedCsvContext;
       if (forceBrief) body.force_brief = true;
       if (scoreOnly) body.score_only = true;
+      if (linkedinUrls && Object.keys(linkedinUrls).length > 0) body.linkedin_urls = linkedinUrls;
 
       const result = await api('/research/batch', {
         method: 'POST',
         body: JSON.stringify(body),
       });
 
-      // Stash remaining domains for next batch
       if (showPrioritySelector) {
         const submittedSet = new Set(domainsToSubmit);
         const remaining = uniqueBatchDomains.filter(d => !submittedSet.has(d));
@@ -581,10 +630,56 @@ export function QuickResearch() {
       setContext('');
       setShowPrioritySelector(false);
       setSelectedDomains([]);
+      setBatchPreflight(null);
+      setBatchPreflightCsvUrls(null);
     } catch (err: any) {
       setError(err.message || 'Failed to start batch research');
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  // Batch submit — runs LinkedIn preflight first, then shows gate
+  const handleBatchSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    // If >50 domains and priority selector not yet shown, show it
+    if (uniqueBatchDomains.length > MAX_BATCH_SIZE && !showPrioritySelector) {
+      setShowPrioritySelector(true);
+      setSelectedDomains(uniqueBatchDomains.slice(0, MAX_BATCH_SIZE));
+      return;
+    }
+
+    const domainsToSubmit = showPrioritySelector ? selectedDomains : uniqueBatchDomains;
+
+    if (domainsToSubmit.length === 0) {
+      setError('Select at least one domain to research');
+      return;
+    }
+    if (domainsToSubmit.length > MAX_BATCH_SIZE) {
+      setError(`Maximum ${MAX_BATCH_SIZE} domains per batch. Please deselect some.`);
+      return;
+    }
+    if (!campaignId) {
+      setError('Select a campaign');
+      return;
+    }
+
+    // Run LinkedIn preflight
+    setBatchPreflightLoading(true);
+    setError('');
+    try {
+      const pf = await api<any>('/research/linkedin-preflight', {
+        method: 'POST',
+        body: JSON.stringify({ domains: domainsToSubmit }),
+      });
+      setBatchPreflight(pf.results || []);
+      setBatchPreflightCsvUrls(parsedBatch.csvLinkedinUrls || null);
+    } catch {
+      // Preflight failed — submit directly without gate
+      await doBatchSubmit(domainsToSubmit);
+    } finally {
+      setBatchPreflightLoading(false);
     }
   };
 
@@ -631,7 +726,7 @@ export function QuickResearch() {
       <div className="bg-white rounded-xl border border-gray-200 p-6 mb-6">
         <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-1 w-fit mb-5">
           <button
-            onClick={() => { setMode('single'); setError(''); }}
+            onClick={() => { setMode('single'); setScoreOnly(false); setError(''); }}
             className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
               mode === 'single' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
             }`}
@@ -640,7 +735,7 @@ export function QuickResearch() {
             Single Domain
           </button>
           <button
-            onClick={() => { setMode('batch'); setError(''); }}
+            onClick={() => { setMode('batch'); setScoreOnly(true); setForceBrief(false); setError(''); }}
             className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
               mode === 'batch' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
             }`}
@@ -690,13 +785,73 @@ export function QuickResearch() {
               </div>
               <button
                 type="submit"
-                disabled={submitting || !domain.trim() || !campaignId}
+                disabled={submitting || preflightLoading || !domain.trim() || !campaignId || !!preflightResult}
                 className="flex items-center gap-2 px-5 py-2 bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed font-medium transition-colors"
               >
-                {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
-                Research
+                {submitting || preflightLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+                {preflightLoading ? 'Checking LinkedIn...' : 'Research'}
               </button>
             </div>
+
+            {/* LinkedIn preflight confirmation panel */}
+            {preflightResult && (
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 space-y-3">
+                <div className="flex items-center gap-2">
+                  <Linkedin className="w-4 h-4 text-amber-600" />
+                  <span className="text-sm font-medium text-amber-800">
+                    {preflightResult.url ? 'Confirm LinkedIn page' : 'LinkedIn page not found'}
+                  </span>
+                  {preflightResult.confidence && (
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
+                      preflightResult.confidence === 'medium' ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'
+                    }`}>
+                      {preflightResult.confidence === 'medium' ? 'Uncertain Match' : 'Weak Match'}
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-amber-700">
+                  {preflightResult.url
+                    ? `We found a LinkedIn page for "${preflightResult.companyName}" but aren't sure it's correct. Please verify or paste the right URL.`
+                    : `We couldn't find a LinkedIn page for "${preflightResult.companyName}". You can paste one below or continue without it.`
+                  }
+                </p>
+                <div className="flex items-center gap-2">
+                  <div className="relative flex-1">
+                    <Linkedin className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                    <input
+                      type="text"
+                      value={linkedinUrl}
+                      onChange={e => setLinkedinUrl(e.target.value)}
+                      placeholder="Paste LinkedIn company page URL"
+                      className="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent text-sm"
+                    />
+                  </div>
+                  {linkedinUrl && (
+                    <a href={linkedinUrl} target="_blank" rel="noopener noreferrer" className="p-2 text-gray-400 hover:text-brand-600">
+                      <ExternalLink className="w-4 h-4" />
+                    </a>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => doSingleSubmit(normalizeDomain(domain)!, linkedinUrl.trim() || undefined)}
+                    disabled={submitting}
+                    className="flex items-center gap-2 px-4 py-2 bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50 font-medium text-sm transition-colors"
+                  >
+                    {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+                    {linkedinUrl.trim() ? 'Continue with this URL' : 'Continue without LinkedIn'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setPreflightResult(null); setLinkedinUrl(''); }}
+                    className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Additional Context <span className="font-normal text-gray-400">(optional)</span></label>
               <textarea
@@ -850,6 +1005,12 @@ export function QuickResearch() {
                           {batchDuplicates > 0 && `, ${batchDuplicates} duplicate${batchDuplicates !== 1 ? 's' : ''} removed`}
                         </span>
                       )}
+                      {linkedinColumn && (
+                        <span className="text-xs text-emerald-600 flex items-center gap-1">
+                          <Linkedin className="w-3 h-3" />
+                          LinkedIn URLs detected in "{linkedinColumn}"
+                        </span>
+                      )}
                     </div>
                     {csvHeaders.filter(h => h.toLowerCase() !== domainColumn?.toLowerCase()).length > 0 && domainColumn && (
                       <p className="text-xs text-blue-500 mt-1.5">
@@ -922,15 +1083,17 @@ export function QuickResearch() {
               </div>
               <button
                 type="submit"
-                disabled={submitting || (showPrioritySelector ? selectedDomains.length === 0 : uniqueBatchDomains.length === 0) || !campaignId || (csvFile != null && !domainColumn)}
+                disabled={submitting || batchPreflightLoading || (showPrioritySelector ? selectedDomains.length === 0 : uniqueBatchDomains.length === 0) || !campaignId || (csvFile != null && !domainColumn)}
                 className="flex items-center gap-2 px-5 py-2 bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed font-medium transition-colors"
               >
-                {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
-                {showPrioritySelector
-                  ? `Research ${selectedDomains.length} of ${uniqueBatchDomains.length} Domains`
-                  : uniqueBatchDomains.length > MAX_BATCH_SIZE
-                    ? `Select Priority (${uniqueBatchDomains.length} domains)`
-                    : `Research ${uniqueBatchDomains.length > 0 ? `${uniqueBatchDomains.length} Domain${uniqueBatchDomains.length !== 1 ? 's' : ''}` : ''}`
+                {submitting || batchPreflightLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+                {batchPreflightLoading
+                  ? 'Checking LinkedIn...'
+                  : showPrioritySelector
+                    ? `Research ${selectedDomains.length} of ${uniqueBatchDomains.length} Domains`
+                    : uniqueBatchDomains.length > MAX_BATCH_SIZE
+                      ? `Select Priority (${uniqueBatchDomains.length} domains)`
+                      : `Research ${uniqueBatchDomains.length > 0 ? `${uniqueBatchDomains.length} Domain${uniqueBatchDomains.length !== 1 ? 's' : ''}` : ''}`
                 }
               </button>
             </div>
@@ -990,6 +1153,20 @@ export function QuickResearch() {
           </form>
         )}
       </div>
+
+      {/* Batch LinkedIn Gate */}
+      {batchPreflight && !active && (
+        <BatchLinkedinGate
+          results={batchPreflight}
+          csvLinkedinUrls={batchPreflightCsvUrls}
+          onConfirm={(urls) => {
+            const domainsToSubmit = batchPreflight.map(r => r.domain);
+            doBatchSubmit(domainsToSubmit, urls);
+          }}
+          onCancel={() => { setBatchPreflight(null); setBatchPreflightCsvUrls(null); }}
+          submitting={submitting}
+        />
+      )}
 
       {/* Active Research Status */}
       {active && active.mode === 'single' && (
@@ -1102,6 +1279,177 @@ export function QuickResearch() {
   );
 }
 
+// ── Batch LinkedIn Gate ─────────────────────────────────────────
+
+const GATE_CONFIDENCE_STYLES: Record<string, { bg: string; text: string; label: string }> = {
+  high: { bg: 'bg-emerald-100', text: 'text-emerald-700', label: 'High' },
+  medium: { bg: 'bg-amber-100', text: 'text-amber-700', label: 'Uncertain' },
+  low: { bg: 'bg-red-100', text: 'text-red-700', label: 'Weak' },
+  csv: { bg: 'bg-blue-100', text: 'text-blue-700', label: 'From CSV' },
+  user: { bg: 'bg-purple-100', text: 'text-purple-700', label: 'Edited' },
+};
+
+function BatchLinkedinGate({ results, csvLinkedinUrls, onConfirm, onCancel, submitting }: {
+  results: Array<{ domain: string; companyName: string; linkedinMatch: { url: string; confidence: string } | null }>;
+  csvLinkedinUrls?: Record<string, string> | null;
+  onConfirm: (urls: Record<string, string>) => void;
+  onCancel: () => void;
+  submitting: boolean;
+}) {
+  const [edits, setEdits] = useState<Record<string, string>>({});
+  const [filter, setFilter] = useState<'all' | 'needs_fix' | 'high'>('needs_fix');
+
+  // Initialize edits from preflight results + CSV URLs
+  useEffect(() => {
+    const initial: Record<string, string> = {};
+    for (const r of results) {
+      const csvUrl = csvLinkedinUrls?.[r.domain];
+      if (csvUrl) {
+        initial[r.domain] = csvUrl;
+      } else if (r.linkedinMatch?.url) {
+        initial[r.domain] = r.linkedinMatch.url;
+      }
+    }
+    setEdits(initial);
+  }, [results, csvLinkedinUrls]);
+
+  const getConfidence = (r: typeof results[0]) => {
+    const edited = edits[r.domain];
+    const original = csvLinkedinUrls?.[r.domain] || r.linkedinMatch?.url;
+    if (edited && edited !== original) return 'user';
+    if (csvLinkedinUrls?.[r.domain]) return 'csv';
+    return r.linkedinMatch?.confidence || null;
+  };
+
+  const filtered = results.filter(r => {
+    if (filter === 'all') return true;
+    const conf = getConfidence(r);
+    if (filter === 'high') return conf === 'high' || conf === 'csv' || conf === 'user';
+    return !conf || conf === 'medium' || conf === 'low';
+  });
+
+  const needsFixCount = results.filter(r => {
+    const conf = getConfidence(r);
+    return !conf || conf === 'medium' || conf === 'low';
+  }).length;
+
+  const handleConfirm = () => {
+    const urls: Record<string, string> = {};
+    for (const [domain, url] of Object.entries(edits)) {
+      if (url.trim() && /linkedin\.com\/company\//i.test(url)) {
+        urls[domain] = url.trim();
+      }
+    }
+    onConfirm(urls);
+  };
+
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 mb-6 overflow-hidden">
+      <div className="px-4 py-3 bg-blue-50 border-b border-blue-100">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Linkedin className="w-4 h-4 text-blue-600" />
+            <span className="text-sm font-medium text-blue-800">Confirm LinkedIn Pages</span>
+            <span className="text-xs text-blue-600">{results.length} domains</span>
+          </div>
+          <div className="flex items-center gap-1">
+            {(['all', 'needs_fix', 'high'] as const).map(f => (
+              <button
+                key={f}
+                onClick={() => setFilter(f)}
+                className={`px-2.5 py-1 text-xs rounded-full transition-colors ${
+                  filter === f ? 'bg-blue-600 text-white' : 'bg-white text-blue-700 border border-blue-200 hover:bg-blue-50'
+                }`}
+              >
+                {f === 'all' ? `All (${results.length})` : f === 'needs_fix' ? `Needs Fix (${needsFixCount})` : `OK (${results.length - needsFixCount})`}
+              </button>
+            ))}
+          </div>
+        </div>
+        {needsFixCount > 0 && (
+          <p className="text-xs text-blue-600 mt-1.5">
+            {needsFixCount} {needsFixCount === 1 ? 'domain' : 'domains'} may have incorrect LinkedIn pages. Review and correct before starting research.
+          </p>
+        )}
+      </div>
+
+      <div className="max-h-80 overflow-y-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-gray-50 sticky top-0">
+            <tr>
+              <th className="text-left px-4 py-2 text-xs font-medium text-gray-500">Domain</th>
+              <th className="text-left px-4 py-2 text-xs font-medium text-gray-500 w-16">Match</th>
+              <th className="text-left px-4 py-2 text-xs font-medium text-gray-500">LinkedIn URL</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100">
+            {filtered.map(r => {
+              const conf = getConfidence(r);
+              const style = conf ? GATE_CONFIDENCE_STYLES[conf] : null;
+              return (
+                <tr key={r.domain} className="hover:bg-gray-50">
+                  <td className="px-4 py-2">
+                    <div className="font-medium text-gray-900 text-xs">{r.companyName}</div>
+                    <div className="text-[10px] text-gray-400 font-mono">{r.domain}</div>
+                  </td>
+                  <td className="px-4 py-2">
+                    {style ? (
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${style.bg} ${style.text}`}>
+                        {style.label}
+                      </span>
+                    ) : (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-gray-100 text-gray-500">
+                        Not Found
+                      </span>
+                    )}
+                  </td>
+                  <td className="px-4 py-2">
+                    <div className="flex items-center gap-1">
+                      <input
+                        type="text"
+                        value={edits[r.domain] || ''}
+                        onChange={e => setEdits(prev => ({ ...prev, [r.domain]: e.target.value }))}
+                        placeholder="Paste LinkedIn company page URL"
+                        className={`flex-1 px-2 py-1 text-xs border rounded focus:outline-none focus:ring-1 focus:ring-brand-500 ${
+                          edits[r.domain] && !/linkedin\.com\/company\//i.test(edits[r.domain])
+                            ? 'border-red-300 bg-red-50'
+                            : 'border-gray-200'
+                        }`}
+                      />
+                      {edits[r.domain] && /linkedin\.com/i.test(edits[r.domain]) && (
+                        <a href={edits[r.domain]} target="_blank" rel="noopener noreferrer" className="text-gray-400 hover:text-brand-600 shrink-0">
+                          <ExternalLink className="w-3.5 h-3.5" />
+                        </a>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="px-4 py-3 bg-gray-50 border-t border-gray-200 flex items-center justify-between">
+        <button
+          onClick={onCancel}
+          className="text-sm text-gray-600 hover:text-gray-800 transition-colors"
+        >
+          Cancel
+        </button>
+        <button
+          onClick={handleConfirm}
+          disabled={submitting}
+          className="flex items-center gap-2 px-5 py-2 bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50 font-medium text-sm transition-colors"
+        >
+          {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+          Start Research ({results.length} {results.length === 1 ? 'domain' : 'domains'})
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ── Single Active Research Panel ─────────────────────────────────
 
 function SingleActivePanel({ active, showLog, setShowLog, phaseLabels, onRetry, retrying }: {
@@ -1193,6 +1541,21 @@ function BatchActivePanel({ active, showLog, setShowLog, phaseLabels, onRetry, r
   const completedCount = hasPhaseProgress ? active.phaseProgress! : domainCompleted;
   const progressTotal = hasPhaseProgress ? active.phaseTotal! : totalDomains;
   const progressPct = progressTotal > 0 ? Math.round((completedCount / progressTotal) * 100) : 0;
+
+  const [linkedinReviewCount, setLinkedinReviewCount] = useState<{ low: number; total: number } | null>(null);
+  useEffect(() => {
+    if (active.status === 'completed' && active.runId) {
+      api<any>(`/runs/${active.runId}`)
+        .then(data => {
+          if (data.linkedin_summary) {
+            const s = data.linkedin_summary;
+            const needsReview = s.low + s.none;
+            if (needsReview > 0) setLinkedinReviewCount({ low: needsReview, total: s.total });
+          }
+        })
+        .catch(() => {});
+    }
+  }, [active.status, active.runId]);
 
   return (
     <div className={`rounded-xl border mb-6 overflow-hidden ${
@@ -1325,6 +1688,19 @@ function BatchActivePanel({ active, showLog, setShowLog, phaseLabels, onRetry, r
                 );
               })}
             </div>
+          </div>
+        )}
+      {linkedinReviewCount && active.runId && (
+          <div className="mt-3 flex items-center justify-between px-3 py-2.5 bg-amber-100/80 border border-amber-200 rounded-lg">
+            <span className="text-xs text-amber-800">
+              {linkedinReviewCount.low} of {linkedinReviewCount.total} leads may have incorrect LinkedIn pages
+            </span>
+            <Link
+              to={`/runs/${active.runId}?linkedin=1`}
+              className="text-xs font-semibold text-amber-700 hover:text-amber-900 flex items-center gap-1"
+            >
+              Review & Fix <ArrowRight className="w-3 h-3" />
+            </Link>
           </div>
         )}
       </div>

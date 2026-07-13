@@ -87,9 +87,38 @@ router.post('/', authenticate, requirePermission('research:execute'), async (req
   });
 });
 
+// LinkedIn pre-flight — lightweight lookup before pipeline
+router.post('/linkedin-preflight', authenticate, requirePermission('research:execute'), async (req: AuthRequest, res: Response) => {
+  const { domains } = req.body;
+  if (!Array.isArray(domains) || domains.length === 0) {
+    return res.status(400).json({ error: 'domains (array) is required' });
+  }
+  if (domains.length > 500) {
+    return res.status(400).json({ error: 'Maximum 500 domains per preflight' });
+  }
+
+  const seen = new Set<string>();
+  const inputs: Array<{ domain: string }> = [];
+  for (const d of domains) {
+    const norm = String(d).toLowerCase().replace(/^(https?:\/\/)?(www\.)?/, '').replace(/\/.*$/, '').trim();
+    if (norm && norm.includes('.') && !seen.has(norm)) {
+      seen.add(norm);
+      inputs.push({ domain: norm });
+    }
+  }
+
+  if (inputs.length === 0) {
+    return res.status(400).json({ error: 'No valid domains found after normalization' });
+  }
+
+  const { linkedinPreflight } = await import('../agent/enrichment/service.js');
+  const result = await linkedinPreflight(inputs);
+  res.json(result);
+});
+
 // Batch research — multiple domains at once
 router.post('/batch', authenticate, requirePermission('research:execute'), async (req: AuthRequest, res: Response) => {
-  const { domains, campaign_id, context, csv_context, force_brief, score_only } = req.body;
+  const { domains, campaign_id, context, csv_context, force_brief, score_only, linkedin_urls } = req.body;
   if (!Array.isArray(domains) || domains.length === 0 || !campaign_id) {
     return res.status(400).json({ error: 'domains (array) and campaign_id are required' });
   }
@@ -180,6 +209,17 @@ router.post('/batch', authenticate, requirePermission('research:execute'), async
       existing.notes = existing.notes ? `${header}\n\n${existing.notes}` : header;
       db.prepare('UPDATE leads SET candidate_data = ? WHERE id = ?')
         .run(JSON.stringify(existing), lead.id);
+    }
+
+    // Apply pre-confirmed LinkedIn URL from preflight
+    if (linkedin_urls && typeof linkedin_urls === 'object') {
+      const liUrl = linkedin_urls[domain];
+      if (liUrl?.trim()) {
+        const normalizedLi = String(liUrl).trim().replace(/^(https?:\/\/)?(www\.)?/, 'https://www.');
+        if (/linkedin\.com\/company\//i.test(normalizedLi)) {
+          db.prepare('UPDATE leads SET linkedin_company_url = ? WHERE id = ?').run(normalizedLi, lead.id);
+        }
+      }
     }
 
     leadIds.push(lead.id);

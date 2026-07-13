@@ -365,11 +365,11 @@ router.delete('/saved-filters/:filterId', authenticate, (req: AuthRequest, res: 
   res.json({ success: true });
 });
 
-router.post('/bulk-action', authenticate, requireMember, (req: AuthRequest, res: Response) => {
+router.post('/bulk-action', authenticate, requireMember, async (req: AuthRequest, res: Response) => {
   const { lead_ids, filter, action, params: actionParams } = req.body;
   if (!action) return res.status(400).json({ error: 'action is required' });
 
-  const validActions = ['add_to_watchlist', 'update_feedback', 'export'];
+  const validActions = ['add_to_watchlist', 'update_feedback', 'export', 'update_linkedin_urls'];
   if (!validActions.includes(action)) {
     return res.status(400).json({ error: `action must be one of: ${validActions.join(', ')}` });
   }
@@ -384,6 +384,8 @@ router.post('/bulk-action', authenticate, requireMember, (req: AuthRequest, res:
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
     const rows = db.prepare(`SELECT l.id FROM leads l ${where}`).all(...params) as { id: string }[];
     targetIds = rows.map(r => r.id);
+  } else if (action === 'update_linkedin_urls' && actionParams?.urls && typeof actionParams.urls === 'object') {
+    targetIds = Object.keys(actionParams.urls);
   } else {
     return res.status(400).json({ error: 'Either lead_ids or filter is required' });
   }
@@ -499,6 +501,114 @@ router.post('/bulk-action', authenticate, requireMember, (req: AuthRequest, res:
       res.setHeader('Content-Type', 'text/csv');
       res.setHeader('Content-Disposition', `attachment; filename="leads-bulk-export-${new Date().toISOString().slice(0, 10)}.csv"`);
       return res.send([header, ...rows].join('\n'));
+    }
+
+    case 'update_linkedin_urls': {
+      if (!actionParams?.urls || typeof actionParams.urls !== 'object') {
+        return res.status(400).json({ error: 'params.urls is required as Record<lead_id, url_string>' });
+      }
+      const urlMap = actionParams.urls as Record<string, string>;
+      const urlLeadIds = Object.keys(urlMap);
+      if (urlLeadIds.length === 0) {
+        return res.status(400).json({ error: 'params.urls must contain at least one entry' });
+      }
+
+      const errors: Array<{ lead_id: string; error: string }> = [];
+      const normalized: Array<{ leadId: string; url: string; slug: string }> = [];
+
+      for (const [leadId, url] of Object.entries(urlMap)) {
+        const slugMatch = url.match(/linkedin\.com\/company\/([a-zA-Z0-9_-]+)/);
+        if (!slugMatch) {
+          errors.push({ lead_id: leadId, error: 'Invalid LinkedIn company URL format' });
+          continue;
+        }
+        normalized.push({ leadId, url: `https://www.linkedin.com/company/${slugMatch[1]}`, slug: slugMatch[1] });
+      }
+
+      let updated = 0;
+      let enriched = 0;
+
+      try {
+        const { enrichFromLinkedIn } = await import('../agent/enrichment/service.js');
+
+        for (const { leadId, url } of normalized) {
+          const lead = db.prepare(
+            'SELECT id, company_name, linkedin_company_url, enrichment_metadata FROM leads WHERE id = ?'
+          ).get(leadId) as any;
+          if (!lead) {
+            errors.push({ lead_id: leadId, error: 'Lead not found' });
+            continue;
+          }
+
+          let metadata: EnrichmentMetadata;
+          try {
+            metadata = lead.enrichment_metadata ? JSON.parse(lead.enrichment_metadata) : {
+              sources_responded: [], sources_failed: [], sources_available: [],
+              field_completeness: { employee_count: false, hq_location: false, founded_year: false, funding_stage: false, website: false, linkedin_url: false },
+              field_sources: {}, corroboration_count: 0,
+            };
+          } catch {
+            metadata = {
+              sources_responded: [], sources_failed: [], sources_available: [],
+              field_completeness: { employee_count: false, hq_location: false, founded_year: false, funding_stage: false, website: false, linkedin_url: false },
+              field_sources: {}, corroboration_count: 0,
+            };
+          }
+
+          try {
+            const { enrichment, linkedinMatch } = await enrichFromLinkedIn(lead.company_name, url, true);
+            metadata.linkedin_match = linkedinMatch;
+            metadata.field_completeness.linkedin_url = true;
+
+            db.prepare(`
+              UPDATE leads SET
+                linkedin_company_url = ?,
+                hq_location = COALESCE(?, hq_location),
+                founded_year = COALESCE(?, founded_year),
+                employee_count = COALESCE(?, employee_count),
+                enrichment_metadata = ?,
+                updated_at = datetime('now')
+              WHERE id = ?
+            `).run(
+              url,
+              enrichment.hq_location ?? null,
+              enrichment.founded_year ?? null,
+              enrichment.employee_count ?? null,
+              JSON.stringify(metadata),
+              leadId,
+            );
+            enriched++;
+          } catch (enrichErr: any) {
+            metadata.linkedin_match = {
+              url,
+              slug: url.match(/company\/([a-zA-Z0-9_-]+)/)?.[1] || '',
+              contributing_sources: ['user'],
+              confidence: 'high' as const,
+              slug_matches_name: false,
+              page_company_name: null,
+              validated_at: new Date().toISOString(),
+              user_corrected: true,
+            };
+            metadata.field_completeness.linkedin_url = true;
+
+            db.prepare(`
+              UPDATE leads SET
+                linkedin_company_url = ?,
+                enrichment_metadata = ?,
+                updated_at = datetime('now')
+              WHERE id = ?
+            `).run(url, JSON.stringify(metadata), leadId);
+
+            errors.push({ lead_id: leadId, error: `URL saved but re-enrichment failed: ${enrichErr.message}` });
+          }
+          updated++;
+        }
+      } catch (err: any) {
+        return res.status(500).json({ error: `LinkedIn bulk update failed: ${err.message}` });
+      }
+
+      result = { updated, enriched, errors: errors.length > 0 ? errors : undefined };
+      break;
     }
   }
 

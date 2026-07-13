@@ -178,6 +178,7 @@ router.get('/:id', authenticate, (req: AuthRequest, res: Response) => {
           `SELECT id, company_name, domain, segment, fit_score, fit_score_label,
                   confidence, employee_count, hq_location, lead_status, current_feedback,
                   potential_score, urgency_score, evidence_modifier, scoring_version, why_now,
+                  linkedin_company_url, enrichment_metadata,
                   created_at
            FROM leads WHERE id IN (${placeholders}) ORDER BY fit_score DESC`
         ).all(...ids);
@@ -192,12 +193,36 @@ router.get('/:id', authenticate, (req: AuthRequest, res: Response) => {
       `SELECT id, company_name, domain, segment, fit_score, fit_score_label,
               confidence, employee_count, hq_location, lead_status, current_feedback,
               potential_score, urgency_score, evidence_modifier, scoring_version, why_now,
+              linkedin_company_url, enrichment_metadata,
               created_at
        FROM leads WHERE run_id = ? ORDER BY fit_score DESC`
     ).all(req.params.id);
   }
 
-  res.json({ run, leads });
+  const linkedin_summary = { total: leads.length, high: 0, medium: 0, low: 0, none: 0, user_corrected: 0 };
+  for (const lead of leads as any[]) {
+    if (lead.enrichment_metadata) {
+      try {
+        const meta = JSON.parse(lead.enrichment_metadata);
+        const match = meta.linkedin_match;
+        if (match) {
+          if (match.user_corrected) linkedin_summary.user_corrected++;
+          if (match.confidence === 'high') linkedin_summary.high++;
+          else if (match.confidence === 'medium') linkedin_summary.medium++;
+          else if (match.confidence === 'low') linkedin_summary.low++;
+          else linkedin_summary.none++;
+        } else {
+          linkedin_summary.none++;
+        }
+      } catch {
+        linkedin_summary.none++;
+      }
+    } else {
+      linkedin_summary.none++;
+    }
+  }
+
+  res.json({ run, leads, linkedin_summary });
 });
 
 // ── GET /:id/activity — Activity log entries for a run ──────

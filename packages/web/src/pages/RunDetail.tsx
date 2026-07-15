@@ -6,7 +6,7 @@ import {
   ArrowLeft, CheckCircle2, XCircle, Clock, Loader2,
   Users, TrendingUp, DollarSign, Target, ExternalLink, Download,
   ChevronDown, ChevronUp, Trash2, AlertTriangle, PlayCircle,
-  Pencil, Check, X, Link as LinkIcon,
+  Pencil, Check, X, Link as LinkIcon, RefreshCw,
 } from 'lucide-react';
 import { ScoreBadge, SegmentBadge } from '../components/ScoreBadge';
 import { ActivityPanel } from '../components/ActivityPanel';
@@ -126,6 +126,10 @@ export function RunDetail() {
   const [linkedinSaving, setLinkedinSaving] = useState(false);
   const [linkedinFilter, setLinkedinFilter] = useState<'all' | 'needs_review' | 'missing'>('all');
   const [savedLeadIds, setSavedLeadIds] = useState<Set<string>>(new Set());
+  const [linkedinSaveResult, setLinkedinSaveResult] = useState<{ count: number; leadIds: string[] } | null>(null);
+  const [rescoring, setRescoring] = useState(false);
+  const [rescoreRunId, setRescoreRunId] = useState<string | null>(null);
+  const [rescoreComplete, setRescoreComplete] = useState(false);
 
   const canResume = run && (run.status === 'failed' || run.status === 'cancelled') && run.campaign_id && !run.resumed_by_run_id;
 
@@ -266,11 +270,44 @@ export function RunDetail() {
       setLinkedinEdits({});
       setSavedLeadIds(new Set(updatedIds));
       setTimeout(() => setSavedLeadIds(new Set()), 2000);
-      showToast('success', `Updated ${updatedIds.length} LinkedIn URL${updatedIds.length === 1 ? '' : 's'}`);
+      setLinkedinSaveResult({ count: updatedIds.length, leadIds: updatedIds });
+      setRescoreComplete(false);
+      setRescoreRunId(null);
     } catch (err: any) {
       showToast('error', 'Update failed', err.message || undefined);
     } finally {
       setLinkedinSaving(false);
+    }
+  };
+
+  const handleRescore = async () => {
+    if (!linkedinSaveResult || !run?.campaign_id) return;
+    setRescoring(true);
+    try {
+      const result = await api<{ run_id: string }>(`/campaigns/${run.campaign_id}/run`, {
+        method: 'POST',
+        body: JSON.stringify({ steps: ['enrich', 'score', 'brief', 'audit'], lead_ids: linkedinSaveResult.leadIds }),
+      });
+      if (result.run_id) {
+        setRescoreRunId(result.run_id);
+        const pollInterval = setInterval(async () => {
+          try {
+            const runData = await api<any>(`/runs/${result.run_id}`);
+            if (runData.status === 'completed') {
+              clearInterval(pollInterval);
+              setRescoring(false);
+              setRescoreComplete(true);
+            } else if (runData.status === 'failed' || runData.status === 'cancelled') {
+              clearInterval(pollInterval);
+              setRescoring(false);
+              showToast('error', 'Re-score failed', runData.error_message || undefined);
+            }
+          } catch { /* continue polling */ }
+        }, 5000);
+      }
+    } catch (err: any) {
+      setRescoring(false);
+      showToast('error', 'Re-score failed', err.message || undefined);
     }
   };
 
@@ -425,7 +462,7 @@ export function RunDetail() {
             </button>
             {showLeads && (
               <button
-                onClick={() => { setLinkedinMode(!linkedinMode); setLinkedinEdits({}); setLinkedinFilter(needsReviewCount > 0 ? 'needs_review' : 'all'); }}
+                onClick={() => { setLinkedinMode(!linkedinMode); setLinkedinEdits({}); setLinkedinFilter(needsReviewCount > 0 ? 'needs_review' : 'all'); if (linkedinMode) { setLinkedinSaveResult(null); setRescoreComplete(false); } }}
                 className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-all ${
                   linkedinMode
                     ? 'bg-brand-50 border-brand-200 text-brand-700'
@@ -518,6 +555,72 @@ export function RunDetail() {
                   );
                 })}
               </div>
+              {/* Post-save re-score banner */}
+              {linkedinSaveResult && (
+                <div className={`mx-4 my-3 rounded-lg border p-3 flex items-center justify-between ${
+                  rescoreComplete
+                    ? 'bg-emerald-50 border-emerald-200'
+                    : rescoring
+                    ? 'bg-blue-50 border-blue-200'
+                    : 'bg-emerald-50 border-emerald-200'
+                }`}>
+                  <div className="flex items-center gap-2">
+                    {rescoring ? (
+                      <Loader2 className="w-4 h-4 text-blue-600 animate-spin" />
+                    ) : (
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                    )}
+                    <p className="text-sm">
+                      {rescoreComplete ? (
+                        <span className="text-emerald-700">Re-scoring complete — scores updated</span>
+                      ) : rescoring ? (
+                        <span className="text-blue-700">Re-scoring {linkedinSaveResult.count} lead{linkedinSaveResult.count === 1 ? '' : 's'}...</span>
+                      ) : (
+                        <span className="text-emerald-700">
+                          Updated {linkedinSaveResult.count} LinkedIn URL{linkedinSaveResult.count === 1 ? '' : 's'} — company data refreshed
+                        </span>
+                      )}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {rescoreComplete ? (
+                      <button
+                        onClick={() => window.location.reload()}
+                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-emerald-700 bg-white rounded-lg border border-emerald-200 hover:bg-emerald-50 transition-colors"
+                      >
+                        <RefreshCw className="w-3.5 h-3.5" />
+                        Refresh Scores
+                      </button>
+                    ) : rescoring ? (
+                      rescoreRunId && (
+                        <Link
+                          to={`/runs/${rescoreRunId}`}
+                          className="flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-800"
+                        >
+                          View Run <ArrowLeft className="w-3 h-3 rotate-180" />
+                        </Link>
+                      )
+                    ) : (
+                      <>
+                        <button
+                          onClick={handleRescore}
+                          disabled={!run?.campaign_id}
+                          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-brand-600 rounded-lg hover:bg-brand-500 disabled:opacity-50 transition-colors"
+                        >
+                          <RefreshCw className="w-3.5 h-3.5" />
+                          Re-score {linkedinSaveResult.count} Lead{linkedinSaveResult.count === 1 ? '' : 's'}
+                        </button>
+                        <button
+                          onClick={() => setLinkedinSaveResult(null)}
+                          className="p-1 text-gray-400 hover:text-gray-600 rounded"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
               <table className="w-full text-sm">
                 <thead>
                   <tr className="bg-gray-50 border-b border-gray-100">

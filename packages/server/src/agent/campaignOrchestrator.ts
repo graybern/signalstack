@@ -563,7 +563,11 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
         lead_status = excluded.lead_status,
         scorer_thinking = COALESCE(excluded.scorer_thinking, leads.scorer_thinking),
         brief_thinking = COALESCE(excluded.brief_thinking, leads.brief_thinking),
-        linkedin_company_url = COALESCE(excluded.linkedin_company_url, leads.linkedin_company_url),
+        linkedin_company_url = CASE
+          WHEN json_extract(leads.enrichment_metadata, '$.linkedin_match.user_corrected') = 1
+            THEN leads.linkedin_company_url
+          ELSE COALESCE(excluded.linkedin_company_url, leads.linkedin_company_url)
+        END,
         icp_fit_score = COALESCE(excluded.icp_fit_score, leads.icp_fit_score),
         timing_score = COALESCE(excluded.timing_score, leads.timing_score),
         data_confidence = COALESCE(excluded.data_confidence, leads.data_confidence),

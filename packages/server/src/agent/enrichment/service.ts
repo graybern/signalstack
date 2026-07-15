@@ -32,6 +32,7 @@ import { SerperSearchAdapter } from './adapters/serperSearch.js';
 import { LinkedInAdapter } from './adapters/linkedin.js';
 import { getSetting } from '../../routes/icp.js';
 import { getDefaultDataSources } from './types.js';
+import { getDb } from '../../db/schema.js';
 
 // Registry of all available adapters
 const ADAPTERS: Record<string, DataSourceAdapter> = {
@@ -214,6 +215,17 @@ async function enrichSingleCandidate(
   const sourcesFailed: string[] = [];
   const sourcesAvailable = sources.map(s => s.id);
   let discoveredLinkedinUrl = candidate.linkedin_company_url || '';
+  const isUserCorrectedLinkedin = candidate.enrichment_metadata?.linkedin_match?.user_corrected === true;
+
+  // Cross-campaign: inherit user-corrected LinkedIn URLs from other campaigns
+  if (!discoveredLinkedinUrl && !isUserCorrectedLinkedin && candidate.domain) {
+    const crossCampaign = lookupCrossCampaignLinkedIn(candidate.domain);
+    if (crossCampaign) {
+      discoveredLinkedinUrl = crossCampaign.url;
+      candidate.linkedin_company_url = crossCampaign.url;
+      candidate.enrichment_metadata = { ...(candidate.enrichment_metadata || {} as EnrichmentMetadata), linkedin_match: crossCampaign.linkedinMatch };
+    }
+  }
 
   for (const sourceConfig of sources) {
     const adapter = ADAPTERS[sourceConfig.id];
@@ -232,7 +244,7 @@ async function enrichSingleCandidate(
       if (Object.keys(enrichment).length > 0) {
         enrichments.push({ sourceId: sourceConfig.id, data: enrichment });
         sourcesResponded.push(sourceConfig.id);
-        if (enrichment.linkedin_url && !discoveredLinkedinUrl) {
+        if (enrichment.linkedin_url && !discoveredLinkedinUrl && !isUserCorrectedLinkedin) {
           discoveredLinkedinUrl = enrichment.linkedin_url;
         }
       } else {
@@ -256,7 +268,7 @@ async function enrichSingleCandidate(
   const merged = mergeEnrichments(enrichments.map(e => e.data));
 
   let linkedinMatch: LinkedInMatch | undefined;
-  if (discoveredLinkedinUrl) {
+  if (discoveredLinkedinUrl && !isUserCorrectedLinkedin) {
     const slugMatch = discoveredLinkedinUrl.match(/linkedin\.com\/company\/([a-zA-Z0-9_-]+)/);
     if (slugMatch) {
       const linkedinSources: string[] = [];
@@ -276,6 +288,11 @@ async function enrichSingleCandidate(
   const enrichedCandidate = applyCandidateEnrichment(candidate, merged);
   enrichedCandidate.enrichment_source_count = (candidate.enrichment_source_count || 0) + enrichments.length;
   enrichedCandidate.enrichment_metadata = mergeMetadata(candidate.enrichment_metadata, metadata);
+
+  // Restore user-corrected URL if applyCandidateEnrichment overwrote it
+  if (isUserCorrectedLinkedin && candidate.linkedin_company_url) {
+    enrichedCandidate.linkedin_company_url = candidate.linkedin_company_url;
+  }
 
   return { candidate: enrichedCandidate, wasEnriched: true, sourcesHit: enrichments.length };
 }
@@ -415,8 +432,31 @@ function mergeMetadata(existing: EnrichmentMetadata | undefined, incoming: Enric
     field_completeness: merged_completeness,
     field_sources: merged_field_sources,
     corroboration_count: countCorroboration(merged_field_sources),
-    linkedin_match: incoming.linkedin_match || existing.linkedin_match,
+    linkedin_match: existing?.linkedin_match?.user_corrected
+      ? existing.linkedin_match
+      : (incoming.linkedin_match || existing.linkedin_match),
   };
+}
+
+function lookupCrossCampaignLinkedIn(domain: string): { url: string; linkedinMatch: LinkedInMatch } | null {
+  const db = getDb();
+  const row = db.prepare(`
+    SELECT linkedin_company_url, enrichment_metadata
+    FROM leads
+    WHERE domain = ?
+      AND linkedin_company_url IS NOT NULL
+      AND json_extract(enrichment_metadata, '$.linkedin_match.user_corrected') = 1
+    ORDER BY json_extract(enrichment_metadata, '$.linkedin_match.validated_at') DESC
+    LIMIT 1
+  `).get(domain) as any;
+
+  if (!row) return null;
+  try {
+    const metadata = JSON.parse(row.enrichment_metadata);
+    return { url: row.linkedin_company_url, linkedinMatch: metadata.linkedin_match };
+  } catch {
+    return null;
+  }
 }
 
 /**

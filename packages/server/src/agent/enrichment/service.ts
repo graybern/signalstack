@@ -409,11 +409,11 @@ function buildEnrichmentMetadata(
 
 function mergeMetadata(existing: EnrichmentMetadata | undefined, incoming: EnrichmentMetadata): EnrichmentMetadata {
   if (!existing) return incoming;
-  const merged_responded = [...new Set([...existing.sources_responded, ...incoming.sources_responded])];
+  const merged_responded = [...new Set([...(existing.sources_responded || []), ...incoming.sources_responded])];
   // Remove from failed any source that later succeeded
-  const merged_failed = [...new Set([...existing.sources_failed, ...incoming.sources_failed])]
+  const merged_failed = [...new Set([...(existing.sources_failed || []), ...incoming.sources_failed])]
     .filter(s => !merged_responded.includes(s));
-  const merged_available = [...new Set([...existing.sources_available, ...incoming.sources_available])];
+  const merged_available = [...new Set([...(existing.sources_available || []), ...incoming.sources_available])];
 
   const merged_field_sources: Record<string, string[]> = { ...existing.field_sources };
   for (const [field, sources] of Object.entries(incoming.field_sources)) {

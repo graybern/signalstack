@@ -556,7 +556,7 @@ export function computeDataConfidence(fs: FactSheet, enrichMeta?: EnrichmentMeta
   const subScores: SubScore[] = [];
 
   // Source count (0-30): 6pts per source
-  const sourceCount = enrichMeta?.sources_responded.length ?? 0;
+  const sourceCount = enrichMeta?.sources_responded?.length ?? 0;
   let srcScore = Math.min(30, sourceCount * 6);
   const srcEvidence: string[] = [];
   const srcUrls: string[] = [];
@@ -722,8 +722,8 @@ export function computeReachability(fs: FactSheet, enrichMeta?: EnrichmentMetada
 }
 
 export function computeResearchCompleteness(enrichMeta?: EnrichmentMetadata): number {
-  if (!enrichMeta || enrichMeta.sources_available.length === 0) return 0;
-  const checked = enrichMeta.sources_responded.length + enrichMeta.sources_failed.length;
+  if (!enrichMeta || !enrichMeta.sources_available?.length) return 0;
+  const checked = (enrichMeta.sources_responded?.length ?? 0) + (enrichMeta.sources_failed?.length ?? 0);
   return clamp(Math.round((checked / enrichMeta.sources_available.length) * 100), 0, 100);
 }
 

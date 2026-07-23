@@ -63,6 +63,8 @@ interface FunnelStepConfig {
     displacement_signals?: Array<'vpn_detected' | 'competitor_detected' | 'byoc' | 'private_networking' | 'legacy_indicators' | 'distributed_team'>;
     credit_role_fit_without_urls?: boolean;
     signal_intent_weights?: Partial<Record<string, number>>;
+    timing_hiring_keywords?: string[];
+    timing_trigger_signals?: Array<'byoc_growth' | 'customer_deployment' | 'platform_expansion'>;
   };
   min_score_threshold?: number;
   icp_verticals_override?: string[];
@@ -1890,6 +1892,12 @@ const DISPLACEMENT_SIGNAL_OPTIONS = [
   { value: 'distributed_team' as const, label: 'Distributed Team', desc: 'Multi-office presence implies access needs' },
 ];
 
+const TIMING_TRIGGER_OPTIONS = [
+  { value: 'byoc_growth' as const, label: 'BYOC Growth', desc: 'Customer-managed deployment / BYOC evidence as a timing trigger' },
+  { value: 'customer_deployment' as const, label: 'Customer Deployment', desc: 'Customer deployment model or contractor usage signals' },
+  { value: 'platform_expansion' as const, label: 'Platform Expansion', desc: 'Engineering team + multi-office presence signals growth' },
+];
+
 const SIGNAL_WEIGHT_META = [
   { key: 'evaluation',     label: 'Active Evaluation',   desc: 'Evidence of vendor evaluation in progress', defaultVal: 20 },
   { key: 'vpn_detection',  label: 'VPN Detection',       desc: 'VPN product found in tech stack',           defaultVal: 15 },
@@ -1913,6 +1921,8 @@ function ScoringSignalsPanel({ step, updateStep }: {
   const signals = step.scoring_signals || {};
   const painSigs = signals.pain_signals || [];
   const dispSigs = signals.displacement_signals || [];
+  const timingTrigSigs = signals.timing_trigger_signals || [];
+  const timingKeywords = signals.timing_hiring_keywords || [];
 
   const updateSignals = (patch: Partial<NonNullable<FunnelStepConfig['scoring_signals']>>) => {
     updateStep(step.id, { scoring_signals: { ...signals, ...patch } });
@@ -1928,8 +1938,14 @@ function ScoringSignalsPanel({ step, updateStep }: {
     updateSignals({ displacement_signals: next.length ? next : undefined });
   };
 
+  const toggleTimingTrig = (val: typeof TIMING_TRIGGER_OPTIONS[number]['value']) => {
+    const next = timingTrigSigs.includes(val) ? timingTrigSigs.filter(s => s !== val) : [...timingTrigSigs, val];
+    updateSignals({ timing_trigger_signals: next.length ? next : undefined });
+  };
+
   const hasCustomWeights = Object.keys(signals.signal_intent_weights || {}).length > 0;
-  const hasCustomSignals = painSigs.length > 0 || dispSigs.length > 0 || signals.credit_role_fit_without_urls || hasCustomWeights;
+  const hasTimingConfig = timingTrigSigs.length > 0 || timingKeywords.length > 0;
+  const hasCustomSignals = painSigs.length > 0 || dispSigs.length > 0 || signals.credit_role_fit_without_urls || hasCustomWeights || hasTimingConfig;
 
   return (
     <div className="space-y-3">
@@ -2006,6 +2022,41 @@ function ScoringSignalsPanel({ step, updateStep }: {
             </p>
           </div>
         </label>
+      </div>
+
+      {/* Timing Trigger Signals */}
+      <div className="border border-gray-100 rounded-lg p-2.5 space-y-1.5">
+        <label className="text-[11px] font-medium text-gray-700">Timing Triggers</label>
+        <p className="text-[10px] text-gray-400">Additional evidence that counts as timing signals for this campaign</p>
+        <div className="grid grid-cols-2 gap-1.5 mt-1">
+          {TIMING_TRIGGER_OPTIONS.map(opt => (
+            <label key={opt.value} className={`flex items-start gap-2 px-2 py-1.5 rounded-md cursor-pointer transition-colors ${timingTrigSigs.includes(opt.value) ? 'bg-emerald-50 border border-emerald-200' : 'bg-gray-50 border border-gray-100 hover:bg-gray-100'}`}>
+              <input
+                type="checkbox"
+                checked={timingTrigSigs.includes(opt.value)}
+                onChange={() => toggleTimingTrig(opt.value)}
+                className="mt-0.5 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500"
+              />
+              <div>
+                <span className="text-[11px] font-medium text-gray-700">{opt.label}</span>
+                <p className="text-[9px] text-gray-400 leading-tight">{opt.desc}</p>
+              </div>
+            </label>
+          ))}
+        </div>
+      </div>
+
+      {/* Timing Hiring Keywords */}
+      <div className="border border-gray-100 rounded-lg p-2.5 space-y-1.5">
+        <label className="text-[11px] font-medium text-gray-700">Timing Hiring Keywords</label>
+        <p className="text-[10px] text-gray-400">
+          Custom keywords to match in hiring signals for the Timing dimension (in addition to the default VPN/ZTNA set)
+        </p>
+        <TagInput
+          values={timingKeywords}
+          onChange={vals => updateSignals({ timing_hiring_keywords: vals.length ? vals : undefined })}
+          placeholder="e.g. customer deployment, private networking, on-prem"
+        />
       </div>
 
       {/* Signal Intent Weights */}

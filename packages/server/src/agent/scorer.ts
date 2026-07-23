@@ -417,7 +417,7 @@ export function computeIcpFit(fs: FactSheet, icpConfig: ExtendedICPConfig, scori
   };
 }
 
-export function computeTiming(fs: FactSheet): { score: number; breakdown: DimensionBreakdown } {
+export function computeTiming(fs: FactSheet, scoringSignals?: ScoringSignals): { score: number; breakdown: DimensionBreakdown } {
   let score = 0;
   const subScores: SubScore[] = [];
 
@@ -457,6 +457,19 @@ export function computeTiming(fs: FactSheet): { score: number; breakdown: Dimens
     triggerScore += 10;
     for (const c of fs.compliance_signals) pushEvidence(triggerEvidence, triggerUrls, triggerConf, `Compliance: ${c.regulation}`, c.url, 'inferred');
   }
+  const trigSigs = scoringSignals?.timing_trigger_signals ?? [];
+  if (trigSigs.includes('byoc_growth') && fs.byod_byoc_evidence) {
+    triggerScore += 12;
+    pushEvidence(triggerEvidence, triggerUrls, triggerConf, 'BYOC/customer-deployment growth evidence', undefined, 'inferred');
+  }
+  if (trigSigs.includes('customer_deployment') && (fs.byod_byoc_evidence || fs.contractor_usage_evidence)) {
+    triggerScore += 10;
+    pushEvidence(triggerEvidence, triggerUrls, triggerConf, 'Customer deployment model detected', undefined, 'inferred');
+  }
+  if (trigSigs.includes('platform_expansion') && fs.engineering_team_evidence && fs.multi_office) {
+    triggerScore += 8;
+    pushEvidence(triggerEvidence, triggerUrls, triggerConf, 'Platform expansion signals (eng team + multi-office)', undefined, 'inferred');
+  }
   const triggerFinal = Math.min(25, triggerScore);
   score += triggerFinal;
   subScores.push(buildSubScore('Recent Triggers', triggerFinal, 25, triggerEvidence, triggerUrls, triggerConf));
@@ -467,13 +480,15 @@ export function computeTiming(fs: FactSheet): { score: number; breakdown: Dimens
   const hiringUrls: string[] = [];
   const hiringConf: FactConfidence[] = [];
   const vpnKeywords = ['vpn', 'ztna', 'zero trust', 'network access', 'remote access', 'sase'];
+  const customKeywords = scoringSignals?.timing_hiring_keywords?.map(k => k.toLowerCase()) ?? [];
+  const allKeywords = [...vpnKeywords, ...customKeywords];
   const recentHiring = fs.hiring_signals.filter(h => h.recency === 'recent');
-  const vpnHiring = recentHiring.filter(h =>
-    h.keywords.some(k => vpnKeywords.some(vk => k.toLowerCase().includes(vk)))
+  const keywordHiring = recentHiring.filter(h =>
+    h.keywords.some(k => allKeywords.some(ak => k.toLowerCase().includes(ak)))
   );
-  if (vpnHiring.length > 0) {
-    hiringScore = Math.min(20, 15 + vpnHiring.length * 2);
-    for (const h of vpnHiring) pushEvidence(hiringEvidence, hiringUrls, hiringConf, `VPN-related: ${h.role}`, h.url, 'inferred');
+  if (keywordHiring.length > 0) {
+    hiringScore = Math.min(20, 15 + keywordHiring.length * 2);
+    for (const h of keywordHiring) pushEvidence(hiringEvidence, hiringUrls, hiringConf, `Keyword-matched: ${h.role}`, h.url, 'inferred');
   } else if (recentHiring.length > 0) {
     hiringScore = Math.min(10, 5 + recentHiring.length * 2);
     for (const h of recentHiring) pushEvidence(hiringEvidence, hiringUrls, hiringConf, `Hiring: ${h.role}`, h.url, 'inferred');
@@ -889,7 +904,7 @@ export function computeAllDimensions(
   scoringSignals?: ScoringSignals,
 ): ScoringDimensions {
   const { score: icp_fit, breakdown: icpBreakdown } = computeIcpFit(fs, icpConfig, scoringSignals);
-  const { score: timing, breakdown: timingBreakdown } = computeTiming(fs);
+  const { score: timing, breakdown: timingBreakdown } = computeTiming(fs, scoringSignals);
   const { grade: data_confidence, score: data_confidence_score, breakdown: dcBreakdown } = computeDataConfidence(fs, enrichMeta);
   const { score: reachability, breakdown: reachBreakdown } = computeReachability(fs, enrichMeta, scoringSignals);
   const research_completeness = computeResearchCompleteness(enrichMeta);

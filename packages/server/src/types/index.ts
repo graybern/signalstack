@@ -540,11 +540,15 @@ export interface AuditResult {
 export type PainSignal = 'remote_workforce' | 'byoc' | 'multi_office' | 'developer_experience';
 export type DisplacementSignal = 'vpn_detected' | 'competitor_detected' | 'byoc' | 'private_networking' | 'legacy_indicators' | 'distributed_team';
 
+export type TimingTriggerSignal = 'byoc_growth' | 'customer_deployment' | 'platform_expansion';
+
 export interface ScoringSignals {
   pain_signals?: PainSignal[];
   displacement_signals?: DisplacementSignal[];
   credit_role_fit_without_urls?: boolean;
   signal_intent_weights?: Partial<Record<string, number>>;
+  timing_hiring_keywords?: string[];
+  timing_trigger_signals?: TimingTriggerSignal[];
 }
 
 export interface FunnelStepConfig {

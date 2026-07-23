@@ -211,7 +211,8 @@ export function getFactExtractionPrompt(icpConfig: ExtendedICPConfig): string {
 - **Target Verticals:** ${verticals.join(', ') || 'Not specified'}
 - **Products to Replace:** ${productsToReplace.join(', ') || 'Legacy VPN solutions'}
 - **Competitors:** ${competitors.join(', ') || 'Not specified'}
-${Object.keys(successStories).length > 0 ? `- **Success Story Verticals:** ${Object.keys(successStories).join(', ')}\n` : ''}
+${Object.keys(successStories).length > 0 ? `- **Success Story Verticals:** ${Object.keys(successStories).join(', ')}\n` : ''}- **Vertical Classification:** When the prospect is a platform or infrastructure company (BYOC, PaaS, SaaS serving specific verticals), classify vertical_match based on the verticals they serve — not just the prospect's own industry. A security platform serving healthcare and finance customers is an "exact" match for healthcare/finance target verticals.
+
 ## Output Format
 Return a JSON object with this exact structure (FactSheet):
 \`\`\`json

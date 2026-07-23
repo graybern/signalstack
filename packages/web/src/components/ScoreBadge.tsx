@@ -696,7 +696,7 @@ export function buildBuckets(dims: {
     {
       label: 'EVIDENCE',
       question: 'Can we prove it?',
-      score: Math.round((dims.evidence_modifier ?? (0.5 + dims.research_completeness / 200)) * 100),
+      score: Math.round((dims.evidence_modifier ?? (0.7 + dims.research_completeness / 333)) * 100),
       icon: Shield,
       colorScheme: {
         bar: 'bg-slate-500',

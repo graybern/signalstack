@@ -946,7 +946,7 @@ export function computeCompositeV2(
 ): { fit_score: number; potential_score: number; urgency_score: number; evidence_modifier: number } {
   const potential_score = Math.round(dims.icp_fit * 0.70 + dims.reachability * 0.20 + dims.data_confidence_score * 0.10);
   const urgency_score = Math.round(dims.timing * 0.60 + dims.signal_quality * 0.40);
-  const evidence_modifier = 0.5 + (dims.research_completeness / 200);
+  const evidence_modifier = 0.7 + (dims.research_completeness / 333);
   const raw = (potential_score * (weightPotential / 100) + urgency_score * (weightUrgency / 100)) * evidence_modifier;
   return {
     fit_score: clamp(Math.round(raw), 0, 100),

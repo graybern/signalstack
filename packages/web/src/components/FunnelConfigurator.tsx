@@ -2251,7 +2251,7 @@ function CompositeFormulaControl({ step, updateStep }: {
               <div className="space-y-0.5">
                 <div className="flex items-center justify-between">
                   <span className="text-[8px] text-slate-400/60">Research</span>
-                  <span className="text-[8px] text-slate-400/80 font-mono">0.5–1.0×</span>
+                  <span className="text-[8px] text-slate-400/80 font-mono">0.7–1.0×</span>
                 </div>
                 <p className="text-[8px] text-slate-500 mt-0.5">Scales composite by research coverage</p>
               </div>

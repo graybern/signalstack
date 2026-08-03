@@ -12,7 +12,7 @@ import {
   Briefcase, Linkedin, MessageSquare, Shield, Server, ChevronDown, ChevronUp,
   Signal, Trash2, AlertTriangle, Brain, FileText, Download, Layers,
   ClipboardCheck, RefreshCw, Sparkles, Check, Circle, XCircle, ArrowRight, SlidersHorizontal,
-  Target, Clock, Mail, BarChart3, Search, Radio, Crosshair, Pencil,
+  Target, Clock, Mail, BarChart3, Search, Radio, Crosshair, Pencil, Info,
 } from 'lucide-react';
 import FeedbackPanel from '../components/FeedbackPanel';
 
@@ -43,6 +43,9 @@ export function LeadDetail() {
   const [linkedinInput, setLinkedinInput] = useState('');
   const [linkedinSaving, setLinkedinSaving] = useState(false);
   const [linkedinError, setLinkedinError] = useState<string | null>(null);
+  const [companyName, setCompanyName] = useState<string>('Us');
+  const [expandedMeddpicc, setExpandedMeddpicc] = useState(true);
+  const [expandedWhy, setExpandedWhy] = useState<string | null>('why_now');
   const briefMenuRef = useRef<HTMLDivElement>(null);
   const rerunMenuRef = useRef<HTMLDivElement>(null);
 
@@ -128,6 +131,12 @@ export function LeadDetail() {
       }
     }).finally(() => setLoading(false));
   }, [id]);
+
+  useEffect(() => {
+    api('/icp/full').then((data: any) => {
+      if (data?.company_context?.company_name) setCompanyName(data.company_context.company_name);
+    }).catch(() => {});
+  }, []);
 
   // SSE subscription for stage rerun progress — also enabled when banner is visible (hydrated from active_run)
   const { subscribe } = useEventStream({ types: ['lead.brief_rerun', 'lead.stage_rerun'], enabled: rerunning || rerunVisible });
@@ -252,6 +261,8 @@ export function LeadDetail() {
   const scoreBreakdown = lead.score_breakdown_parsed;
   const sources = lead.sources_parsed || [];
   const outreach = lead.outreach_strategy_parsed;
+  const whyDoAnything = lead.why_do_anything_parsed;
+  const whyCompany = lead.why_company_parsed;
   const feedbackList: any[] = lead.feedback || [];
   const signalCount = lead.signal_count || 0;
 
@@ -266,14 +277,20 @@ export function LeadDetail() {
           if (!match) return <span key={i}>{renderInlineMarkdown(part)}</span>;
           const citationId = parseInt(match[1]);
           const source = sources.find((s: any) => (s.id ?? 0) === citationId) || sources[citationId - 1];
+          const badge = (
+            <span className="inline-flex items-center justify-center w-4 h-4 text-[10px] font-bold text-blue-600 bg-blue-50 border border-blue-200 rounded cursor-pointer hover:bg-blue-100 align-super ml-0.5">
+              {citationId}
+            </span>
+          );
           return (
             <span key={i} className="relative group inline-block">
-              <button
-                onClick={() => document.getElementById(`source-${citationId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })}
-                className="inline-flex items-center justify-center w-4 h-4 text-[10px] font-bold text-blue-600 bg-blue-50 border border-blue-200 rounded cursor-pointer hover:bg-blue-100 align-super ml-0.5"
-              >
-                {citationId}
-              </button>
+              {source?.url ? (
+                <a href={source.url} target="_blank" rel="noopener noreferrer">{badge}</a>
+              ) : (
+                <button onClick={() => document.getElementById(`source-${citationId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })}>
+                  {badge}
+                </button>
+              )}
               {source && (
                 <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 px-3 py-2 bg-gray-900 text-white text-xs rounded-lg shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 whitespace-nowrap max-w-xs">
                   <span className="block font-medium truncate">{source.label || source.url}</span>
@@ -666,6 +683,9 @@ export function LeadDetail() {
         {/* Zone 3 — Context Bar */}
         <div className="px-6 py-2 border-t border-gray-100 flex items-center gap-4 text-[11px] text-gray-400">
           {lead.scoring_version === 2 && <span className="font-medium text-gray-500">Deterministic scoring</span>}
+          {lead.dimensions_parsed?.free_source_adjusted && (
+            <span className="px-1.5 py-0.5 rounded text-[10px] font-medium text-indigo-600 bg-indigo-50" title="Scoring weights adjusted for free enrichment sources">Free sources</span>
+          )}
           {lead.scoring_model && <span>{lead.scoring_model}</span>}
           {lead.ai_audit && (
             <span className={lead.ai_audit.verdict === 'pass' ? 'text-emerald-500' : lead.ai_audit.verdict === 'fail' ? 'text-red-400' : 'text-amber-400'}>
@@ -758,17 +778,262 @@ export function LeadDetail() {
             </div>
           )}
 
-          {/* Why Now */}
-          {whyNow.length > 0 && (
-            <Section title="Why Now" icon={<Briefcase className="w-4 h-4" />}>
-              <ul className="space-y-2">
-                {whyNow.map((trigger: string, i: number) => (
-                  <li key={i} className="flex items-start gap-2 text-sm">
-                    <span className="w-1.5 h-1.5 rounded-full bg-brand-500 mt-1.5 flex-shrink-0" />
-                    <span>{renderWithCitations(trigger)}</span>
-                  </li>
-                ))}
-              </ul>
+          {/* MEDDPICC & BANT */}
+          {(() => {
+            const champion = lead.personas?.find((p: any) => p.role_type === 'technical_champion' || p.role_type === 'champion');
+            const econBuyer = lead.personas?.find((p: any) => p.role_type === 'economic_buyer');
+            const meddpiccFields = [
+              {
+                key: 'why_anything',
+                label: 'Why Do Anything?',
+                tooltip: 'What business pain or risk makes the status quo untenable?',
+                value: whyDoAnything?.thesis || null,
+                confidence: whyDoAnything?.pain_drivers?.length
+                  ? (whyDoAnything.pain_drivers.every((d: any) => d.evidence_strength === 'high') ? 'high'
+                    : whyDoAnything.pain_drivers.some((d: any) => d.evidence_strength === 'high') ? 'medium' : 'low')
+                  : null,
+              },
+              {
+                key: 'why_now',
+                label: 'Why Now?',
+                tooltip: 'What time-sensitive triggers create urgency to act?',
+                value: whyNow.length > 0 ? (whyNow[0] + (whyNow.length > 1 ? ` (+${whyNow.length - 1} more)` : '')) : null,
+                confidence: whyNow.length >= 3 ? 'high' : whyNow.length >= 1 ? 'medium' : null,
+              },
+              {
+                key: 'why_company',
+                label: `Why ${companyName}?`,
+                tooltip: `What specific advantages make ${companyName} the right choice over alternatives?`,
+                value: whyCompany?.thesis || null,
+                confidence: whyCompany?.advantages?.length
+                  ? (whyCompany.advantages.every((a: any) => a.evidence_strength === 'high') ? 'high'
+                    : whyCompany.advantages.some((a: any) => a.evidence_strength === 'high') ? 'medium' : 'low')
+                  : null,
+              },
+              {
+                key: 'pain',
+                label: 'Pain Identified',
+                tooltip: 'Specific, quantifiable business pain tied to a metric the buyer cares about',
+                value: painHypotheses[0]?.claim || null,
+                confidence: (painHypotheses[0]?.evidence_strength as string) || null,
+              },
+              {
+                key: 'champion',
+                label: 'Technical Champion',
+                tooltip: 'An internal advocate with power and influence who actively sells on your behalf',
+                value: champion ? `${champion.name || 'Unknown'}${champion.title ? ` — ${champion.title}` : ''}` : null,
+                confidence: champion?.confidence || null,
+                linkedinUrl: champion?.linkedin_url,
+              },
+              {
+                key: 'economic_buyer',
+                label: 'Economic Buyer',
+                tooltip: 'The person with final authority and budget to approve the purchase',
+                value: econBuyer ? `${econBuyer.name || 'Unknown'}${econBuyer.title ? ` — ${econBuyer.title}` : ''}` : null,
+                confidence: econBuyer?.confidence || null,
+                linkedinUrl: econBuyer?.linkedin_url,
+              },
+            ];
+            const filledCount = meddpiccFields.filter(f => f.value).length;
+
+            return (
+              <div className="bg-white rounded-xl border border-gray-200">
+                <button
+                  onClick={() => setExpandedMeddpicc(!expandedMeddpicc)}
+                  className="w-full px-5 py-3 flex items-center justify-between hover:bg-gray-50 transition-colors rounded-xl"
+                >
+                  <div className="flex items-center gap-2">
+                    <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform ${expandedMeddpicc ? '' : '-rotate-90'}`} />
+                    <h2 className="text-sm font-semibold text-gray-900 uppercase tracking-wide">MEDDPICC & BANT</h2>
+                  </div>
+                  <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${filledCount >= 5 ? 'bg-emerald-50 text-emerald-700' : filledCount >= 3 ? 'bg-amber-50 text-amber-700' : 'bg-gray-100 text-gray-500'}`}>
+                    {filledCount}/{meddpiccFields.length}
+                  </span>
+                </button>
+                {expandedMeddpicc && (
+                  <div className="px-5 pb-4">
+                    <div className="divide-y divide-gray-100">
+                      {meddpiccFields.map((field, i) => (
+                        <div key={field.key} className={`flex items-start gap-3 py-3 ${i === 4 ? 'border-t border-gray-200 mt-1 pt-4' : ''}`}>
+                          <div className="relative group shrink-0 mt-0.5">
+                            <Info className="w-3.5 h-3.5 text-gray-300" />
+                            <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 px-3 py-2 bg-gray-900 text-white text-xs rounded-lg shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 whitespace-nowrap max-w-xs">
+                              {field.tooltip}
+                            </span>
+                          </div>
+                          <span className="text-sm font-medium text-gray-900 w-36 shrink-0">{field.label}</span>
+                          <div className="flex-1 text-sm text-gray-700 min-w-0">
+                            {field.value ? (
+                              <span>{renderWithCitations(field.value)}</span>
+                            ) : (
+                              <span className="text-gray-400 italic">Not identified</span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            {field.confidence && (
+                              <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                                field.confidence === 'high' || field.confidence === 'confirmed' ? 'bg-green-50 text-green-700' :
+                                field.confidence === 'medium' || field.confidence === 'inferred' ? 'bg-amber-50 text-amber-700' :
+                                'bg-gray-50 text-gray-500'
+                              }`}>
+                                {field.confidence === 'confirmed' ? 'high' : field.confidence === 'inferred' ? 'medium' : field.confidence}
+                              </span>
+                            )}
+                            {(field as any).linkedinUrl && (
+                              <a href={(field as any).linkedinUrl} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:text-blue-700">
+                                <Linkedin className="w-3.5 h-3.5" />
+                              </a>
+                            )}
+                            <Pencil className="w-3.5 h-3.5 text-gray-300 hover:text-gray-500 cursor-not-allowed" />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
+          {/* 3 Whys */}
+          {(whyNow.length > 0 || whyDoAnything || whyCompany) && (
+            <Section title="3 Whys" icon={<Target className="w-4 h-4" />}>
+              <div className="space-y-1">
+                {/* Why Do Anything? */}
+                <div className="border-l-2 border-rose-400 rounded-r">
+                  <button
+                    onClick={() => setExpandedWhy(expandedWhy === 'why_do_anything' ? null : 'why_do_anything')}
+                    className="w-full flex items-center justify-between px-3 py-2 hover:bg-gray-50 transition-colors rounded-r"
+                  >
+                    <span className="text-sm font-medium text-gray-900">Why Do Anything?</span>
+                    <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform ${expandedWhy === 'why_do_anything' ? '' : '-rotate-90'}`} />
+                  </button>
+                  {expandedWhy === 'why_do_anything' && (
+                    <div className="px-3 pb-3 space-y-3">
+                      {whyDoAnything ? (
+                        <>
+                          {whyDoAnything.thesis && (
+                            <p className="text-sm text-gray-700">{renderWithCitations(whyDoAnything.thesis)}</p>
+                          )}
+                          {whyDoAnything.pain_drivers?.length > 0 && (
+                            <div className="space-y-1.5">
+                              <p className="text-xs font-medium text-gray-500 uppercase">Pain Drivers</p>
+                              {whyDoAnything.pain_drivers.map((d: any, i: number) => (
+                                <div key={i} className="flex items-start gap-2 text-sm">
+                                  <span className="text-gray-700 flex-1">{d.driver}</span>
+                                  {d.evidence_strength && (
+                                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0 ${
+                                      d.evidence_strength === 'high' ? 'bg-green-50 text-green-700' :
+                                      d.evidence_strength === 'medium' ? 'bg-amber-50 text-amber-700' :
+                                      'bg-gray-50 text-gray-500'
+                                    }`}>{d.evidence_strength}</span>
+                                  )}
+                                  {d.source_ref && <span className="text-xs text-gray-400 shrink-0">{renderWithCitations(d.source_ref)}</span>}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          {whyDoAnything.cost_of_inaction && (
+                            <div>
+                              <p className="text-xs font-medium text-gray-500 uppercase mb-1">Cost of Inaction</p>
+                              <p className="text-sm text-gray-600 italic">{renderWithCitations(whyDoAnything.cost_of_inaction)}</p>
+                            </div>
+                          )}
+                          {whyDoAnything.risk_of_status_quo && (
+                            <div>
+                              <p className="text-xs font-medium text-gray-500 uppercase mb-1">Risk of Status Quo</p>
+                              <p className="text-sm text-gray-600 italic">{renderWithCitations(whyDoAnything.risk_of_status_quo)}</p>
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <p className="text-sm text-gray-400 italic">No data available</p>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Why Now? */}
+                <div className="border-l-2 border-amber-400 rounded-r">
+                  <button
+                    onClick={() => setExpandedWhy(expandedWhy === 'why_now' ? null : 'why_now')}
+                    className="w-full flex items-center justify-between px-3 py-2 hover:bg-gray-50 transition-colors rounded-r"
+                  >
+                    <span className="text-sm font-medium text-gray-900">Why Now?</span>
+                    <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform ${expandedWhy === 'why_now' ? '' : '-rotate-90'}`} />
+                  </button>
+                  {expandedWhy === 'why_now' && (
+                    <div className="px-3 pb-3">
+                      {whyNow.length > 0 ? (
+                        <ul className="space-y-2">
+                          {whyNow.map((trigger: string, i: number) => (
+                            <li key={i} className="flex items-start gap-2 text-sm">
+                              <span className="w-1.5 h-1.5 rounded-full bg-brand-500 mt-1.5 flex-shrink-0" />
+                              <span>{renderWithCitations(trigger)}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="text-sm text-gray-400 italic">No data available</p>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Why {companyName}? */}
+                <div className="border-l-2 border-emerald-400 rounded-r">
+                  <button
+                    onClick={() => setExpandedWhy(expandedWhy === 'why_company' ? null : 'why_company')}
+                    className="w-full flex items-center justify-between px-3 py-2 hover:bg-gray-50 transition-colors rounded-r"
+                  >
+                    <span className="text-sm font-medium text-gray-900">Why {companyName}?</span>
+                    <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform ${expandedWhy === 'why_company' ? '' : '-rotate-90'}`} />
+                  </button>
+                  {expandedWhy === 'why_company' && (
+                    <div className="px-3 pb-3 space-y-3">
+                      {whyCompany ? (
+                        <>
+                          {whyCompany.thesis && (
+                            <p className="text-sm text-gray-700">{renderWithCitations(whyCompany.thesis)}</p>
+                          )}
+                          {whyCompany.advantages?.length > 0 && (
+                            <div className="space-y-2">
+                              <p className="text-xs font-medium text-gray-500 uppercase">Advantages</p>
+                              {whyCompany.advantages.map((a: any, i: number) => (
+                                <div key={i} className="border-l-2 border-brand-200 pl-3">
+                                  <p className="text-sm font-medium text-gray-900">{a.advantage}</p>
+                                  {a.specific_to && <p className="text-xs text-gray-500">Specific to: {a.specific_to}</p>}
+                                  {a.evidence_strength && (
+                                    <span className={`inline-block mt-1 px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                                      a.evidence_strength === 'high' ? 'bg-green-50 text-green-700' :
+                                      a.evidence_strength === 'medium' ? 'bg-amber-50 text-amber-700' :
+                                      'bg-gray-50 text-gray-500'
+                                    }`}>{a.evidence_strength}</span>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          {whyCompany.proof_points?.length > 0 && (
+                            <div>
+                              <p className="text-xs font-medium text-gray-500 uppercase mb-1">Proof Points</p>
+                              <ul className="space-y-1">
+                                {whyCompany.proof_points.map((pp: string, i: number) => (
+                                  <li key={i} className="text-sm text-gray-700 flex items-start gap-2">
+                                    <Check className="w-3 h-3 mt-0.5 text-emerald-500 flex-shrink-0" />{renderWithCitations(pp)}
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <p className="text-sm text-gray-400 italic">No data available</p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
             </Section>
           )}
 
@@ -1095,8 +1360,8 @@ export function LeadDetail() {
                       <Signal className="w-4 h-4" /> Scoring Dimensions
                     </h3>
                     <span className={`text-sm font-bold px-2 py-0.5 rounded-full tabular-nums ${
-                      lead.fit_score >= 75 ? 'bg-emerald-100 text-emerald-700' :
-                      lead.fit_score >= 60 ? 'bg-amber-100 text-amber-700' :
+                      lead.fit_score >= 65 ? 'bg-emerald-100 text-emerald-700' :
+                      lead.fit_score >= 50 ? 'bg-amber-100 text-amber-700' :
                       'bg-red-100 text-red-700'
                     }`}>
                       {lead.fit_score}/100

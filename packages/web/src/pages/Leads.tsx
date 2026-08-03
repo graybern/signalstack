@@ -27,7 +27,7 @@ import {
   Filter,
   Columns3,
 } from 'lucide-react';
-import { ScoreBadge, SegmentBadge, InlineScoreStrip, GradeBadge, deriveActionState, ACTION_CONFIG } from '../components/ScoreBadge';
+import { ScoreBadge, SegmentBadge, ScoreTooltip, GradeBadge, deriveActionState, ACTION_CONFIG } from '../components/ScoreBadge';
 import type { ActionState } from '../components/ScoreBadge';
 import { useToast } from '../components/Toast';
 
@@ -117,13 +117,13 @@ const SYSTEM_PRESETS: Array<{
   filter_config: Record<string, string>;
 }> = [
   { id: 'preset:engage', name: 'Engage', actionState: 'engage',
-    filter_config: { min_potential: '60', min_urgency: '35', composite_version: '2' } },
+    filter_config: { min_potential: '65', min_urgency: '40', composite_version: '2' } },
   { id: 'preset:watch', name: 'Watch', actionState: 'watch',
-    filter_config: { min_potential: '60', max_urgency: '34', composite_version: '2' } },
+    filter_config: { min_potential: '65', max_urgency: '39', composite_version: '2' } },
   { id: 'preset:research', name: 'Research', actionState: 'research',
     filter_config: { max_signal_quality: '29', min_icp_fit: '50', composite_version: '2' } },
   { id: 'preset:pass', name: 'Pass', actionState: 'pass',
-    filter_config: { max_potential: '39', composite_version: '2' } },
+    filter_config: { max_potential: '44', composite_version: '2' } },
 ];
 
 function getInitialFilter(key: string, defaultValue = ''): string {
@@ -997,12 +997,16 @@ export function Leads() {
         );
       case 'score':
         return (
-          <InlineScoreStrip
+          <ScoreTooltip
             score={lead.fit_score}
+            icpFit={lead.icp_fit_score}
+            reachability={lead.reachability_score}
             potential={lead.potential_score}
             urgency={lead.urgency_score}
+            signalQuality={lead.signal_quality_score}
             evidenceModifier={lead.evidence_modifier}
             compositeVersion={lead.composite_version}
+            freeSourceAdjusted={lead.dimensions_parsed?.free_source_adjusted}
           />
         );
       case 'campaign':

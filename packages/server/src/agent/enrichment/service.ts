@@ -86,6 +86,10 @@ export function getEnabledSources(): DataSourceConfig[] {
   return getDataSourceConfigs().filter(s => s.enabled && (s.api_key || !s.requires_key));
 }
 
+export function hasPaidSources(): boolean {
+  return getEnabledSources().some(s => s.requires_key);
+}
+
 /**
  * Run health check on a specific data source.
  */

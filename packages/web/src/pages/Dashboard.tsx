@@ -942,8 +942,8 @@ function CampaignPerformanceTable() {
               <td className="px-4 py-3">
                 {c.avg_score ? (
                   <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
-                    c.avg_score >= 70 ? 'bg-emerald-50 text-emerald-700' :
-                    c.avg_score >= 55 ? 'bg-blue-50 text-blue-700' :
+                    c.avg_score >= 65 ? 'bg-emerald-50 text-emerald-700' :
+                    c.avg_score >= 50 ? 'bg-blue-50 text-blue-700' :
                     c.avg_score >= 35 ? 'bg-amber-50 text-amber-700' : 'bg-gray-100 text-gray-600'
                   }`}>{Math.round(c.avg_score)}</span>
                 ) : <span className="text-gray-400">--</span>}

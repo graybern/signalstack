@@ -13,8 +13,8 @@ interface ScoreBadgeProps {
 }
 
 export function ScoreBadge({ score, size = 'md' }: ScoreBadgeProps) {
-  const color = score >= 70 ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
-    : score >= 55 ? 'bg-amber-100 text-amber-800 border-amber-200'
+  const color = score >= 65 ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
+    : score >= 50 ? 'bg-amber-100 text-amber-800 border-amber-200'
     : score >= 35 ? 'bg-orange-100 text-orange-800 border-orange-200'
     : 'bg-red-100 text-red-800 border-red-200';
 
@@ -30,9 +30,9 @@ export function ScoreBadge({ score, size = 'md' }: ScoreBadgeProps) {
 }
 
 export function ScoreLabel({ score }: { score: number }) {
-  if (score >= 85) return <span className="text-emerald-700 font-medium">Extremely High</span>;
-  if (score >= 70) return <span className="text-emerald-600 font-medium">High</span>;
-  if (score >= 55) return <span className="text-amber-600 font-medium">Medium</span>;
+  if (score >= 80) return <span className="text-emerald-700 font-medium">Extremely High</span>;
+  if (score >= 65) return <span className="text-emerald-600 font-medium">High</span>;
+  if (score >= 50) return <span className="text-amber-600 font-medium">Medium</span>;
   if (score >= 35) return <span className="text-orange-600 font-medium">Low</span>;
   return <span className="text-red-600 font-medium">Very Low</span>;
 }
@@ -62,9 +62,9 @@ export function SegmentBadge({ segment }: { segment: string }) {
 }
 
 function scoreColor(score: number): string {
-  if (score >= 85) return '#10b981';
-  if (score >= 70) return '#3b82f6';
-  if (score >= 55) return '#f59e0b';
+  if (score >= 80) return '#10b981';
+  if (score >= 65) return '#3b82f6';
+  if (score >= 50) return '#f59e0b';
   if (score >= 35) return '#f97316';
   return '#ef4444';
 }
@@ -312,10 +312,10 @@ export function deriveActionState(dims: {
   const intent = dims.urgency_score ?? 0;
   const evidence = dims.evidence_modifier ?? 0.5;
 
-  if (fit >= 60 && intent < 35) return 'watch';
-  if (fit < 40) return 'pass';
-  if (evidence < 0.65 && fit >= 40) return 'research';
-  if (fit >= 55 && intent >= 35) return 'engage';
+  if (fit >= 65 && intent < 40) return 'watch';
+  if (fit < 45) return 'pass';
+  if (evidence < 0.65 && fit >= 45) return 'research';
+  if (fit >= 65 && intent >= 40) return 'engage';
   return 'research';
 }
 
@@ -885,8 +885,8 @@ interface DualBarsProps {
 export function DualBars({ potential, urgency, evidenceModifier }: DualBarsProps) {
   const fitPct = Math.min(potential, 100);
   const intPct = Math.min(urgency, 100);
-  const fitWeak = potential < 35;
-  const intWeak = urgency < 35;
+  const fitWeak = potential < 45;
+  const intWeak = urgency < 40;
   const evMod = evidenceModifier ?? 1;
   const evPct = Math.round(evMod * 100);
 
@@ -934,6 +934,7 @@ interface InlineScoreStripProps {
   urgency?: number | null;
   evidenceModifier?: number | null;
   compositeVersion?: number;
+  freeSourceAdjusted?: boolean;
 }
 
 function dimColor(val: number): string {
@@ -942,7 +943,7 @@ function dimColor(val: number): string {
   return 'text-gray-500 bg-gray-50';
 }
 
-export function InlineScoreStrip({ score, potential, urgency, evidenceModifier, compositeVersion }: InlineScoreStripProps) {
+export function InlineScoreStrip({ score, potential, urgency, evidenceModifier, compositeVersion, freeSourceAdjusted }: InlineScoreStripProps) {
   const hasV2 = compositeVersion === 2 && potential != null && urgency != null;
   const evPct = evidenceModifier != null ? Math.round(evidenceModifier * 100) : null;
 
@@ -966,9 +967,68 @@ export function InlineScoreStrip({ score, potential, urgency, evidenceModifier, 
               {evPct}%
             </span>
           )}
+          {freeSourceAdjusted && (
+            <span className="px-1 py-0.5 rounded text-[9px] font-medium text-indigo-600 bg-indigo-50" title="Scored with free sources only">FS</span>
+          )}
         </div>
       ) : (
         <span className="text-[9px] font-medium text-gray-400 bg-gray-50 px-1.5 py-0.5 rounded">v1</span>
+      )}
+    </div>
+  );
+}
+
+// ── Score Tooltip (wraps InlineScoreStrip for hover detail) ──────
+
+interface ScoreTooltipProps {
+  score: number;
+  icpFit?: number | null;
+  reachability?: number | null;
+  potential?: number | null;
+  urgency?: number | null;
+  signalQuality?: number | null;
+  evidenceModifier?: number | null;
+  compositeVersion?: number;
+  freeSourceAdjusted?: boolean;
+}
+
+export function ScoreTooltip({ score, icpFit, reachability, potential, urgency, signalQuality, evidenceModifier, compositeVersion, freeSourceAdjusted }: ScoreTooltipProps) {
+  const hasV2 = compositeVersion === 2 && potential != null && urgency != null;
+  const stars = score >= 80 ? 5 : score >= 65 ? 4 : score >= 50 ? 3 : score >= 35 ? 2 : 1;
+
+  return (
+    <div className="group relative">
+      <InlineScoreStrip
+        score={score}
+        potential={potential}
+        urgency={urgency}
+        evidenceModifier={evidenceModifier}
+        compositeVersion={compositeVersion}
+        freeSourceAdjusted={freeSourceAdjusted}
+      />
+      {hasV2 && (
+        <div className="absolute left-0 top-full mt-1 z-50 hidden group-hover:block bg-white border border-gray-200 rounded-lg shadow-lg p-3 min-w-[220px] text-[11px] tabular-nums">
+          <div className="flex items-center justify-between mb-2">
+            <span className="font-semibold text-gray-700">ICP Fit: {icpFit ?? '—'}</span>
+            <span className="font-semibold text-gray-700">Reach: {reachability ?? '—'}</span>
+          </div>
+          <div className="flex items-center justify-between mb-2">
+            <span className="font-semibold text-gray-700">Potential: {potential}</span>
+            <span className="font-semibold text-gray-700">Urgency: {urgency}</span>
+          </div>
+          {signalQuality != null && (
+            <div className="mb-2">
+              <span className="font-semibold text-gray-700">Signal Quality: {signalQuality}</span>
+            </div>
+          )}
+          <div className="flex items-center justify-between border-t border-gray-100 pt-2">
+            <span className="font-bold text-gray-900">Composite: {score}</span>
+            <span className="text-amber-500">{'★'.repeat(stars)}{'☆'.repeat(5 - stars)}</span>
+          </div>
+          {freeSourceAdjusted && (
+            <div className="mt-1.5 text-[10px] text-indigo-500">Free sources — weights adjusted</div>
+          )}
+        </div>
       )}
     </div>
   );

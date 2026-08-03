@@ -5,6 +5,7 @@ import { authenticate, AuthRequest, requireOperator, requireAdmin, requireMember
 import { logActivity } from '../services/activityLog.js';
 import { analyzeCampaignFeedback, getCampaignFeedbackCount } from '../agent/feedbackAnalyzer.js';
 import { computeAllDimensions, computeCompositeV2, generateVerdict, dimensionsToLegacyBreakdown } from '../agent/scorer.js';
+import { hasPaidSources } from '../agent/enrichment/service.js';
 import { loadCampaignConfig } from '../agent/campaignOrchestrator.js';
 import type { Lead, Persona, LeadFeedback, FeedbackVerdict, FactSheet, EnrichmentMetadata, LinkedInMatch } from '../types/index.js';
 
@@ -97,7 +98,7 @@ function buildLeadFilterConditions(query: Record<string, any>): { conditions: st
   }
 
   if (query.watch_candidate === 'true') {
-    conditions.push('l.potential_score >= 60 AND l.urgency_score < 35');
+    conditions.push('l.potential_score >= 65 AND l.urgency_score < 40');
   }
 
   if (query.composite_version != null && query.composite_version !== '') {
@@ -1324,8 +1325,9 @@ router.post('/backfill-composite', authenticate, requireSuperAdmin, (req: AuthRe
       continue;
     }
 
-    const dimensions = computeAllDimensions(factSheet, icpConfig, enrichMeta, scoringSignals);
-    const composite = computeCompositeV2(dimensions);
+    const freeSourceMode = !hasPaidSources();
+    const dimensions = computeAllDimensions(factSheet, icpConfig, enrichMeta, scoringSignals, freeSourceMode);
+    const composite = computeCompositeV2(dimensions, 55, 45, freeSourceMode);
     const verdict = generateVerdict(dimensions);
     const breakdown = dimensionsToLegacyBreakdown(dimensions, factSheet);
     breakdown.total = composite.fit_score;
@@ -1346,7 +1348,7 @@ router.post('/backfill-composite', authenticate, requireSuperAdmin, (req: AuthRe
         composite.fit_score,
         verdict,
         JSON.stringify(breakdown),
-        dimensions.breakdowns ? JSON.stringify(dimensions.breakdowns) : null,
+        dimensions.breakdowns ? JSON.stringify({ ...dimensions.breakdowns, free_source_adjusted: dimensions.free_source_adjusted || undefined }) : null,
         lead.id,
       );
     }
@@ -1359,7 +1361,7 @@ router.post('/backfill-composite', authenticate, requireSuperAdmin, (req: AuthRe
       potential: composite.potential_score,
       urgency: composite.urgency_score,
       evidence_modifier: composite.evidence_modifier,
-      watch_candidate: composite.potential_score >= 60 && composite.urgency_score < 35,
+      watch_candidate: composite.potential_score >= 65 && composite.urgency_score < 40,
       verdict,
     });
   }
@@ -1498,12 +1500,13 @@ function parseLead(row: any) {
       potential_score: potential,
       urgency_score: urgency,
       evidence_modifier: row.evidence_modifier ?? null,
-      watch_candidate: potential != null && urgency != null && potential >= 60 && urgency < 35,
-      watch_reason: (potential != null && urgency != null && potential >= 60 && urgency < 35)
+      watch_candidate: potential != null && urgency != null && potential >= 65 && urgency < 40,
+      watch_reason: (potential != null && urgency != null && potential >= 65 && urgency < 40)
         ? `High fit (${potential}) but low intent (${urgency})`
         : null,
       verdict: row.scoring_verdict || null,
       breakdowns: lead.scoring_breakdown_v2_parsed || undefined,
+      free_source_adjusted: lead.scoring_breakdown_v2_parsed?.free_source_adjusted || false,
     };
   } else {
     lead.dimensions_parsed = null;

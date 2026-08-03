@@ -372,6 +372,7 @@ export interface ScoringDimensions {
   watch_candidate: boolean;
   watch_reason: string | null;
   verdict: string;
+  free_source_adjusted?: boolean;
   breakdowns?: Record<string, DimensionBreakdown>;
 }
 

@@ -255,9 +255,9 @@ const SCORE_CATEGORY_MAX: Record<string, number> = {
 };
 
 function scoreToExpectedLabel(fitScore: number): string {
-  if (fitScore >= 85) return '5 stars';
-  if (fitScore >= 70) return '4 stars';
-  if (fitScore >= 55) return '3 stars';
+  if (fitScore >= 80) return '5 stars';
+  if (fitScore >= 65) return '4 stars';
+  if (fitScore >= 50) return '3 stars';
   if (fitScore >= 35) return '2 stars';
   return '1 star';
 }

@@ -5,8 +5,8 @@ const BRAND_LIGHT = '#fdf2f8';
 const BRAND_BORDER = '#fbcfe8';
 
 function scoreColor(score: number): { text: string; bg: string; border: string } {
-  if (score >= 70) return { text: '#059669', bg: '#ecfdf5', border: '#a7f3d0' };
-  if (score >= 55) return { text: '#d97706', bg: '#fffbeb', border: '#fde68a' };
+  if (score >= 65) return { text: '#059669', bg: '#ecfdf5', border: '#a7f3d0' };
+  if (score >= 50) return { text: '#d97706', bg: '#fffbeb', border: '#fde68a' };
   if (score >= 35) return { text: '#ea580c', bg: '#fff7ed', border: '#fed7aa' };
   return { text: '#dc2626', bg: '#fef2f2', border: '#fecaca' };
 }

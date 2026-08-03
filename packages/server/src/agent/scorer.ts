@@ -205,9 +205,9 @@ Score this company using the rubric. Apply the Evidence Density Modifier: ${sign
 }
 
 function scoreToLabel(score: number): string {
-  if (score >= 85) return '5 stars';
-  if (score >= 70) return '4 stars';
-  if (score >= 55) return '3 stars';
+  if (score >= 80) return '5 stars';
+  if (score >= 65) return '4 stars';
+  if (score >= 50) return '3 stars';
   if (score >= 35) return '2 stars';
   return '1 star';
 }
@@ -404,7 +404,7 @@ export function computeIcpFit(fs: FactSheet, icpConfig: ExtendedICPConfig, scori
   }
   score -= Math.min(penaltyTotal, 30);
 
-  const finalScore = clamp(score, 0, 100);
+  const finalScore = clamp(Math.round((score / 85) * 100), 0, 100);
   return {
     score: finalScore,
     breakdown: {
@@ -548,10 +548,11 @@ export function computeTiming(fs: FactSheet, scoringSignals?: ScoringSignals): {
   score += recencyScore;
   subScores.push(buildSubScore('Recency Modifier', recencyScore, 10, recencyEvidence, recencyUrls, recencyConf));
 
-  // Model knowledge penalty
+  // Model knowledge penalty: strip evaluation credit when only model_knowledge backs it,
+  // but preserve hiring/trigger/compound/recency signals earned independently
   const modelKnowledgeEval = fs.active_evaluation_evidence.filter(e => e.confidence === 'model_knowledge');
   if (modelKnowledgeEval.length > 0 && confirmedEval.length === 0 && inferredEval.length === 0) {
-    score = Math.round(score * 0.4);
+    score -= evalScore;
   }
 
   const finalScore = clamp(score, 0, 100);
@@ -649,10 +650,10 @@ export function computeDataConfidence(fs: FactSheet, enrichMeta?: EnrichmentMeta
   };
 }
 
-export function computeReachability(fs: FactSheet, enrichMeta?: EnrichmentMetadata, scoringSignals?: ScoringSignals): { score: number; breakdown: DimensionBreakdown } {
+export function computeReachability(fs: FactSheet, enrichMeta?: EnrichmentMetadata, scoringSignals?: ScoringSignals, freeSourceMode?: boolean): { score: number; breakdown: DimensionBreakdown } {
   let score = 0;
   const subScores: SubScore[] = [];
-  const creditRoleFit = scoringSignals?.credit_role_fit_without_urls ?? false;
+  const creditRoleFit = freeSourceMode || (scoringSignals?.credit_role_fit_without_urls ?? false);
 
   const champions = fs.named_contacts.filter(c => c.role_fit === 'champion');
   const econBuyers = fs.named_contacts.filter(c => c.role_fit === 'economic_buyer');
@@ -694,11 +695,15 @@ export function computeReachability(fs: FactSheet, enrichMeta?: EnrichmentMetada
 
   // Other Contacts (max 20)
   const othersLinked = others.filter(c => c.has_linkedin);
-  const otherScore = Math.min(20, othersLinked.length * 10);
+  let otherScore = Math.min(20, othersLinked.length * 10);
   const otherEvidence: string[] = [];
   const otherUrls: string[] = [];
   const otherConf: FactConfidence[] = [];
   for (const c of othersLinked) pushEvidence(otherEvidence, otherUrls, otherConf, `${c.name} — ${c.title} (LinkedIn)`, c.linkedin_url, 'confirmed');
+  if (freeSourceMode && othersLinked.length === 0 && others.length > 0) {
+    otherScore = Math.min(20, others.length * 5);
+    for (const c of others) pushEvidence(otherEvidence, otherUrls, otherConf, `${c.name} — ${c.title} (named)`, undefined, 'inferred');
+  }
   score += otherScore;
   subScores.push(buildSubScore('Other Contacts', otherScore, 20, otherEvidence, otherUrls, otherConf));
 
@@ -902,11 +907,12 @@ export function computeAllDimensions(
   icpConfig: ExtendedICPConfig,
   enrichMeta?: EnrichmentMetadata,
   scoringSignals?: ScoringSignals,
+  freeSourceMode?: boolean,
 ): ScoringDimensions {
   const { score: icp_fit, breakdown: icpBreakdown } = computeIcpFit(fs, icpConfig, scoringSignals);
   const { score: timing, breakdown: timingBreakdown } = computeTiming(fs, scoringSignals);
   const { grade: data_confidence, score: data_confidence_score, breakdown: dcBreakdown } = computeDataConfidence(fs, enrichMeta);
-  const { score: reachability, breakdown: reachBreakdown } = computeReachability(fs, enrichMeta, scoringSignals);
+  const { score: reachability, breakdown: reachBreakdown } = computeReachability(fs, enrichMeta, scoringSignals, freeSourceMode);
   const research_completeness = computeResearchCompleteness(enrichMeta);
   const signal_density = computeSignalDensity(fs);
   const { score: signal_quality, breakdown: sqBreakdown } = computeSignalQuality(fs, scoringSignals);
@@ -923,11 +929,12 @@ export function computeAllDimensions(
       signal_quality: sqBreakdown,
     },
   };
-  const composite = computeCompositeV2(partialDims);
+  const composite = computeCompositeV2(partialDims, 55, 45, freeSourceMode);
   partialDims.potential_score = composite.potential_score;
   partialDims.urgency_score = composite.urgency_score;
   partialDims.evidence_modifier = composite.evidence_modifier;
-  partialDims.watch_candidate = composite.potential_score >= 60 && composite.urgency_score < 35;
+  partialDims.free_source_adjusted = freeSourceMode || undefined;
+  partialDims.watch_candidate = composite.potential_score >= 65 && composite.urgency_score < 40;
   partialDims.watch_reason = partialDims.watch_candidate
     ? `High fit (${composite.potential_score}) but low intent (${composite.urgency_score})`
     : null;
@@ -943,11 +950,17 @@ export function computeCompositeV2(
   dims: ScoringDimensions,
   weightPotential = 55,
   weightUrgency = 45,
+  freeSourceMode?: boolean,
 ): { fit_score: number; potential_score: number; urgency_score: number; evidence_modifier: number } {
-  const potential_score = Math.round(dims.icp_fit * 0.70 + dims.reachability * 0.20 + dims.data_confidence_score * 0.10);
+  const icpW = freeSourceMode ? 0.90 : 0.70;
+  const reachW = freeSourceMode ? 0.00 : 0.20;
+  const dataW = 0.10;
+  const potential_score = Math.round(dims.icp_fit * icpW + dims.reachability * reachW + dims.data_confidence_score * dataW);
   const urgency_score = Math.round(dims.timing * 0.60 + dims.signal_quality * 0.40);
   const evidence_modifier = 0.7 + (dims.research_completeness / 333);
-  const raw = (potential_score * (weightPotential / 100) + urgency_score * (weightUrgency / 100)) * evidence_modifier;
+  const effPotential = freeSourceMode ? 65 : weightPotential;
+  const effUrgency = freeSourceMode ? 35 : weightUrgency;
+  const raw = potential_score * (effPotential / 100) + urgency_score * (effUrgency / 100);
   return {
     fit_score: clamp(Math.round(raw), 0, 100),
     potential_score: clamp(potential_score, 0, 100),
@@ -1090,6 +1103,7 @@ export async function scoreCandidateDeterministic(
   enrichmentMeta?: EnrichmentMetadata,
   feedbackContext?: FeedbackContext | null,
   previousFactSheet?: FactSheet | null,
+  freeSourceMode?: boolean,
 ): Promise<ScoringResult> {
   const aiConfig = getAIConfig();
   const client = await createAIClient();
@@ -1156,7 +1170,7 @@ export async function scoreCandidateDeterministic(
       }
     }
 
-    const dimensions = computeAllDimensions(factSheet, effectiveIcp, enrichmentMeta, stepConfig?.scoring_signals);
+    const dimensions = computeAllDimensions(factSheet, effectiveIcp, enrichmentMeta, stepConfig?.scoring_signals, freeSourceMode);
     const cw = stepConfig?.composite_weights;
     const isV2 = !cw || ('version' in cw && cw.version === 2);
     const fitScore = isV2

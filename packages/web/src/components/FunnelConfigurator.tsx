@@ -2414,10 +2414,10 @@ function ScoringRulesReference() {
   ];
 
   const starScale = [
-    { range: '85–100', stars: 5, label: 'Extremely High', color: 'text-emerald-600' },
-    { range: '70–84', stars: 4, label: 'High', color: 'text-blue-600' },
-    { range: '55–69', stars: 3, label: 'Medium', color: 'text-amber-600' },
-    { range: '35–54', stars: 2, label: 'Low', color: 'text-orange-600' },
+    { range: '80–100', stars: 5, label: 'Extremely High', color: 'text-emerald-600' },
+    { range: '65–79', stars: 4, label: 'High', color: 'text-blue-600' },
+    { range: '50–64', stars: 3, label: 'Medium', color: 'text-amber-600' },
+    { range: '35–49', stars: 2, label: 'Low', color: 'text-orange-600' },
     { range: '<35', stars: 1, label: 'Very Low', color: 'text-red-600' },
   ];
 

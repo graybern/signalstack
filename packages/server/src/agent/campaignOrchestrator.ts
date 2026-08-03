@@ -18,7 +18,7 @@ import type { CampaignParsed, Exclusion, FunnelConfig, FunnelStepConfig } from '
 import type { ExtendedICPConfig } from './prompts/research.js';
 import { getSetting, getDefaultPipelineConfig, getDefaultPromptConfig, getDefaultFunnelConfig } from '../routes/icp.js';
 import { loadExtendedIcpConfig } from './config/icpConfigLoader.js';
-import { enrichCandidates } from './enrichment/service.js';
+import { enrichCandidates, hasPaidSources } from './enrichment/service.js';
 import { validateCandidateDomains, shouldKeepCandidate } from './validation/domainValidator.js';
 import { eventBus } from '../events/eventBus.js';
 
@@ -509,6 +509,7 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
     let scoredCandidates: { candidate: ResearchCandidate; score: ScoringResult }[] = [];
     const briefResults: { candidate: ResearchCandidate; score: ScoringResult; brief: BriefResult }[] = [];
     let feedbackCtx: FeedbackContext | null = null;
+    const freeSourceMode = !hasPaidSources();
     const failedLeads: { company: string; stage: 'score' | 'brief'; error: string }[] = [];
 
     // ── Intermediate persistence helpers ──
@@ -660,7 +661,7 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
             score?.dimensions?.signal_quality ?? null,
             score?.dimensions?.evidence_modifier ?? null,
             score?.scoring_version === 2 ? 2 : null,
-            score?.dimensions?.breakdowns ? JSON.stringify(score.dimensions.breakdowns) : null,
+            score?.dimensions?.breakdowns ? JSON.stringify({ ...score.dimensions.breakdowns, free_source_adjusted: score.dimensions.free_source_adjusted || undefined }) : null,
             brief?.company_profile ? JSON.stringify(brief.company_profile) : null,
             brief?.why_do_anything ? JSON.stringify(brief.why_do_anything) : null,
             brief?.why_company ? JSON.stringify(brief.why_company) : null,
@@ -1231,7 +1232,7 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
             emitProgress('score', candidate.company_name);
             logger.thinking('score', `Scoring ${candidate.company_name} against ICP criteria...`);
             try {
-              const score = await scoreCandidateDeterministic(candidate, icpConfig, stepModel, scoreTracker, step.prompt_instructions, step, { runId, campaignId, phase: 'score' }, candidate.enrichment_metadata, feedbackCtx, candidate.previous_fact_sheet);
+              const score = await scoreCandidateDeterministic(candidate, icpConfig, stepModel, scoreTracker, step.prompt_instructions, step, { runId, campaignId, phase: 'score' }, candidate.enrichment_metadata, feedbackCtx, candidate.previous_fact_sheet, freeSourceMode);
               scoredCandidates.push({ candidate, score });
               if (score.reasoning) {
                 logger.thinking('score', `[${candidate.company_name}] ${score.reasoning.substring(0, 300)}${score.reasoning.length > 300 ? '...' : ''}`);
@@ -1450,7 +1451,7 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
                 eventBus.emit('lead.stage_rerun', { lead_id: leadId, company_name: candidate.company_name, stage: 'score', status: 'processing', message: `Recovery: retrying score...`, run_id: runId });
               }
               try {
-                const score = await scoreCandidateDeterministic(candidate, icpConfig, recoveryScoreModel, recoveryScoreTracker, scoreStep?.prompt_instructions, scoreStep, { runId, campaignId, phase: 'score' }, candidate.enrichment_metadata, feedbackCtx, candidate.previous_fact_sheet);
+                const score = await scoreCandidateDeterministic(candidate, icpConfig, recoveryScoreModel, recoveryScoreTracker, scoreStep?.prompt_instructions, scoreStep, { runId, campaignId, phase: 'score' }, candidate.enrichment_metadata, feedbackCtx, candidate.previous_fact_sheet, freeSourceMode);
                 // Update the entry in scoredCandidates
                 const idx = scoredCandidates.findIndex(sc => sc.candidate.company_name === candidate.company_name);
                 if (idx !== -1) scoredCandidates[idx] = { candidate, score };

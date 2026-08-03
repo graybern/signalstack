@@ -9,10 +9,10 @@ function safeJsonParse(val: string | null, fallback: any): any {
 }
 
 function scoreToStars(score: number): string {
-  if (score >= 90) return '★★★★★';
-  if (score >= 75) return '★★★★';
-  if (score >= 60) return '★★★';
-  if (score >= 40) return '★★';
+  if (score >= 80) return '★★★★★';
+  if (score >= 65) return '★★★★';
+  if (score >= 50) return '★★★';
+  if (score >= 35) return '★★';
   return '★';
 }
 
@@ -57,10 +57,13 @@ interface LeadSummary {
   potential_score: number | null;
   urgency_score: number | null;
   icp_fit_score: number | null;
+  reachability_score: number | null;
   timing_score: number | null;
+  signal_quality_score: number | null;
   data_confidence: string | null;
   evidence_modifier: number | null;
   scoring_version: number | null;
+  free_source_adjusted: boolean;
   action_state: 'engage' | 'watch' | 'research' | 'pass';
 }
 
@@ -68,10 +71,10 @@ function deriveActionState(l: { potential_score: number | null; urgency_score: n
   const fit = l.potential_score ?? 0;
   const intent = l.urgency_score ?? 0;
   const evidence = l.evidence_modifier ?? 0.5;
-  if (fit >= 60 && intent < 35) return 'watch';
-  if (fit < 40) return 'pass';
-  if (evidence < 0.65 && fit >= 40) return 'research';
-  if (fit >= 55 && intent >= 35) return 'engage';
+  if (fit >= 65 && intent < 40) return 'watch';
+  if (fit < 45) return 'pass';
+  if (evidence < 0.65 && fit >= 45) return 'research';
+  if (fit >= 65 && intent >= 40) return 'engage';
   return 'research';
 }
 
@@ -97,17 +100,21 @@ function mapLeadRow(l: any): LeadSummary {
     potential_score: l.potential_score,
     urgency_score: l.urgency_score,
     icp_fit_score: l.icp_fit_score,
+    reachability_score: l.reachability_score,
     timing_score: l.timing_score,
+    signal_quality_score: l.signal_quality_score,
     data_confidence: l.data_confidence,
     evidence_modifier: l.evidence_modifier,
     scoring_version: l.scoring_version,
+    free_source_adjusted: !!(l.scoring_breakdown_v2 && JSON.parse(l.scoring_breakdown_v2 || '{}')?.free_source_adjusted),
   };
   return { ...base, action_state: l.scoring_version === 2 ? deriveActionState(base) : 'research' };
 }
 
 const LEAD_SUMMARY_COLS = `id, company_name, employee_count, fit_score, segment, why_now, pain_hypotheses,
      competitive_displacement, outreach_strategy, potential_score, urgency_score,
-     icp_fit_score, timing_score, data_confidence, evidence_modifier, scoring_version`;
+     icp_fit_score, reachability_score, timing_score, signal_quality_score,
+     data_confidence, evidence_modifier, scoring_version, scoring_breakdown_v2`;
 
 function getLeadSummaries(runId: string): LeadSummary[] {
   const db = getDb();
@@ -169,11 +176,27 @@ function actionBreakdown(leads: LeadSummary[]): string {
 }
 
 function dimensionLine(l: LeadSummary): string {
-  const parts: string[] = [];
-  if (l.icp_fit_score != null) parts.push(`ICP Fit: ${l.icp_fit_score}`);
-  if (l.timing_score != null) parts.push(`Timing: ${l.timing_score}`);
-  if (l.data_confidence) parts.push(`Data: ${l.data_confidence}`);
-  return parts.join('  ·  ');
+  if (l.scoring_version !== 2) {
+    const parts: string[] = [];
+    if (l.icp_fit_score != null) parts.push(`ICP Fit: ${l.icp_fit_score}`);
+    if (l.timing_score != null) parts.push(`Timing: ${l.timing_score}`);
+    if (l.data_confidence) parts.push(`Data: ${l.data_confidence}`);
+    return parts.join('  ·  ');
+  }
+  const lines: string[] = [];
+  const row1: string[] = [];
+  if (l.icp_fit_score != null) row1.push(`ICP Fit: ${l.icp_fit_score}`);
+  if (l.reachability_score != null) row1.push(`Reach: ${l.reachability_score}`);
+  if (l.potential_score != null) row1.push(`Potential: ${l.potential_score}`);
+  if (row1.length) lines.push(row1.join('  ·  '));
+  const row2: string[] = [];
+  if (l.urgency_score != null) row2.push(`Urgency: ${l.urgency_score}`);
+  row2.push(`Composite: ${l.fit_score}`);
+  const stars = '★'.repeat(Math.min(5, l.fit_score >= 80 ? 5 : l.fit_score >= 65 ? 4 : l.fit_score >= 50 ? 3 : l.fit_score >= 35 ? 2 : 1));
+  row2.push(stars);
+  lines.push(row2.join('  ·  '));
+  if (l.free_source_adjusted) lines.push('ⓘ Free sources');
+  return lines.join('\n');
 }
 
 function segmentLabel(l: LeadSummary): string {
@@ -293,11 +316,13 @@ function buildSlackCompleted(campaignName: string, campaignId: string, runId: st
     const fields: { title: string; value: string; short: boolean }[] = [
       { title: 'Score', value: `${l.fit_score}/100`, short: true },
       { title: 'Verdict', value: `${ACTION_EMOJI[l.action_state]} ${detail}`, short: true },
-      { title: 'Segment', value: segmentLabel(l), short: true },
-      { title: 'Triggered by', value: triggeredByLabel, short: true },
     ];
     const dims = dimensionLine(l);
     if (dims) fields.push({ title: 'Dimensions', value: dims, short: false });
+    fields.push(
+      { title: 'Segment', value: segmentLabel(l), short: true },
+      { title: 'Triggered by', value: triggeredByLabel, short: true },
+    );
 
     return slackAttachment('#36a64f', headline, fields, leadLink(baseUrl, l.id), 'View Lead', undefined, previewText);
   }

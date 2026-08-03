@@ -782,56 +782,79 @@ export function LeadDetail() {
           {(() => {
             const champion = lead.personas?.find((p: any) => p.role_type === 'technical_champion' || p.role_type === 'champion');
             const econBuyer = lead.personas?.find((p: any) => p.role_type === 'economic_buyer');
+            const quantMetric = painHypotheses.find((p: any) => /\d+%?|\$[\d,]+|million|billion/i.test(p.claim || ''));
+            const competitorProducts = competitive?.likely_current?.length
+              ? competitive.likely_current.map((c: any) => typeof c === 'string' ? c : c.name || c.product).join(', ')
+              : null;
+            const competitorConfidence = competitive?.evidence_sources?.length
+              ? (competitive.evidence_sources.some((s: any) => s.confidence === 'high') ? 'high' : 'medium')
+              : null;
             const meddpiccFields = [
               {
-                key: 'why_anything',
-                label: 'Why Do Anything?',
-                tooltip: 'What business pain or risk makes the status quo untenable?',
-                value: whyDoAnything?.thesis || null,
-                confidence: whyDoAnything?.pain_drivers?.length
-                  ? (whyDoAnything.pain_drivers.every((d: any) => d.evidence_strength === 'high') ? 'high'
-                    : whyDoAnything.pain_drivers.some((d: any) => d.evidence_strength === 'high') ? 'medium' : 'low')
-                  : null,
+                key: 'metrics',
+                letter: 'M',
+                label: 'Metrics',
+                tooltip: 'Quantifiable measures of business impact the buyer cares about',
+                value: quantMetric?.claim || null,
+                confidence: (quantMetric?.evidence_strength as string) || null,
               },
               {
-                key: 'why_now',
-                label: 'Why Now?',
-                tooltip: 'What time-sensitive triggers create urgency to act?',
-                value: whyNow.length > 0 ? (whyNow[0] + (whyNow.length > 1 ? ` (+${whyNow.length - 1} more)` : '')) : null,
-                confidence: whyNow.length >= 3 ? 'high' : whyNow.length >= 1 ? 'medium' : null,
+                key: 'economic_buyer',
+                letter: 'E',
+                label: 'Economic Buyer',
+                tooltip: 'The person with final authority and budget to approve the purchase',
+                value: econBuyer ? `${econBuyer.name || 'Unknown'}${econBuyer.title ? ` — ${econBuyer.title}` : ''}` : null,
+                confidence: econBuyer?.confidence || null,
+                linkedinUrl: econBuyer?.linkedin_url,
               },
               {
-                key: 'why_company',
-                label: `Why ${companyName}?`,
-                tooltip: `What specific advantages make ${companyName} the right choice over alternatives?`,
-                value: whyCompany?.thesis || null,
-                confidence: whyCompany?.advantages?.length
-                  ? (whyCompany.advantages.every((a: any) => a.evidence_strength === 'high') ? 'high'
-                    : whyCompany.advantages.some((a: any) => a.evidence_strength === 'high') ? 'medium' : 'low')
-                  : null,
+                key: 'decision_criteria',
+                letter: 'D',
+                label: 'Decision Criteria',
+                tooltip: 'Technical and business requirements they\'ll evaluate solutions against',
+                value: null as string | null,
+                confidence: null as string | null,
               },
               {
-                key: 'pain',
-                label: 'Pain Identified',
+                key: 'decision_process',
+                letter: 'D',
+                label: 'Decision Process',
+                tooltip: 'Steps, timeline, and stakeholders in the buying process',
+                value: null as string | null,
+                confidence: null as string | null,
+              },
+              {
+                key: 'paper_process',
+                letter: 'P',
+                label: 'Paper Process',
+                tooltip: 'Legal, procurement, and security review steps to close',
+                value: null as string | null,
+                confidence: null as string | null,
+              },
+              {
+                key: 'identified_pain',
+                letter: 'I',
+                label: 'Identified Pain',
                 tooltip: 'Specific, quantifiable business pain tied to a metric the buyer cares about',
                 value: painHypotheses[0]?.claim || null,
                 confidence: (painHypotheses[0]?.evidence_strength as string) || null,
               },
               {
                 key: 'champion',
-                label: 'Technical Champion',
+                letter: 'C',
+                label: 'Champion',
                 tooltip: 'An internal advocate with power and influence who actively sells on your behalf',
                 value: champion ? `${champion.name || 'Unknown'}${champion.title ? ` — ${champion.title}` : ''}` : null,
                 confidence: champion?.confidence || null,
                 linkedinUrl: champion?.linkedin_url,
               },
               {
-                key: 'economic_buyer',
-                label: 'Economic Buyer',
-                tooltip: 'The person with final authority and budget to approve the purchase',
-                value: econBuyer ? `${econBuyer.name || 'Unknown'}${econBuyer.title ? ` — ${econBuyer.title}` : ''}` : null,
-                confidence: econBuyer?.confidence || null,
-                linkedinUrl: econBuyer?.linkedin_url,
+                key: 'competition',
+                letter: 'C',
+                label: 'Competition',
+                tooltip: 'Other solutions being evaluated or currently in use',
+                value: competitorProducts,
+                confidence: competitorConfidence,
               },
             ];
             const filledCount = meddpiccFields.filter(f => f.value).length;
@@ -846,15 +869,16 @@ export function LeadDetail() {
                     <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform ${expandedMeddpicc ? '' : '-rotate-90'}`} />
                     <h2 className="text-sm font-semibold text-gray-900 uppercase tracking-wide">MEDDPICC & BANT</h2>
                   </div>
-                  <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${filledCount >= 5 ? 'bg-emerald-50 text-emerald-700' : filledCount >= 3 ? 'bg-amber-50 text-amber-700' : 'bg-gray-100 text-gray-500'}`}>
+                  <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${filledCount >= 6 ? 'bg-emerald-50 text-emerald-700' : filledCount >= 3 ? 'bg-amber-50 text-amber-700' : 'bg-gray-100 text-gray-500'}`}>
                     {filledCount}/{meddpiccFields.length}
                   </span>
                 </button>
                 {expandedMeddpicc && (
                   <div className="px-5 pb-4">
                     <div className="divide-y divide-gray-100">
-                      {meddpiccFields.map((field, i) => (
-                        <div key={field.key} className={`flex items-start gap-3 py-3 ${i === 4 ? 'border-t border-gray-200 mt-1 pt-4' : ''}`}>
+                      {meddpiccFields.map((field) => (
+                        <div key={field.key} className="flex items-start gap-3 py-3">
+                          <span className="w-5 text-center text-[11px] font-mono font-bold text-gray-300 mt-0.5 shrink-0">{field.letter}</span>
                           <div className="relative group shrink-0 mt-0.5">
                             <Info className="w-3.5 h-3.5 text-gray-300" />
                             <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 px-3 py-2 bg-gray-900 text-white text-xs rounded-lg shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 whitespace-nowrap max-w-xs">

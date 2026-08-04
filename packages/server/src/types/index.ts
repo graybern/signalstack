@@ -437,6 +437,7 @@ export interface SourceCitation {
   url: string;
   label: string;
   confidence?: EvidenceConfidence | 'confirmed' | 'inferred'; // legacy compat
+  date?: string; // ISO date (YYYY-MM-DD) if known from source
 }
 
 export interface CompanyProfileClaim {
@@ -484,6 +485,7 @@ export interface LeadBriefFull extends Lead {
   dimensions_parsed: ScoringDimensions | null;
   fact_sheet_parsed: FactSheet | null;
   enrichment_metadata_parsed: EnrichmentMetadata | null;
+  company_profile_parsed: CompanyProfile | null;
 }
 
 export interface SearchPattern {

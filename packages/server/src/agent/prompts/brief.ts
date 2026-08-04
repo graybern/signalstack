@@ -239,6 +239,7 @@ List all sources used in researching this brief. Each citation must have:
 - URL (if available)
 - Label describing what information came from this source
 - **confidence**: "high" (you directly observed this data from a primary source), "medium" (inferred from secondary or indirect evidence), or "low" (assumed based on industry patterns)
+- **date**: Publication or observation date in ISO format (YYYY-MM-DD) if known from the source. Omit if unknown.
 
 ### 8. Why Now
 List 2-4 specific reasons why now is the right time to engage this prospect. Each reason should cite a specific signal or data point using [N] inline references, not generic trends.
@@ -314,7 +315,7 @@ Return a JSON object with this exact structure:
   },
   "outreach_strategy": "string",
   "source_citations": [
-    { "id": 1, "type": "string", "url": "string", "label": "string", "confidence": "high|medium|low" }
+    { "id": 1, "type": "string", "url": "string", "label": "string", "confidence": "high|medium|low", "date": "YYYY-MM-DD or null" }
   ],
   "why_now": ["string"],
   "brief_markdown": "string"

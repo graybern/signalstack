@@ -263,6 +263,7 @@ export function LeadDetail() {
   const outreach = lead.outreach_strategy_parsed;
   const whyDoAnything = lead.why_do_anything_parsed;
   const whyCompany = lead.why_company_parsed;
+  const companyProfile = (lead as any).company_profile_parsed;
   const feedbackList: any[] = lead.feedback || [];
   const signalCount = lead.signal_count || 0;
 
@@ -778,11 +779,85 @@ export function LeadDetail() {
             </div>
           )}
 
+          {/* About */}
+          {companyProfile && (
+            <Section title="About" icon={<Building2 className="w-4 h-4" />}>
+              <div className="space-y-3">
+                {companyProfile.what_they_do && (
+                  <p className="text-sm text-gray-700">{renderWithCitations(companyProfile.what_they_do.claim || companyProfile.what_they_do)}</p>
+                )}
+                {companyProfile.solutions_they_sell?.length > 0 && (
+                  <div>
+                    <p className="text-xs font-medium text-gray-500 uppercase mb-1.5">Products & Solutions</p>
+                    <div className="space-y-1">
+                      {companyProfile.solutions_they_sell.map((s: any, i: number) => (
+                        <div key={i} className="flex items-start gap-2 text-sm">
+                          <span className="w-1.5 h-1.5 rounded-full bg-brand-400 mt-1.5 flex-shrink-0" />
+                          <span className="text-gray-700 flex-1">{renderWithCitations(s.claim || s)}</span>
+                          {s.confidence && (
+                            <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0 ${
+                              s.confidence === 'confirmed' ? 'bg-green-50 text-green-700' :
+                              s.confidence === 'inferred' ? 'bg-amber-50 text-amber-700' :
+                              'bg-gray-50 text-gray-500'
+                            }`}>{s.confidence === 'model_knowledge' ? 'inferred' : s.confidence}</span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {companyProfile.target_customers && (
+                  <div>
+                    <p className="text-xs font-medium text-gray-500 uppercase mb-1">Customers</p>
+                    <p className="text-sm text-gray-700">{renderWithCitations(companyProfile.target_customers.claim || companyProfile.target_customers)}</p>
+                  </div>
+                )}
+                {companyProfile.where_they_win && (
+                  <div>
+                    <p className="text-xs font-medium text-gray-500 uppercase mb-1">Competitive Positioning</p>
+                    <p className="text-sm text-gray-700">{renderWithCitations(companyProfile.where_they_win.claim || companyProfile.where_they_win)}</p>
+                  </div>
+                )}
+                {companyProfile.potential_gaps?.length > 0 && (
+                  <div>
+                    <p className="text-xs font-medium text-gray-500 uppercase mb-1.5">Potential Gaps</p>
+                    <div className="space-y-1">
+                      {companyProfile.potential_gaps.map((g: any, i: number) => (
+                        <div key={i} className="flex items-start gap-2 text-sm">
+                          <span className="w-1.5 h-1.5 rounded-full bg-amber-400 mt-1.5 flex-shrink-0" />
+                          <span className="text-gray-600">{renderWithCitations(g.claim || g)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {companyProfile.key_metrics && (() => {
+                  const km = companyProfile.key_metrics;
+                  const metrics = [
+                    km.funding?.value && { label: 'Funding', value: km.funding.value, confidence: km.funding.confidence },
+                  ].filter(Boolean);
+                  if (metrics.length === 0) return null;
+                  return (
+                    <div className="flex flex-wrap gap-3 pt-1">
+                      {metrics.map((m: any, i: number) => (
+                        <span key={i} className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-gray-50 rounded-md text-xs text-gray-600 border border-gray-100">
+                          <span className="font-medium text-gray-900">{m.label}:</span> {m.value}
+                          {m.confidence === 'confirmed' && <Check className="w-3 h-3 text-green-500" />}
+                        </span>
+                      ))}
+                    </div>
+                  );
+                })()}
+              </div>
+            </Section>
+          )}
+
           {/* MEDDPICC & BANT */}
           {(() => {
             const champion = lead.personas?.find((p: any) => p.role_type === 'technical_champion' || p.role_type === 'champion');
             const econBuyer = lead.personas?.find((p: any) => p.role_type === 'economic_buyer');
-            const quantMetric = painHypotheses.find((p: any) => /\d+%?|\$[\d,]+|million|billion/i.test(p.claim || ''));
+            const quantMetricRaw = painHypotheses.find((p: any) => /\d+%?|\$[\d,]+|million|billion/i.test(p.claim || ''));
+            const quantMetric = quantMetricRaw ? { ...quantMetricRaw, claim: quantMetricRaw.claim?.length > 120 ? quantMetricRaw.claim.substring(0, 117) + '...' : quantMetricRaw.claim } : undefined;
             const competitorProducts = competitive?.likely_current?.length
               ? competitive.likely_current.map((c: any) => typeof c === 'string' ? c : c.name || c.product).join(', ')
               : null;
@@ -1275,6 +1350,42 @@ export function LeadDetail() {
             </Section>
           )}
 
+          {/* Recent Signals */}
+          {(() => {
+            const signalTypes = new Set(['news', 'press_release', 'company_blog', 'signal', 'sec_filings']);
+            const newsSignals = sources.filter((s: any) => signalTypes.has(s.type));
+            if (newsSignals.length === 0) return null;
+            return (
+              <Section title={`Recent Signals (${newsSignals.length})`} icon={<Radio className="w-4 h-4" />}>
+                <div className="space-y-2">
+                  {newsSignals.map((s: any, i: number) => {
+                    const citId = s.id ?? sources.indexOf(s) + 1;
+                    const typeLabel = s.type === 'press_release' ? 'PR' : s.type === 'company_blog' ? 'Blog' : s.type === 'sec_filings' ? 'SEC' : s.type;
+                    return (
+                      <div key={i} className="flex items-start gap-2 text-sm">
+                        <span className="inline-flex items-center justify-center w-5 h-5 text-[10px] font-bold text-blue-600 bg-blue-50 border border-blue-200 rounded shrink-0 mt-0.5">{citId}</span>
+                        <div className="flex-1 min-w-0">
+                          <a href={s.url} target="_blank" rel="noopener" className="text-blue-600 hover:underline line-clamp-2">{s.label || s.url}</a>
+                          <div className="flex items-center gap-2 mt-0.5">
+                            <span className="text-[10px] font-medium text-gray-400 uppercase">{typeLabel}</span>
+                            {s.date && <span className="text-[10px] text-gray-400">{s.date}</span>}
+                            {s.confidence && (
+                              <span className={`px-1 py-0.5 text-[10px] font-medium rounded ${
+                                s.confidence === 'high' || s.confidence === 'confirmed' ? 'bg-green-50 text-green-700' :
+                                s.confidence === 'medium' || s.confidence === 'inferred' ? 'bg-amber-50 text-amber-700' :
+                                'bg-gray-50 text-gray-500'
+                              }`}>{s.confidence === 'confirmed' ? 'high' : s.confidence === 'inferred' ? 'medium' : s.confidence}</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </Section>
+            );
+          })()}
+
           {/* Sources */}
           {sources.length > 0 && (
             <Section title={`Sources (${sources.length})`} icon={<ExternalLink className="w-4 h-4" />}>
@@ -1292,6 +1403,7 @@ export function LeadDetail() {
                       <span className="inline-flex items-center justify-center w-5 h-5 text-[10px] font-bold text-blue-600 bg-blue-50 border border-blue-200 rounded shrink-0">{citId}</span>
                       <span className="truncate">{s.label || s.url}</span>
                       <span className="text-xs text-gray-400">({s.type})</span>
+                      {s.date && <span className="text-xs text-gray-400 shrink-0">{s.date}</span>}
                       {s.confidence && (
                         <span className={`px-1 py-0.5 text-[10px] font-medium rounded shrink-0 ${
                           s.confidence === 'high' || s.confidence === 'confirmed' ? 'bg-green-50 text-green-700 border border-green-200' :

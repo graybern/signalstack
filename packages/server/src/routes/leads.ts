@@ -4,7 +4,7 @@ import { getDb } from '../db/schema.js';
 import { authenticate, AuthRequest, requireOperator, requireAdmin, requireMember, requireSuperAdmin } from '../auth/middleware.js';
 import { logActivity } from '../services/activityLog.js';
 import { analyzeCampaignFeedback, getCampaignFeedbackCount } from '../agent/feedbackAnalyzer.js';
-import { computeAllDimensions, computeCompositeV2, generateVerdict, dimensionsToLegacyBreakdown } from '../agent/scorer.js';
+import { computeAllDimensions, computeCompositeV3, generateVerdict, dimensionsToLegacyBreakdown } from '../agent/scorer.js';
 import { hasPaidSources } from '../agent/enrichment/service.js';
 import { loadCampaignConfig } from '../agent/campaignOrchestrator.js';
 import type { Lead, Persona, LeadFeedback, FeedbackVerdict, FactSheet, EnrichmentMetadata, LinkedInMatch } from '../types/index.js';
@@ -316,7 +316,7 @@ router.get('/count', authenticate, (req: AuthRequest, res: Response) => {
 
   const count = (db.prepare(`SELECT COUNT(*) as c FROM leads l ${where}`).get(...params) as any).c;
 
-  const v2Conditions = [...conditions, 'l.composite_version = 2'];
+  const v2Conditions = [...conditions, 'l.composite_version >= 2'];
   const v2Where = `WHERE ${v2Conditions.join(' AND ')}`;
   const v2Count = (db.prepare(`SELECT COUNT(*) as c FROM leads l ${v2Where}`).get(...params) as any).c;
 
@@ -1247,7 +1247,7 @@ router.post('/backfill-composite', authenticate, requireSuperAdmin, (req: AuthRe
   const campaignId = req.query.campaign_id as string | undefined;
   const dryRun = req.query.dry_run === 'true';
 
-  let whereClause = 'fact_sheet IS NOT NULL AND (composite_version IS NULL OR composite_version = 1)';
+  let whereClause = 'fact_sheet IS NOT NULL AND (composite_version IS NULL OR composite_version < 3)';
   const params: any[] = [];
   if (campaignId) {
     whereClause += ' AND campaign_id = ?';
@@ -1278,7 +1278,7 @@ router.post('/backfill-composite', authenticate, requireSuperAdmin, (req: AuthRe
       evidence_modifier = ?,
       fit_score = ?,
       scoring_version = 2,
-      composite_version = 2,
+      composite_version = 3,
       scoring_verdict = ?,
       score_breakdown = ?,
       scoring_breakdown_v2 = ?,
@@ -1327,7 +1327,7 @@ router.post('/backfill-composite', authenticate, requireSuperAdmin, (req: AuthRe
 
     const freeSourceMode = !hasPaidSources();
     const dimensions = computeAllDimensions(factSheet, icpConfig, enrichMeta, scoringSignals, freeSourceMode);
-    const composite = computeCompositeV2(dimensions, 55, 45, freeSourceMode);
+    const composite = computeCompositeV3(dimensions);
     const verdict = generateVerdict(dimensions);
     const breakdown = dimensionsToLegacyBreakdown(dimensions, factSheet);
     breakdown.total = composite.fit_score;

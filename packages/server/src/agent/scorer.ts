@@ -929,7 +929,7 @@ export function computeAllDimensions(
       signal_quality: sqBreakdown,
     },
   };
-  const composite = computeCompositeV2(partialDims, 55, 45, freeSourceMode);
+  const composite = computeCompositeV3(partialDims);
   partialDims.potential_score = composite.potential_score;
   partialDims.urgency_score = composite.urgency_score;
   partialDims.evidence_modifier = composite.evidence_modifier;
@@ -961,6 +961,23 @@ export function computeCompositeV2(
   const effPotential = freeSourceMode ? 65 : weightPotential;
   const effUrgency = freeSourceMode ? 35 : weightUrgency;
   const raw = potential_score * (effPotential / 100) + urgency_score * (effUrgency / 100);
+  return {
+    fit_score: clamp(Math.round(raw), 0, 100),
+    potential_score: clamp(potential_score, 0, 100),
+    urgency_score: clamp(urgency_score, 0, 100),
+    evidence_modifier: Math.round(evidence_modifier * 1000) / 1000,
+  };
+}
+
+export function computeCompositeV3(
+  dims: ScoringDimensions,
+): { fit_score: number; potential_score: number; urgency_score: number; evidence_modifier: number } {
+  const potential_score = Math.round(dims.icp_fit * 0.94 + dims.data_confidence_score * 0.06);
+  const urgency_score = Math.round(dims.timing * 0.60 + dims.signal_quality * 0.40);
+  const icp_gate = Math.min(1, dims.icp_fit / 75);
+  const urgency_bonus = urgency_score * 0.22 * icp_gate;
+  const raw = potential_score * 0.87 + urgency_bonus;
+  const evidence_modifier = 0.7 + (dims.research_completeness / 333);
   return {
     fit_score: clamp(Math.round(raw), 0, 100),
     potential_score: clamp(potential_score, 0, 100),
@@ -1171,11 +1188,7 @@ export async function scoreCandidateDeterministic(
     }
 
     const dimensions = computeAllDimensions(factSheet, effectiveIcp, enrichmentMeta, stepConfig?.scoring_signals, freeSourceMode);
-    const cw = stepConfig?.composite_weights;
-    const isV2 = !cw || ('version' in cw && cw.version === 2);
-    const fitScore = isV2
-      ? computeCompositeV2(dimensions, (cw && 'potential' in cw) ? cw.potential : 55, (cw && 'urgency' in cw) ? cw.urgency : 45).fit_score
-      : computeComposite(dimensions, (cw && 'icp_fit' in cw) ? cw.icp_fit : 60, (cw && 'timing' in cw) ? cw.timing : 40);
+    const fitScore = computeCompositeV3(dimensions).fit_score;
     const label = scoreToLabel(fitScore);
     const breakdown = dimensionsToLegacyBreakdown(dimensions, factSheet);
     breakdown.total = fitScore;

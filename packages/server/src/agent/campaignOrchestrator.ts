@@ -660,7 +660,7 @@ export async function runCampaign(campaignId: string, triggeredBy: string | null
             score?.dimensions?.urgency_score ?? null,
             score?.dimensions?.signal_quality ?? null,
             score?.dimensions?.evidence_modifier ?? null,
-            score?.scoring_version === 2 ? 2 : null,
+            score?.scoring_version === 2 ? 3 : null,
             score?.dimensions?.breakdowns ? JSON.stringify({ ...score.dimensions.breakdowns, free_source_adjusted: score.dimensions.free_source_adjusted || undefined }) : null,
             brief?.company_profile ? JSON.stringify(brief.company_profile) : null,
             brief?.why_do_anything ? JSON.stringify(brief.why_do_anything) : null,

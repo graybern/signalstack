@@ -615,7 +615,7 @@ export interface FunnelStepConfig {
     vertical_playbook?: number;
     buyer_access_readiness?: number;
   };
-  composite_weights?: { icp_fit: number; timing: number } | { version: 2; potential: number; urgency: number };
+  composite_weights?: { icp_fit: number; timing: number } | { version: 2; potential: number; urgency: number } | { version: 3 };
   scoring_signals?: ScoringSignals;
   min_score_threshold?: number;
   icp_verticals_override?: string[];

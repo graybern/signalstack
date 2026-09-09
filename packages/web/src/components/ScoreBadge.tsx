@@ -651,7 +651,7 @@ export function buildBuckets(dims: {
     {
       label: 'FIT',
       question: 'Would they buy?',
-      score: dims.potential_score ?? Math.round(dims.icp_fit * 0.7 + dims.reachability * 0.2 + (dims.data_confidence_score ?? 0) * 0.1),
+      score: dims.potential_score ?? Math.round(dims.icp_fit * 0.94 + (dims.data_confidence_score ?? 0) * 0.06),
       icon: Target,
       colorScheme: {
         bar: 'bg-sky-500',
@@ -666,9 +666,8 @@ export function buildBuckets(dims: {
         expandedBg: 'bg-sky-50',
       },
       subDimensions: [
-        { label: 'ICP Fit', value: dims.icp_fit, weight: 70 },
-        { label: 'Reachability', value: dims.reachability, weight: 20 },
-        { label: 'Data Confidence', value: dims.data_confidence_score ?? 0, weight: 10 },
+        { label: 'ICP Fit', value: dims.icp_fit, weight: 94 },
+        { label: 'Data Confidence', value: dims.data_confidence_score ?? 0, weight: 6 },
       ],
     },
     {
@@ -944,7 +943,7 @@ function dimColor(val: number): string {
 }
 
 export function InlineScoreStrip({ score, potential, urgency, evidenceModifier, compositeVersion, freeSourceAdjusted }: InlineScoreStripProps) {
-  const hasV2 = compositeVersion === 2 && potential != null && urgency != null;
+  const hasV2 = (compositeVersion ?? 0) >= 2 && potential != null && urgency != null;
   const evPct = evidenceModifier != null ? Math.round(evidenceModifier * 100) : null;
 
   return (
@@ -993,7 +992,7 @@ interface ScoreTooltipProps {
 }
 
 export function ScoreTooltip({ score, icpFit, reachability, potential, urgency, signalQuality, evidenceModifier, compositeVersion, freeSourceAdjusted }: ScoreTooltipProps) {
-  const hasV2 = compositeVersion === 2 && potential != null && urgency != null;
+  const hasV2 = (compositeVersion ?? 0) >= 2 && potential != null && urgency != null;
   const stars = score >= 80 ? 5 : score >= 65 ? 4 : score >= 50 ? 3 : score >= 35 ? 2 : 1;
 
   return (

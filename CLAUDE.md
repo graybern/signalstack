@@ -154,7 +154,7 @@ When `scoring_signals` is absent, all dimension scoring uses the original defaul
 | Dimension | Range | Bucket | What it measures |
 |-----------|-------|--------|-----------------|
 | ICP Fit | 0-100 | Fit | Segment, remote pain, displacement wedge, vertical, buyer access |
-| Reachability | 0-100 | Fit | Named contacts, LinkedIn URLs, org visibility |
+| Reachability | 0-100 | Operational | Named contacts, LinkedIn URLs, org visibility (not in composite) |
 | Timing | 0-100 | Intent | Active evaluation, recent triggers, hiring signals, compound growth |
 | Signal Quality | 0-100 | Intent | Weighted buying-intent strength × confidence × freshness |
 | Data Confidence | A-F (0-100) | Evidence | Source count, field completeness, corroboration |
@@ -187,17 +187,21 @@ Used throughout Leads table filters, LeadDetail breakdown, and tooltips:
 | Research Completeness | "How much do we know?" | slate |
 | Signal Density | "How many signals?" | slate |
 
-### Composite Formula
+### Composite Formula (V3)
 
 ```
-Fit (Potential)  = icp_fit × 0.70 + reachability × 0.20 + data_confidence × 0.10
-Intent (Urgency) = timing × 0.60 + signal_quality × 0.40
-Evidence Modifier = 0.5 + (research_completeness / 200)
+potential_score = round(icp_fit × 0.94 + data_confidence × 0.06)
+urgency_score   = round(timing × 0.60 + signal_quality × 0.40)
 
-fit_score = round((Fit × 55% + Intent × 45%) × Evidence Modifier)
+icp_gate      = min(1, icp_fit / 75)
+urgency_bonus = urgency_score × 0.22 × icp_gate
+
+fit_score = clamp(round(potential_score × 0.87 + urgency_bonus), 0, 100)
 ```
 
-Weights configurable per-campaign via `composite_weights` in funnel config. Watch candidate auto-detection: `Fit >= 60 AND Intent < 35`.
+ICP Fit dominates the composite — a great fit scores 70+ even with zero urgency. Urgency is an additive bonus (max ~22pts) gated by ICP quality, pushing great-fit leads into the 90s. Reachability is displayed as an operational metric but excluded from the composite.
+
+V3 formula has no configurable weights (fixed by design). Watch candidate auto-detection: `Potential >= 65 AND Urgency < 40`.
 
 ### Legacy Scoring (v1)
 

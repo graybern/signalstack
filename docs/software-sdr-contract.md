@@ -22,7 +22,12 @@ Content-Type: application/json
 x-api-key: ss_<your-key>
 ```
 
-Create an API key in SignalStack under **Settings → Profile → API Keys** with at least `leads:write` scope.
+Create an API key in SignalStack under **Settings → Profile → API Keys** with the **Ingest Source** field set to `software_sdr`. This:
+- Automatically adds `leads:write` scope
+- Links the key to the `software_sdr` data source — all leads pushed with this key are attributed to Software SDR in SignalStack's provenance system
+- Shows "Push: software_sdr" badge on the key in the API Keys list
+
+The same endpoint supports other external push sources — each gets its own API key with a different `ingest_source` slug (e.g., `salesforce_export`, `custom_webhook`). The source identity comes from the key, not the payload.
 
 ## Payload Schema
 
@@ -182,6 +187,7 @@ Unknown categories are accepted — the description text flows into SignalStack'
 | 200 | Batch accepted. Valid accounts processing; invalid listed in `errors[]`. |
 | 400 | Request-level validation failure (no accounts, no campaign, campaign not found). |
 | 401 | Missing or invalid API key. |
+| 403 | API key missing required `leads:write` scope. |
 | 409 | Pipeline run already in progress for this campaign. Wait and retry. |
 
 ## Dedup & Upsert
@@ -222,7 +228,17 @@ Separate Dokploy projects. Software SDR pushes to SignalStack's public endpoint 
 | Deployment | Own Dokploy project | Own Dokploy project |
 | Push URL | — | `https://signalstack.dokploy.twindemo.dev/api/inbound/ingest` |
 | Auth | Sends `x-api-key` | Validates against `api_keys` table |
+| Source identity | Key created with `ingest_source: "software_sdr"` | Reads source from key → provenance tracking |
 | Cadence | Weekly cron (owned by SDR) | Processes on receipt |
+
+### Source identification
+
+SignalStack ties source identity to the API key, not the payload. When you create an API key with `ingest_source: "software_sdr"`, every push using that key is attributed to Software SDR in:
+- **Data Sources panel** — "software sdr" appears as a responded source alongside enrichment sources
+- **LeadDetail sidebar** — dedicated section shows SDR score, ICP tier, archetype, signals
+- **Enrichment metadata** — `sources_responded` includes the source slug, `field_sources` tracks which fields the source provided
+
+This means the same `/ingest` endpoint can serve multiple external push sources. Each gets its own API key with a different `ingest_source` slug (e.g., `salesforce_export`, `custom_webhook`). No code changes needed to add a new source.
 
 ## Open Questions for Ben
 

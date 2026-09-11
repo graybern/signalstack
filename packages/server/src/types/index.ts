@@ -794,3 +794,63 @@ export interface ExtendedICPConfig extends ICPConfigParsed {
   campaign_target_signals?: string[];
   campaign_value_prop_angle?: string;
 }
+
+// ── Software SDR Ingest Types ─────────────────────────────────
+
+export interface SdrSignal {
+  category: string;
+  description: string;
+  source_url?: string;
+  date?: string;
+}
+
+export interface SdrContact {
+  name: string;
+  title?: string;
+  email?: string;
+  linkedin_url?: string;
+  function?: string;
+  seniority?: string;
+  relationship?: string;
+  score?: number;
+  passes_checks?: boolean;
+}
+
+export interface SdrAccount {
+  domain: string;
+  company_name: string;
+  employee_count?: number;
+  hq_location?: string;
+  segment?: 'ENT' | 'MM' | 'SMB';
+  linkedin_company_url?: string;
+  sdr_score?: number;
+  icp_tier?: number | string;
+  archetype?: string;
+  qualification?: 'qualified' | 'unqualified';
+  justification?: string;
+  ats_source?: string;
+  founded_year?: number;
+  funding_stage?: string;
+  industry?: string;
+  signals?: SdrSignal[];
+  contacts?: SdrContact[];
+}
+
+export interface SdrIngestPayload {
+  schema_version: string;
+  batch_id: string;
+  campaign_id?: string;
+  accounts: SdrAccount[];
+}
+
+export interface SdrIngestResult {
+  batch_id: string;
+  run_id: string | null;
+  campaign_id: string;
+  accounts_received: number;
+  accounts_new: number;
+  accounts_updated: number;
+  accounts_skipped: number;
+  status: 'processing' | 'queued' | 'error';
+  errors?: { domain: string; error: string }[];
+}

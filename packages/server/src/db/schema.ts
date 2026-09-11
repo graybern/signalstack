@@ -639,6 +639,11 @@ function initSchema(db: Database.Database) {
     db.exec("ALTER TABLE leads ADD COLUMN scoring_breakdown_v2 TEXT");
   }
 
+  // Software SDR ingest metadata — preserved across pipeline runs
+  if (!leadColsV2b.find(c => c.name === 'sdr_ingest_metadata')) {
+    db.exec("ALTER TABLE leads ADD COLUMN sdr_ingest_metadata TEXT");
+  }
+
   // Brief enhancement columns — structured brief sections (Phase 3)
   if (!leadColsV2b.find(c => c.name === 'company_profile')) {
     db.exec("ALTER TABLE leads ADD COLUMN company_profile TEXT");

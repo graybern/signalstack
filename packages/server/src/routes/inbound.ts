@@ -4,6 +4,7 @@
  * POST /upload       — CSV file upload (admin)
  * POST /single       — Single lead entry (admin)
  * POST /webhook      — External webhook (API key auth)
+ * POST /ingest       — Software SDR batch push (API key auth) — rich payload with contacts, signals, metadata
  * GET  /imports      — List past imports (member)
  * GET  /imports/:id  — Import detail + leads (member)
  * PUT  /leads/:id/status — Update lead lifecycle status (member)
@@ -13,10 +14,10 @@ import { Router, Response } from 'express';
 import { v4 as uuid } from 'uuid';
 import multer from 'multer';
 import { getDb } from '../db/schema.js';
-import { authenticate, requireMember, AuthRequest } from '../auth/middleware.js';
+import { authenticate, requireMember, hashApiKey, AuthRequest } from '../auth/middleware.js';
 import { processInboundImport } from '../agent/inboundOrchestrator.js';
 import { eventBus } from '../events/eventBus.js';
-import type { InboundLeadInput, SourceType, LeadStatus } from '../types/index.js';
+import type { InboundLeadInput, SourceType, LeadStatus, SdrIngestPayload, SdrAccount, SdrContact, SdrIngestResult } from '../types/index.js';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
@@ -477,6 +478,312 @@ router.put('/leads/:id/status', authenticate, (req: AuthRequest, res: Response) 
   });
 
   res.json({ success: true, status });
+});
+
+// ── POST /ingest — Software SDR batch push ───────────────────
+// Accepts rich lead payloads from Software SDR with contacts, signals, and qualification metadata.
+// Routes leads through a target campaign's pipeline (qualify → enrich → score → brief → audit).
+
+const INGEST_MAX_ACCOUNTS = 100;
+const INGEST_MAX_CONTACTS_PER_ACCOUNT = 10;
+const INGEST_MAX_SIGNALS_PER_ACCOUNT = 50;
+
+function mapSdrRoleFit(func?: string, seniority?: string): 'technical_champion' | 'economic_buyer' | 'hands_on_keyboard' | 'executive_sponsor' | 'champion' {
+  const f = (func || '').toLowerCase();
+  const s = (seniority || '').toLowerCase();
+  const tokens = `${f} ${s}`.split(/[\s_/,]+/);
+  if (tokens.some(t => ['cto', 'cio', 'cso', 'ciso', 'c_suite', 'csuite'].includes(t))) return 'executive_sponsor';
+  if (['vp', 'vice_president', 'svp'].some(t => tokens.includes(t) || s.includes(t))) return 'economic_buyer';
+  if (['security', 'infrastructure', 'networking', 'it'].some(t => f.includes(t)) && ['director', 'senior_manager', 'head', 'manager'].some(t => s.includes(t))) return 'technical_champion';
+  if (['engineering', 'devops', 'sre', 'platform'].some(t => f.includes(t))) return 'hands_on_keyboard';
+  return 'technical_champion';
+}
+
+function mapSdrConfidence(score?: number, passesChecks?: boolean): 'high' | 'medium' | 'low' {
+  if (passesChecks && score != null && score >= 70) return 'high';
+  if (passesChecks || (score != null && score >= 40)) return 'medium';
+  return 'low';
+}
+
+router.post('/ingest', async (req, res: Response) => {
+  // Auth: x-api-key header
+  const apiKey = req.headers['x-api-key'] as string;
+  if (!apiKey) return res.status(401).json({ error: 'Missing x-api-key header' });
+
+  const db = getDb();
+
+  // Check API key against api_keys table (scoped keys) or app_settings fallback
+  const keyHash = hashApiKey(apiKey);
+  const apiKeyRow = db.prepare(
+    "SELECT id, user_id, scopes FROM api_keys WHERE key_hash = ? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > datetime('now'))"
+  ).get(keyHash) as any;
+
+  let authedUserId: string | null = null;
+  if (apiKeyRow) {
+    authedUserId = apiKeyRow.user_id;
+    db.prepare("UPDATE api_keys SET last_used_at = datetime('now') WHERE id = ?").run(apiKeyRow.id);
+  } else {
+    // Fallback: check app_settings webhook_api_key
+    const storedKey = db.prepare("SELECT value FROM app_settings WHERE key = 'webhook_api_key'").get() as { value: string } | undefined;
+    if (!storedKey || JSON.parse(storedKey.value) !== apiKey) {
+      return res.status(401).json({ error: 'Invalid API key' });
+    }
+  }
+
+  // Parse and validate payload
+  const body = req.body as SdrIngestPayload;
+  if (!body.accounts || !Array.isArray(body.accounts)) {
+    return res.status(400).json({ error: 'accounts[] array is required' });
+  }
+  if (body.accounts.length === 0) {
+    return res.status(400).json({ error: 'accounts[] must not be empty' });
+  }
+  if (body.accounts.length > INGEST_MAX_ACCOUNTS) {
+    return res.status(400).json({ error: `Max ${INGEST_MAX_ACCOUNTS} accounts per batch` });
+  }
+
+  // Validate each account has required fields
+  const errors: { domain: string; error: string }[] = [];
+  const validAccounts: SdrAccount[] = [];
+  for (const acct of body.accounts) {
+    if (!acct.domain) {
+      errors.push({ domain: acct.company_name || '(unknown)', error: 'domain is required' });
+      continue;
+    }
+    if (!acct.company_name) {
+      errors.push({ domain: acct.domain, error: 'company_name is required' });
+      continue;
+    }
+    // Clean domain
+    acct.domain = acct.domain.replace(/^https?:\/\//, '').replace(/\/.*$/, '').toLowerCase();
+    // Enforce per-account limits
+    if (acct.contacts && acct.contacts.length > INGEST_MAX_CONTACTS_PER_ACCOUNT) {
+      acct.contacts = acct.contacts.slice(0, INGEST_MAX_CONTACTS_PER_ACCOUNT);
+    }
+    if (acct.signals && acct.signals.length > INGEST_MAX_SIGNALS_PER_ACCOUNT) {
+      acct.signals = acct.signals.slice(0, INGEST_MAX_SIGNALS_PER_ACCOUNT);
+    }
+    validAccounts.push(acct);
+  }
+
+  if (validAccounts.length === 0) {
+    return res.status(400).json({ error: 'No valid accounts in batch', errors });
+  }
+
+  // Resolve campaign
+  let campaignId = body.campaign_id;
+  if (!campaignId) {
+    const setting = db.prepare("SELECT value FROM app_settings WHERE key = 'webhook_default_campaign'").get() as { value: string } | undefined;
+    if (setting) {
+      try { campaignId = JSON.parse(setting.value); } catch { campaignId = setting.value; }
+    }
+  }
+  if (!campaignId) {
+    return res.status(400).json({ error: 'No campaign_id provided and no default campaign configured' });
+  }
+
+  const campaign = db.prepare("SELECT id, name FROM campaigns WHERE id = ? AND status = 'active'").get(campaignId) as any;
+  if (!campaign) return res.status(400).json({ error: 'Campaign not found or not active' });
+
+  // Check for active run conflict
+  const activeRun = db.prepare(
+    "SELECT id FROM pipeline_runs WHERE campaign_id = ? AND status IN ('pending','running') LIMIT 1"
+  ).get(campaignId) as any;
+  if (activeRun) return res.status(409).json({ error: 'A run is already in progress for this campaign', run_id: activeRun.id });
+
+  // Load exclusions and customer profiles for dedup
+  const exclusionDomains = new Set(
+    (db.prepare("SELECT domain FROM exclusions WHERE domain IS NOT NULL").all() as any[]).map(e => e.domain.toLowerCase())
+  );
+  const customerDomains = new Set(
+    (db.prepare("SELECT domain FROM customer_profiles WHERE domain IS NOT NULL").all() as any[]).map(c => c.domain.toLowerCase())
+  );
+
+  // Create import record for tracking
+  const importId = uuid();
+  db.prepare(
+    "INSERT INTO inbound_imports (id, source_type, row_count, created_by, created_at) VALUES (?, 'inbound_webhook', ?, ?, datetime('now'))"
+  ).run(importId, validAccounts.length, authedUserId);
+
+  // Process each account: create/update leads + personas
+  const leadIds: string[] = [];
+  let accountsNew = 0;
+  let accountsUpdated = 0;
+  let accountsSkipped = 0;
+
+  for (const acct of validAccounts) {
+    // Skip excluded domains
+    if (exclusionDomains.has(acct.domain)) {
+      accountsSkipped++;
+      continue;
+    }
+    // Skip existing customers
+    if (customerDomains.has(acct.domain)) {
+      accountsSkipped++;
+      continue;
+    }
+    // Check for Twingate mention → auto-exclude
+    const hasTwingateMention = acct.signals?.some(s =>
+      s.description.toLowerCase().includes('twingate') || s.category === 'twingate_mention'
+    );
+    if (hasTwingateMention) {
+      db.prepare(
+        "INSERT OR IGNORE INTO exclusions (id, company_name, domain, reason, category, created_at) VALUES (?, ?, ?, 'Twingate mention detected by Software SDR', 'existing_customers', datetime('now'))"
+      ).run(uuid(), acct.company_name, acct.domain);
+      accountsSkipped++;
+      continue;
+    }
+
+    // Build candidate_data JSON (pipeline-compatible format)
+    const candidateData = {
+      signals: (acct.signals || []).map(s => s.description),
+      sources: (acct.signals || []).filter(s => s.source_url).map(s => s.source_url!),
+      notes: acct.justification || '',
+    };
+
+    // SDR metadata stored in dedicated column (survives pipeline overwrites)
+    const sdrMetadata = {
+      sdr_score: acct.sdr_score,
+      icp_tier: acct.icp_tier,
+      archetype: acct.archetype,
+      qualification: acct.qualification,
+      ats_source: acct.ats_source,
+      batch_id: body.batch_id,
+      ingested_at: new Date().toISOString(),
+      signals_raw: acct.signals || [],
+    };
+
+    // Determine segment
+    let segment = acct.segment;
+    if (!segment && acct.employee_count) {
+      if (acct.employee_count >= 651) segment = 'ENT';
+      else if (acct.employee_count >= 351) segment = 'MM';
+      else segment = 'SMB';
+    }
+
+    // Upsert: check if domain already exists in this campaign
+    const existingLead = db.prepare(
+      'SELECT id, candidate_data FROM leads WHERE campaign_id = ? AND domain = ?'
+    ).get(campaignId, acct.domain) as any;
+
+    let leadId: string;
+    if (existingLead) {
+      leadId = existingLead.id;
+      // Merge new signals into existing candidate_data
+      let existingData: any = {};
+      try { existingData = JSON.parse(existingLead.candidate_data || '{}'); } catch {}
+      const mergedSignals = [...new Set([...(existingData.signals || []), ...candidateData.signals])];
+      const mergedSources = [...new Set([...(existingData.sources || []), ...candidateData.sources])];
+      const mergedData = {
+        ...existingData,
+        signals: mergedSignals,
+        sources: mergedSources,
+        notes: candidateData.notes || existingData.notes,
+      };
+
+      db.prepare(
+        `UPDATE leads SET
+          candidate_data = ?, sdr_ingest_metadata = ?,
+          employee_count = COALESCE(?, employee_count),
+          hq_location = COALESCE(?, hq_location), segment = COALESCE(?, segment),
+          linkedin_company_url = COALESCE(?, linkedin_company_url),
+          pipeline_stage = 'discovered', updated_at = datetime('now')
+        WHERE id = ?`
+      ).run(
+        JSON.stringify(mergedData), JSON.stringify(sdrMetadata),
+        acct.employee_count || null, acct.hq_location || null,
+        segment || null, acct.linkedin_company_url || null,
+        leadId
+      );
+      accountsUpdated++;
+    } else {
+      leadId = uuid();
+      db.prepare(
+        `INSERT INTO leads (
+          id, campaign_id, company_name, domain, segment, employee_count, hq_location,
+          founded_year, funding_stage, linkedin_company_url,
+          fit_score, pipeline_stage, lead_status, source_type, candidate_data, sdr_ingest_metadata,
+          created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'discovered', 'imported', 'inbound_webhook', ?, ?, datetime('now'), datetime('now'))`
+      ).run(
+        leadId, campaignId, acct.company_name, acct.domain,
+        segment || 'MM', acct.employee_count || null, acct.hq_location || null,
+        acct.founded_year || null, acct.funding_stage || null,
+        acct.linkedin_company_url || null,
+        JSON.stringify(candidateData), JSON.stringify(sdrMetadata)
+      );
+      accountsNew++;
+    }
+
+    leadIds.push(leadId);
+
+    // Create personas from contacts
+    if (acct.contacts?.length) {
+      // Clear existing personas for this lead if updating
+      if (existingLead) {
+        db.prepare('DELETE FROM personas WHERE lead_id = ?').run(leadId);
+      }
+
+      for (const contact of acct.contacts) {
+        if (!contact.name) continue;
+        const roleType = mapSdrRoleFit(contact.function, contact.seniority);
+        const confidence = mapSdrConfidence(contact.score, contact.passes_checks);
+        const socialSignals = contact.relationship
+          ? JSON.stringify({ relationship: contact.relationship, sdr_score: contact.score })
+          : null;
+
+        db.prepare(
+          `INSERT INTO personas (id, lead_id, role_type, confidence, name, title, linkedin_url, outreach_angle, social_signals, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
+        ).run(
+          uuid(), leadId, roleType, confidence,
+          contact.name, contact.title || null, contact.linkedin_url || null,
+          contact.function ? `${contact.function} / ${contact.seniority || 'unknown'}` : null,
+          socialSignals,
+        );
+      }
+    }
+  }
+
+  // Update import record
+  db.prepare(
+    "UPDATE inbound_imports SET processed_count = ?, qualified_count = ?, status = 'completed', completed_at = datetime('now') WHERE id = ?"
+  ).run(leadIds.length, accountsNew + accountsUpdated, importId);
+
+  // Run through campaign orchestrator if we have leads to process
+  let runId: string | null = null;
+  if (leadIds.length > 0) {
+    const { runCampaign } = await import('../agent/campaignOrchestrator.js');
+    const steps = ['qualify', 'enrich', 'score', 'brief', 'audit'];
+
+    const runPromise = runCampaign(campaignId, authedUserId, steps, leadIds, 'webhook_research');
+    runPromise.catch(err => {
+      console.error('[ingest] Software SDR batch processing error:', err);
+    });
+
+    // Wait briefly for run record to be created
+    await new Promise(resolve => setTimeout(resolve, 100));
+    const newRun = db.prepare(
+      "SELECT id FROM pipeline_runs WHERE campaign_id = ? ORDER BY created_at DESC LIMIT 1"
+    ).get(campaignId) as any;
+    runId = newRun?.id || null;
+  }
+
+  const result: SdrIngestResult = {
+    batch_id: body.batch_id || importId,
+    run_id: runId,
+    campaign_id: campaignId,
+    accounts_received: body.accounts.length,
+    accounts_new: accountsNew,
+    accounts_updated: accountsUpdated,
+    accounts_skipped: accountsSkipped,
+    status: leadIds.length > 0 ? 'processing' : 'queued',
+    errors: errors.length > 0 ? errors : undefined,
+  };
+
+  console.log(`[ingest] Software SDR batch: ${accountsNew} new, ${accountsUpdated} updated, ${accountsSkipped} skipped → campaign "${campaign.name}" (${campaignId})`);
+
+  res.json(result);
 });
 
 export default router;

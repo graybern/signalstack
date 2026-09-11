@@ -653,6 +653,30 @@ router.post('/ingest', async (req, res: Response) => {
       signals_raw: acct.signals || [],
     };
 
+    // Enrichment metadata — registers Software SDR as a data source for provenance tracking
+    const enrichmentMetadata = {
+      sources_responded: ['software_sdr'],
+      sources_failed: [] as string[],
+      sources_available: ['software_sdr'],
+      field_completeness: {
+        employee_count: !!acct.employee_count,
+        hq_location: !!acct.hq_location,
+        founded_year: !!acct.founded_year,
+        funding_stage: !!acct.funding_stage,
+        website: !!acct.domain,
+        linkedin_url: !!acct.linkedin_company_url,
+      },
+      field_sources: {
+        ...(acct.employee_count ? { employee_count: ['software_sdr'] } : {}),
+        ...(acct.hq_location ? { hq_location: ['software_sdr'] } : {}),
+        ...(acct.founded_year ? { founded_year: ['software_sdr'] } : {}),
+        ...(acct.funding_stage ? { funding_stage: ['software_sdr'] } : {}),
+        ...(acct.domain ? { website: ['software_sdr'] } : {}),
+        ...(acct.linkedin_company_url ? { linkedin_url: ['software_sdr'] } : {}),
+      } as Record<string, string[]>,
+      corroboration_count: 0,
+    };
+
     // Determine segment
     let segment = acct.segment;
     if (!segment && acct.employee_count) {
@@ -683,14 +707,14 @@ router.post('/ingest', async (req, res: Response) => {
 
       db.prepare(
         `UPDATE leads SET
-          candidate_data = ?, sdr_ingest_metadata = ?,
+          candidate_data = ?, sdr_ingest_metadata = ?, enrichment_metadata = ?,
           employee_count = COALESCE(?, employee_count),
           hq_location = COALESCE(?, hq_location), segment = COALESCE(?, segment),
           linkedin_company_url = COALESCE(?, linkedin_company_url),
           pipeline_stage = 'discovered', updated_at = datetime('now')
         WHERE id = ?`
       ).run(
-        JSON.stringify(mergedData), JSON.stringify(sdrMetadata),
+        JSON.stringify(mergedData), JSON.stringify(sdrMetadata), JSON.stringify(enrichmentMetadata),
         acct.employee_count || null, acct.hq_location || null,
         segment || null, acct.linkedin_company_url || null,
         leadId
@@ -702,15 +726,15 @@ router.post('/ingest', async (req, res: Response) => {
         `INSERT INTO leads (
           id, campaign_id, company_name, domain, segment, employee_count, hq_location,
           founded_year, funding_stage, linkedin_company_url,
-          fit_score, pipeline_stage, lead_status, source_type, candidate_data, sdr_ingest_metadata,
+          fit_score, pipeline_stage, lead_status, source_type, candidate_data, sdr_ingest_metadata, enrichment_metadata,
           created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'discovered', 'imported', 'inbound_webhook', ?, ?, datetime('now'), datetime('now'))`
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'discovered', 'imported', 'inbound_webhook', ?, ?, ?, datetime('now'), datetime('now'))`
       ).run(
         leadId, campaignId, acct.company_name, acct.domain,
         segment || 'MM', acct.employee_count || null, acct.hq_location || null,
         acct.founded_year || null, acct.funding_stage || null,
         acct.linkedin_company_url || null,
-        JSON.stringify(candidateData), JSON.stringify(sdrMetadata)
+        JSON.stringify(candidateData), JSON.stringify(sdrMetadata), JSON.stringify(enrichmentMetadata)
       );
       accountsNew++;
     }

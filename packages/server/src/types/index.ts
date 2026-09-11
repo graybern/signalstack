@@ -486,6 +486,16 @@ export interface LeadBriefFull extends Lead {
   fact_sheet_parsed: FactSheet | null;
   enrichment_metadata_parsed: EnrichmentMetadata | null;
   company_profile_parsed: CompanyProfile | null;
+  sdr_ingest_metadata_parsed: {
+    sdr_score?: number;
+    icp_tier?: number | string;
+    archetype?: string;
+    qualification?: string;
+    ats_source?: string;
+    batch_id?: string;
+    ingested_at?: string;
+    signals_raw?: SdrSignal[];
+  } | null;
 }
 
 export interface SearchPattern {

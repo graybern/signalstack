@@ -17,6 +17,8 @@ export type DataSourceId =
   | 'sixsense'
   | 'hunter'
   | 'builtwith'
+  // External push sources
+  | 'software_sdr'
   // Free sources (no API key required)
   | 'website_analysis'
   | 'github_presence'
@@ -255,6 +257,17 @@ export function getDefaultDataSources(): DataSourceConfig[] {
         timeout_ms: 6000,
         scan_login_page: true,
       },
+      status: 'active',
+    },
+    // --- External push sources (no adapter — data arrives via ingest API) ---
+    {
+      id: 'software_sdr',
+      name: 'Software SDR',
+      description: 'External lead discovery pipeline. Pushes accounts with hiring signals, tech evidence from job descriptions, and contacts via the ingest API.',
+      category: 'research',
+      requires_key: false,
+      enabled: true,
+      settings: {},
       status: 'active',
     },
     // --- API-connected sources (require API key) ---

@@ -2125,6 +2125,88 @@ export function LeadDetail() {
             );
           })()}
 
+          {/* Software SDR Metadata */}
+          {lead.sdr_ingest_metadata_parsed && (() => {
+            const sdr = lead.sdr_ingest_metadata_parsed;
+            const [sdrSignalsOpen, setSdrSignalsOpen] = useState(false);
+            const tierColors: Record<string, string> = { '1': 'bg-emerald-100 text-emerald-700', '2': 'bg-sky-100 text-sky-700', '3': 'bg-amber-100 text-amber-700', 'disqualified': 'bg-red-100 text-red-700' };
+            const tierColor = tierColors[String(sdr.icp_tier)] || 'bg-gray-100 text-gray-600';
+            return (
+              <div className="bg-white rounded-xl border border-gray-200 p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="font-medium text-gray-900 flex items-center gap-2">
+                    <Radio className="w-4 h-4" /> Software SDR
+                  </h3>
+                  {sdr.qualification && (
+                    <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${sdr.qualification === 'qualified' ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-600'}`}>
+                      {sdr.qualification}
+                    </span>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+                  {sdr.sdr_score != null && (
+                    <div>
+                      <span className="text-gray-500">SDR Score</span>
+                      <div className="font-semibold text-gray-900">{sdr.sdr_score}</div>
+                    </div>
+                  )}
+                  {sdr.icp_tier != null && (
+                    <div>
+                      <span className="text-gray-500">ICP Tier</span>
+                      <div><span className={`text-xs font-medium px-1.5 py-0.5 rounded ${tierColor}`}>Tier {sdr.icp_tier}</span></div>
+                    </div>
+                  )}
+                  {sdr.archetype && (
+                    <div>
+                      <span className="text-gray-500">Archetype</span>
+                      <div className="font-medium text-gray-900">{sdr.archetype.replace(/_/g, ' ')}</div>
+                    </div>
+                  )}
+                  {sdr.ats_source && (
+                    <div>
+                      <span className="text-gray-500">ATS Source</span>
+                      <div className="font-medium text-gray-900 capitalize">{sdr.ats_source}</div>
+                    </div>
+                  )}
+                </div>
+
+                {sdr.batch_id && (
+                  <div className="mt-2 text-xs text-gray-400">
+                    Batch: {sdr.batch_id}
+                    {sdr.ingested_at && <> · {formatDate(sdr.ingested_at)}</>}
+                  </div>
+                )}
+
+                {sdr.signals_raw && sdr.signals_raw.length > 0 && (
+                  <div className="mt-3 border-t border-gray-100 pt-3">
+                    <button
+                      onClick={() => setSdrSignalsOpen(!sdrSignalsOpen)}
+                      className="flex items-center gap-1 text-sm font-medium text-gray-600 hover:text-gray-900 w-full"
+                    >
+                      {sdrSignalsOpen ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                      {sdr.signals_raw.length} signal{sdr.signals_raw.length !== 1 ? 's' : ''} from SDR
+                    </button>
+                    {sdrSignalsOpen && (
+                      <div className="mt-2 space-y-1.5">
+                        {sdr.signals_raw.map((sig: any, i: number) => (
+                          <div key={i} className="text-xs bg-gray-50 rounded px-2.5 py-1.5">
+                            <span className="inline-block bg-gray-200 text-gray-600 rounded px-1.5 py-0.5 font-medium mr-1.5">{(sig.category || 'signal').replace(/_/g, ' ')}</span>
+                            {sig.description}
+                            {sig.source_url && (
+                              <a href={sig.source_url} target="_blank" rel="noopener noreferrer" className="ml-1 text-blue-500 hover:underline">↗</a>
+                            )}
+                            {sig.date && <span className="ml-1 text-gray-400">{sig.date}</span>}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
           {/* Audit Quality */}
           {lead.audit_score != null && (
             <div className="bg-white rounded-xl border border-gray-200 p-4">

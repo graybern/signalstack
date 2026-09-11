@@ -639,9 +639,13 @@ function initSchema(db: Database.Database) {
     db.exec("ALTER TABLE leads ADD COLUMN scoring_breakdown_v2 TEXT");
   }
 
-  // Software SDR ingest metadata — preserved across pipeline runs
-  if (!leadColsV2b.find(c => c.name === 'sdr_ingest_metadata')) {
-    db.exec("ALTER TABLE leads ADD COLUMN sdr_ingest_metadata TEXT");
+  // External ingest metadata — preserved across pipeline runs (renamed from sdr_ingest_metadata)
+  const leadColsIngest = db.prepare("PRAGMA table_info(leads)").all() as { name: string }[];
+  if (!leadColsIngest.find(c => c.name === 'ingest_metadata')) {
+    db.exec("ALTER TABLE leads ADD COLUMN ingest_metadata TEXT");
+  }
+  if (leadColsIngest.find(c => c.name === 'sdr_ingest_metadata')) {
+    db.exec("UPDATE leads SET ingest_metadata = sdr_ingest_metadata WHERE sdr_ingest_metadata IS NOT NULL AND ingest_metadata IS NULL");
   }
 
   // Brief enhancement columns — structured brief sections (Phase 3)
@@ -913,6 +917,13 @@ function initSchema(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys(user_id);
     CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
   `);
+
+  // Add ingest_source column to api_keys (safe to run repeatedly)
+  const apiKeyCols = db.prepare("PRAGMA table_info(api_keys)").all() as { name: string }[];
+  if (!apiKeyCols.find(c => c.name === 'ingest_source')) {
+    db.exec("ALTER TABLE api_keys ADD COLUMN ingest_source TEXT");
+  }
+  db.exec("CREATE INDEX IF NOT EXISTS idx_api_keys_ingest ON api_keys(ingest_source)");
 
   // Migrate lead_feedback to support richer verdict types (closed_won, closed_lost, existing_customer, stalled, nurture)
   const feedbackTableInfo = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='lead_feedback'").get() as { sql: string } | undefined;

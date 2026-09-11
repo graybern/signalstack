@@ -24,6 +24,7 @@ export interface ApiKey {
   last_used_at: string | null;
   created_at: string;
   revoked_at: string | null;
+  ingest_source: string | null;
 }
 
 export interface PipelineRun {
@@ -486,7 +487,8 @@ export interface LeadBriefFull extends Lead {
   fact_sheet_parsed: FactSheet | null;
   enrichment_metadata_parsed: EnrichmentMetadata | null;
   company_profile_parsed: CompanyProfile | null;
-  sdr_ingest_metadata_parsed: {
+  ingest_metadata_parsed: {
+    source_id?: string;
     sdr_score?: number;
     icp_tier?: number | string;
     archetype?: string;

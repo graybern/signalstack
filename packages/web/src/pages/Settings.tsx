@@ -1963,6 +1963,7 @@ function ApiKeysSection() {
   const [creating, setCreating] = useState(false);
   const [newKeyName, setNewKeyName] = useState('');
   const [newKeyExpiry, setNewKeyExpiry] = useState('');
+  const [newKeyIngestSource, setNewKeyIngestSource] = useState('');
   const [selectedScopes, setSelectedScopes] = useState<Set<string>>(new Set());
   const [availableScopes, setAvailableScopes] = useState<PermissionCatalogEntry[]>([]);
   const [myPermissions, setMyPermissions] = useState<string[]>([]);
@@ -2004,11 +2005,13 @@ function ApiKeysSection() {
           name: newKeyName,
           scopes: Array.from(selectedScopes),
           expires_in_days: newKeyExpiry ? parseInt(newKeyExpiry) : undefined,
+          ingest_source: newKeyIngestSource.trim() || undefined,
         }),
       });
       setCreatedKey(result.key);
       setNewKeyName('');
       setNewKeyExpiry('');
+      setNewKeyIngestSource('');
       setSelectedScopes(new Set());
       setShowCreate(false);
       loadData();
@@ -2100,6 +2103,15 @@ function ApiKeysSection() {
           </div>
 
           <div className="mb-4">
+            <label className="block text-xs font-medium text-gray-600 mb-1">Ingest Source <span className="text-gray-400 font-normal">(optional — links this key to an external push source)</span></label>
+            <input type="text" value={newKeyIngestSource} onChange={e => setNewKeyIngestSource(e.target.value)}
+              placeholder="e.g. software_sdr, salesforce_export" className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg font-mono" />
+            {newKeyIngestSource.trim() && (
+              <p className="text-[11px] text-gray-500 mt-1">This key will be identified as source "<strong>{newKeyIngestSource.trim().toLowerCase().replace(/[^a-z0-9_]/g, '_')}</strong>" on ingested leads. <code>leads:write</code> scope added automatically.</p>
+            )}
+          </div>
+
+          <div className="mb-4">
             <div className="flex items-center justify-between mb-2">
               <label className="text-xs font-medium text-gray-600">Scopes *</label>
               <div className="flex gap-2">
@@ -2172,7 +2184,12 @@ function ApiKeysSection() {
             <tbody className="divide-y divide-gray-100">
               {activeKeys.map(k => (
                 <tr key={k.id} className="hover:bg-gray-50">
-                  <td className="px-4 py-3 text-sm font-medium text-gray-900">{k.name}</td>
+                  <td className="px-4 py-3 text-sm font-medium text-gray-900">
+                    {k.name}
+                    {(k as any).ingest_source && (
+                      <span className="ml-1.5 text-[10px] font-medium px-1.5 py-0.5 rounded bg-violet-100 text-violet-700 uppercase tracking-wide">Push: {(k as any).ingest_source}</span>
+                    )}
+                  </td>
                   <td className="px-4 py-3"><code className="text-xs text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">{k.key_prefix}...</code></td>
                   <td className="px-4 py-3">
                     <div className="flex flex-wrap gap-1 max-w-[200px]">

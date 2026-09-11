@@ -16,7 +16,7 @@ function generateApiKey(): string {
 // GET / — List caller's API keys
 router.get('/', authenticate, requirePermission('api_keys:manage'), (req: AuthRequest, res: Response) => {
   const keys = getDb().prepare(
-    'SELECT id, name, key_prefix, scopes, expires_at, last_used_at, created_at, revoked_at FROM api_keys WHERE user_id = ? ORDER BY created_at DESC'
+    'SELECT id, name, key_prefix, scopes, expires_at, last_used_at, created_at, revoked_at, ingest_source FROM api_keys WHERE user_id = ? ORDER BY created_at DESC'
   ).all(req.user!.id);
 
   res.json(keys.map((k: any) => ({ ...k, scopes: JSON.parse(k.scopes) })));
@@ -24,7 +24,7 @@ router.get('/', authenticate, requirePermission('api_keys:manage'), (req: AuthRe
 
 // POST / — Create a new API key
 router.post('/', authenticate, requirePermission('api_keys:manage'), (req: AuthRequest, res: Response) => {
-  const { name, scopes = [], expires_in_days } = req.body;
+  const { name, scopes = [], expires_in_days, ingest_source } = req.body;
   const user = req.user!;
 
   if (!name || !name.trim()) {
@@ -52,9 +52,17 @@ router.post('/', authenticate, requirePermission('api_keys:manage'), (req: AuthR
     ? new Date(Date.now() + expires_in_days * 86400000).toISOString()
     : null;
 
+  const ingestSourceSlug = ingest_source ? String(ingest_source).toLowerCase().replace(/[^a-z0-9_]/g, '_').slice(0, 50) : null;
+
+  // Auto-add leads:write scope for ingest source keys
+  const finalScopes = [...scopes];
+  if (ingestSourceSlug && !finalScopes.includes('leads:write')) {
+    finalScopes.push('leads:write');
+  }
+
   getDb().prepare(
-    'INSERT INTO api_keys (id, user_id, name, key_hash, key_prefix, scopes, expires_at) VALUES (?,?,?,?,?,?,?)'
-  ).run(id, user.id, name.trim(), keyHash, keyPrefix, JSON.stringify(scopes), expiresAt);
+    'INSERT INTO api_keys (id, user_id, name, key_hash, key_prefix, scopes, expires_at, ingest_source) VALUES (?,?,?,?,?,?,?,?)'
+  ).run(id, user.id, name.trim(), keyHash, keyPrefix, JSON.stringify(finalScopes), expiresAt, ingestSourceSlug);
 
   logActivity({
     userId: user.id,
@@ -62,7 +70,7 @@ router.post('/', authenticate, requirePermission('api_keys:manage'), (req: AuthR
     entityId: id,
     entityTitle: name.trim(),
     action: 'created',
-    snapshot: { scopes, expires_at: expiresAt },
+    snapshot: { scopes: finalScopes, expires_at: expiresAt, ingest_source: ingestSourceSlug },
   });
 
   res.status(201).json({
@@ -70,8 +78,9 @@ router.post('/', authenticate, requirePermission('api_keys:manage'), (req: AuthR
     name: name.trim(),
     key: rawKey,
     key_prefix: keyPrefix,
-    scopes,
+    scopes: finalScopes,
     expires_at: expiresAt,
+    ingest_source: ingestSourceSlug,
     created_at: new Date().toISOString(),
   });
 });

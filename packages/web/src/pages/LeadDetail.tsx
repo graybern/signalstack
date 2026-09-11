@@ -2125,17 +2125,18 @@ export function LeadDetail() {
             );
           })()}
 
-          {/* Software SDR Metadata */}
-          {lead.sdr_ingest_metadata_parsed && (() => {
-            const sdr = lead.sdr_ingest_metadata_parsed;
+          {/* External Ingest Source Metadata */}
+          {lead.ingest_metadata_parsed && (() => {
+            const sdr = lead.ingest_metadata_parsed;
             const [sdrSignalsOpen, setSdrSignalsOpen] = useState(false);
             const tierColors: Record<string, string> = { '1': 'bg-emerald-100 text-emerald-700', '2': 'bg-sky-100 text-sky-700', '3': 'bg-amber-100 text-amber-700', 'disqualified': 'bg-red-100 text-red-700' };
             const tierColor = tierColors[String(sdr.icp_tier)] || 'bg-gray-100 text-gray-600';
+            const sourceName = (sdr.source_id || 'external_push').replace(/_/g, ' ');
             return (
               <div className="bg-white rounded-xl border border-gray-200 p-4">
                 <div className="flex items-center justify-between mb-3">
-                  <h3 className="font-medium text-gray-900 flex items-center gap-2">
-                    <Radio className="w-4 h-4" /> Software SDR
+                  <h3 className="font-medium text-gray-900 flex items-center gap-2 capitalize">
+                    <Radio className="w-4 h-4" /> {sourceName}
                   </h3>
                   {sdr.qualification && (
                     <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${sdr.qualification === 'qualified' ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-600'}`}>
@@ -2185,7 +2186,7 @@ export function LeadDetail() {
                       className="flex items-center gap-1 text-sm font-medium text-gray-600 hover:text-gray-900 w-full"
                     >
                       {sdrSignalsOpen ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-                      {sdr.signals_raw.length} signal{sdr.signals_raw.length !== 1 ? 's' : ''} from SDR
+                      {sdr.signals_raw.length} signal{sdr.signals_raw.length !== 1 ? 's' : ''} from {sourceName}
                     </button>
                     {sdrSignalsOpen && (
                       <div className="mt-2 space-y-1.5">

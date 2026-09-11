@@ -27,7 +27,9 @@ export type DataSourceId =
   | 'wikipedia'
   | 'google_news'
   | 'hacker_news'
-  | 'tech_fingerprint';
+  | 'tech_fingerprint'
+  // Dynamic external push sources (registered via API key ingest_source)
+  | (string & {});
 
 export interface DataSourceConfig {
   id: DataSourceId;

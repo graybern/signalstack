@@ -515,7 +515,7 @@ router.post('/ingest', async (req, res: Response) => {
   // Check API key against api_keys table (scoped keys) or app_settings fallback
   const keyHash = hashApiKey(apiKey);
   const apiKeyRow = db.prepare(
-    "SELECT id, user_id, scopes FROM api_keys WHERE key_hash = ? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > datetime('now'))"
+    "SELECT id, user_id, scopes, ingest_source FROM api_keys WHERE key_hash = ? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > datetime('now'))"
   ).get(keyHash) as any;
 
   let authedUserId: string | null = null;
@@ -533,6 +533,9 @@ router.post('/ingest', async (req, res: Response) => {
       return res.status(401).json({ error: 'Invalid API key' });
     }
   }
+
+  // Resolve source identity from API key
+  const sourceId = apiKeyRow?.ingest_source || 'external_push';
 
   // Parse and validate payload
   const body = req.body as SdrIngestPayload;
@@ -648,8 +651,9 @@ router.post('/ingest', async (req, res: Response) => {
       notes: acct.justification || '',
     };
 
-    // SDR metadata stored in dedicated column (survives pipeline overwrites)
-    const sdrMetadata = {
+    // Ingest metadata stored in dedicated column (survives pipeline overwrites)
+    const ingestMeta = {
+      source_id: sourceId,
       sdr_score: acct.sdr_score,
       icp_tier: acct.icp_tier,
       archetype: acct.archetype,
@@ -662,9 +666,9 @@ router.post('/ingest', async (req, res: Response) => {
 
     // Enrichment metadata — registers Software SDR as a data source for provenance tracking
     const enrichmentMetadata = {
-      sources_responded: ['software_sdr'],
+      sources_responded: [sourceId],
       sources_failed: [] as string[],
-      sources_available: ['software_sdr'],
+      sources_available: [sourceId],
       field_completeness: {
         employee_count: !!acct.employee_count,
         hq_location: !!acct.hq_location,
@@ -674,12 +678,12 @@ router.post('/ingest', async (req, res: Response) => {
         linkedin_url: !!acct.linkedin_company_url,
       },
       field_sources: {
-        ...(acct.employee_count ? { employee_count: ['software_sdr'] } : {}),
-        ...(acct.hq_location ? { hq_location: ['software_sdr'] } : {}),
-        ...(acct.founded_year ? { founded_year: ['software_sdr'] } : {}),
-        ...(acct.funding_stage ? { funding_stage: ['software_sdr'] } : {}),
-        ...(acct.domain ? { website: ['software_sdr'] } : {}),
-        ...(acct.linkedin_company_url ? { linkedin_url: ['software_sdr'] } : {}),
+        ...(acct.employee_count ? { employee_count: [sourceId] } : {}),
+        ...(acct.hq_location ? { hq_location: [sourceId] } : {}),
+        ...(acct.founded_year ? { founded_year: [sourceId] } : {}),
+        ...(acct.funding_stage ? { funding_stage: [sourceId] } : {}),
+        ...(acct.domain ? { website: [sourceId] } : {}),
+        ...(acct.linkedin_company_url ? { linkedin_url: [sourceId] } : {}),
       } as Record<string, string[]>,
       corroboration_count: 0,
     };
@@ -714,14 +718,14 @@ router.post('/ingest', async (req, res: Response) => {
 
       db.prepare(
         `UPDATE leads SET
-          candidate_data = ?, sdr_ingest_metadata = ?, enrichment_metadata = ?,
+          candidate_data = ?, ingest_metadata = ?, enrichment_metadata = ?,
           employee_count = COALESCE(?, employee_count),
           hq_location = COALESCE(?, hq_location), segment = COALESCE(?, segment),
           linkedin_company_url = COALESCE(?, linkedin_company_url),
           pipeline_stage = 'discovered', updated_at = datetime('now')
         WHERE id = ?`
       ).run(
-        JSON.stringify(mergedData), JSON.stringify(sdrMetadata), JSON.stringify(enrichmentMetadata),
+        JSON.stringify(mergedData), JSON.stringify(ingestMeta), JSON.stringify(enrichmentMetadata),
         acct.employee_count || null, acct.hq_location || null,
         segment || null, acct.linkedin_company_url || null,
         leadId
@@ -733,7 +737,7 @@ router.post('/ingest', async (req, res: Response) => {
         `INSERT INTO leads (
           id, campaign_id, company_name, domain, segment, employee_count, hq_location,
           founded_year, funding_stage, linkedin_company_url,
-          fit_score, pipeline_stage, lead_status, source_type, candidate_data, sdr_ingest_metadata, enrichment_metadata,
+          fit_score, pipeline_stage, lead_status, source_type, candidate_data, ingest_metadata, enrichment_metadata,
           created_at, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'discovered', 'imported', 'inbound_webhook', ?, ?, ?, datetime('now'), datetime('now'))`
       ).run(
@@ -741,7 +745,7 @@ router.post('/ingest', async (req, res: Response) => {
         segment || 'MM', acct.employee_count || null, acct.hq_location || null,
         acct.founded_year || null, acct.funding_stage || null,
         acct.linkedin_company_url || null,
-        JSON.stringify(candidateData), JSON.stringify(sdrMetadata), JSON.stringify(enrichmentMetadata)
+        JSON.stringify(candidateData), JSON.stringify(ingestMeta), JSON.stringify(enrichmentMetadata)
       );
       accountsNew++;
     }

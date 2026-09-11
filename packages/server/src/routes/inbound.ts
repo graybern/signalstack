@@ -520,6 +520,10 @@ router.post('/ingest', async (req, res: Response) => {
 
   let authedUserId: string | null = null;
   if (apiKeyRow) {
+    const scopes: string[] = JSON.parse(apiKeyRow.scopes || '[]');
+    if (!scopes.includes('leads:write')) {
+      return res.status(403).json({ error: 'API key missing required scope: leads:write' });
+    }
     authedUserId = apiKeyRow.user_id;
     db.prepare("UPDATE api_keys SET last_used_at = datetime('now') WHERE id = ?").run(apiKeyRow.id);
   } else {
@@ -532,6 +536,9 @@ router.post('/ingest', async (req, res: Response) => {
 
   // Parse and validate payload
   const body = req.body as SdrIngestPayload;
+  if (body.schema_version && body.schema_version !== '1.0') {
+    console.warn(`[ingest] Unknown schema_version "${body.schema_version}" — processing with v1.0 logic`);
+  }
   if (!body.accounts || !Array.isArray(body.accounts)) {
     return res.status(400).json({ error: 'accounts[] array is required' });
   }

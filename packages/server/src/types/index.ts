@@ -493,7 +493,7 @@ export interface LeadBriefFull extends Lead {
     icp_tier?: number | string;
     archetype?: string;
     qualification?: string;
-    ats_source?: string;
+    ats?: string;
     batch_id?: string;
     ingested_at?: string;
     signals_raw?: SdrSignal[];
@@ -840,7 +840,7 @@ export interface SdrAccount {
   archetype?: string;
   qualification?: 'qualified' | 'unqualified';
   justification?: string;
-  ats_source?: string;
+  ats?: string;
   founded_year?: number;
   funding_stage?: string;
   industry?: string;

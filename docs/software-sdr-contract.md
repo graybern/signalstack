@@ -40,16 +40,12 @@ The same endpoint supports other external push sources — each gets its own API
     {
       "domain": "acme-security.com",
       "company_name": "Acme Security",
-      "employee_count": 450,
-      "hq_location": "San Francisco, CA",
-      "segment": "MM",
-      "linkedin_company_url": "https://linkedin.com/company/acme-security",
       "sdr_score": 78,
       "icp_tier": 1,
-      "archetype": "cloud_security_vendor",
+      "archetype": "cloud_native_saas",
       "qualification": "qualified",
       "justification": "Active VPN replacement signals from job postings",
-      "ats_source": "greenhouse",
+      "ats": "greenhouse",
       "signals": [
         {
           "category": "vpn_vendor",
@@ -92,19 +88,19 @@ The same endpoint supports other external push sources — each gets its own API
 |-------|------|----------|-------|
 | `domain` | string | **required** | Canonical domain. Primary dedup key. Cleaned on receipt. |
 | `company_name` | string | **required** | Display name. |
-| `employee_count` | number | recommended | Determines segment (SMB/MM/ENT). Without it, defaults to MM. |
-| `hq_location` | string | recommended | Free text. Used for geo filtering. |
-| `segment` | string | optional | `ENT` \| `MM` \| `SMB`. Auto-computed from employee_count if absent. |
-| `linkedin_company_url` | string | recommended | Full URL. Saves a lookup step. |
+| `employee_count` | number | optional | Determines segment if present. **SDR does not estimate headcount** (Design Rule 6 — LLM extracts stated facts only). Null is expected; SignalStack's enrichment step fills it. |
+| `hq_location` | string | optional | Free text. Null accepted — enrichment fills it. |
+| `segment` | string | optional | `ENT` \| `MM` \| `SMB`. Auto-computed from employee_count if both are absent, defaults to MM. |
+| `linkedin_company_url` | string | optional | Full URL if available. Null accepted — enrichment looks it up. |
 | `sdr_score` | number | optional | Software SDR's time-decayed company score. Stored as metadata. |
 | `icp_tier` | number\|string | optional | `1` \| `2` \| `3` \| `"disqualified"` |
-| `archetype` | string | optional | One of Software SDR's 14 business archetype values. |
+| `archetype` | string | optional | One of 14 values: `cloud_native_saas`, `traditional_software`, `professional_services`, `healthcare`, `financial_services`, `education`, `nonprofit_gov`, `manufacturing`, `retail_hospitality`, `logistics`, `media_agency`, `construction_trades`, `other`, `unknown`. |
 | `qualification` | string | optional | `"qualified"` \| `"unqualified"` |
 | `justification` | string | optional | Free-text reasoning. Stored for audit trail. |
-| `ats_source` | string | optional | Which ATS board: `greenhouse`, `lever`, `ashby`, etc. |
-| `founded_year` | number | optional | e.g. `2018` |
-| `funding_stage` | string | optional | e.g. `"Series C"` |
-| `industry` | string | optional | Free text. |
+| `ats` | string | optional | Which ATS board the company was discovered from: `greenhouse`, `lever`, `ashby`, etc. (Note: this is the ATS platform, not the detection method.) |
+| `founded_year` | number | optional | Null accepted — enrichment fills it. |
+| `funding_stage` | string | optional | Null accepted — enrichment fills it. |
+| `industry` | string | optional | Free text. Falls back to `archetype` if absent. |
 | `signals` | array | recommended | 0–50 signal objects. See below. |
 | `contacts` | array | recommended | 0–10 contact objects. See below. |
 
@@ -130,11 +126,10 @@ The same endpoint supports other external push sources — each gets its own API
 | `byoc` | Customer-managed deployment / private networking | BYOC displacement signal |
 | `compliance` | SOC 2 / PCI / HIPAA / ISO 27001 initiative | `fact_sheet.compliance_signals[]` |
 | `funding` | Funding round, IPO prep | `fact_sheet.funding_events[]` |
-| `twingate_mention` | Company already uses Twingate | **Auto-suppressed** → added to exclusions |
 
 Unknown categories are accepted — the description text flows into SignalStack's AI fact extraction regardless. Named categories get structured mapping.
 
-**Important:** Any account with a `twingate_mention` signal or "twingate" in any signal description is automatically added to SignalStack's exclusion list and skipped.
+**Twingate suppression (safety net):** Software SDR suppresses Twingate-using companies internally, so they never appear in the payload. As a safety net, SignalStack also scans signal descriptions for the string "twingate" — any matching account is auto-excluded and skipped. Software SDR should not emit a `twingate_mention` category (the company would already be suppressed upstream). If a signal description incidentally mentions Twingate, SDR should drop that individual signal rather than redacting the text, to avoid falsifying evidence.
 
 ### Contact object
 
@@ -240,10 +235,19 @@ SignalStack ties source identity to the API key, not the payload. When you creat
 
 This means the same `/ingest` endpoint can serve multiple external push sources. Each gets its own API key with a different `ingest_source` slug (e.g., `salesforce_export`, `custom_webhook`). No code changes needed to add a new source.
 
+## Resolved Questions
+
+4. ~~**Archetype enum values**~~ — **Answered.** 14 values: `cloud_native_saas`, `traditional_software`, `professional_services`, `healthcare`, `financial_services`, `education`, `nonprofit_gov`, `manufacturing`, `retail_hospitality`, `logistics`, `media_agency`, `construction_trades`, `other`, `unknown`. Documented in account fields above.
+
+**Fields SDR doesn't have:** `employee_count`, `hq_location`, `linkedin_company_url`, `founded_year`, `funding_stage`, `industry` — SDR's Design Rule 6 forbids headcount estimation, and the company table doesn't carry these fields. All demoted to optional/nullable in the schema. SignalStack's enrichment step fills them.
+
+**`ats` field naming:** SDR's field is `company.ats` (the ATS platform), not `ats_source` (which is the detection method in SDR's schema). Contract updated to use `ats`.
+
+**`twingate_mention` category:** Unemittable — SDR suppresses Twingate-using companies internally before they become leads. Removed from the signal categories table. SignalStack's string-match safety net remains for edge cases in descriptions; SDR drops such signals per-signal rather than redacting text.
+
 ## Open Questions for Ben
 
 1. **Volume per batch** — rough estimate: 10 accounts? 50? 100? Current limit is 100 but can be raised.
-2. **Re-enrichment** — Software SDR already enriches. SignalStack layers 14 more sources on top. Should any be skipped?
+2. **Re-enrichment** — Software SDR already enriches (LLM site classification, job description tech extraction). SignalStack layers 14 more sources on top. Should any be skipped?
 3. **Contact email handling** — emails are PII. SignalStack stores them on the persona record. Acceptable?
-4. **Archetype enum values** — What are the 14 closed `business_archetype` values? SignalStack can map them to FactSheet industry fields.
 5. **Containerization timeline** — when is Software SDR ready for a Dokploy deployment? SignalStack endpoint is live now.

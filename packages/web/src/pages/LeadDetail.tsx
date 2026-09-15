@@ -2164,10 +2164,10 @@ export function LeadDetail() {
                       <div className="font-medium text-gray-900">{sdr.archetype.replace(/_/g, ' ')}</div>
                     </div>
                   )}
-                  {sdr.ats_source && (
+                  {sdr.ats && (
                     <div>
                       <span className="text-gray-500">ATS Source</span>
-                      <div className="font-medium text-gray-900 capitalize">{sdr.ats_source}</div>
+                      <div className="font-medium text-gray-900 capitalize">{sdr.ats}</div>
                     </div>
                   )}
                 </div>

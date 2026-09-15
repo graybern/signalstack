@@ -658,7 +658,7 @@ router.post('/ingest', async (req, res: Response) => {
       icp_tier: acct.icp_tier,
       archetype: acct.archetype,
       qualification: acct.qualification,
-      ats_source: acct.ats_source,
+      ats: acct.ats,
       batch_id: body.batch_id,
       ingested_at: new Date().toISOString(),
       signals_raw: acct.signals || [],

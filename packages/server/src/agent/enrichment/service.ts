@@ -30,6 +30,7 @@ import { HackerNewsAdapter } from './adapters/hackerNews.js';
 import { TechFingerprintAdapter } from './adapters/techFingerprint.js';
 import { SerperSearchAdapter } from './adapters/serperSearch.js';
 import { LinkedInAdapter } from './adapters/linkedin.js';
+import { SecEdgarAdapter } from './adapters/secEdgar.js';
 import { getSetting } from '../../routes/icp.js';
 import { getDefaultDataSources } from './types.js';
 import { getDb } from '../../db/schema.js';
@@ -45,6 +46,7 @@ const ADAPTERS: Record<string, DataSourceAdapter> = {
   google_news: new GoogleNewsAdapter(),
   hacker_news: new HackerNewsAdapter(),
   tech_fingerprint: new TechFingerprintAdapter(),
+  sec_edgar: new SecEdgarAdapter(),
   // API-connected sources
   serper_search: new SerperSearchAdapter(),
   web_search: new WebSearchAdapter(),
@@ -588,6 +590,10 @@ function mergeEnrichments(enrichments: Partial<CompanyEnrichment>[]): CompanyEnr
     if (e.wikipedia_summary && !merged.wikipedia_summary) {
       merged.wikipedia_summary = e.wikipedia_summary;
     }
+    // SEC EDGAR filings
+    if (e.sec_filings?.length) {
+      merged.sec_filings = [...(merged.sec_filings || []), ...e.sec_filings];
+    }
   }
 
   // Deduplicate people by name
@@ -797,6 +803,38 @@ function applyCandidateEnrichment(
     enrichmentNotes.push(`Wikipedia: ${enrichment.wikipedia_summary.substring(0, 200)}`);
   }
 
+  // SEC EDGAR filings
+  if (enrichment.sec_filings?.length) {
+    for (const filing of enrichment.sec_filings) {
+      const highMatches = filing.keyword_matches.filter(m => m.confidence === 'high');
+      const highHitCount = highMatches.reduce((sum, m) => sum + m.match_count, 0);
+      if (highHitCount > 0) {
+        const topKeywords = highMatches.slice(0, 3).map(m => m.keyword);
+        newSignals.push(
+          `[SEC] ${filing.form_type} (${filing.filing_date}): ${highHitCount} direct ICP keyword hits — ${topKeywords.join(', ')} (${filing.filing_url})`
+        );
+      } else if (filing.total_keyword_hits > 0) {
+        enrichmentNotes.push(
+          `SEC ${filing.form_type} (${filing.filing_date}): ${filing.total_keyword_hits} contextual keyword matches (no direct ICP hits) (${filing.filing_url})`
+        );
+      } else {
+        enrichmentNotes.push(
+          `SEC ${filing.form_type} (${filing.filing_date}): Filed with SEC but no ICP-relevant keywords found`
+        );
+      }
+    }
+    const excerptNotes = enrichment.sec_filings
+      .flatMap(f => f.keyword_matches
+        .filter(m => m.confidence === 'high' && m.excerpts.length > 0)
+        .slice(0, 5)
+        .map(m => `${m.keyword} (${f.form_type}): "${m.excerpts[0]}"`)
+      )
+      .slice(0, 8);
+    if (excerptNotes.length > 0) {
+      enrichmentNotes.push(`SEC filing excerpts:\n  ${excerptNotes.join('\n  ')}`);
+    }
+  }
+
   updated.signals = newSignals;
 
   // Append enrichment notes to candidate notes
@@ -815,6 +853,11 @@ function applyCandidateEnrichment(
   if (enrichment.job_postings?.length) {
     for (const job of enrichment.job_postings.slice(0, 2)) {
       if (job.url) newSources.push(job.url);
+    }
+  }
+  if (enrichment.sec_filings?.length) {
+    for (const filing of enrichment.sec_filings) {
+      newSources.push(filing.filing_url);
     }
   }
   updated.sources = newSources;

@@ -74,7 +74,7 @@ ${geo.notes ? `- Notes: ${geo.notes}` : ''}
 - Crunchbase: Series C+ companies in target verticals with 1000+ employees
 - Fortune 500/1000 career pages mentioning VPN, ZTNA, remote access, zero trust
 - G2 / PeerSpot / Gartner Peer Insights — search VPN/ZTNA categories
-- SEC EDGAR: 10-K/10-Q filings mentioning VPN, remote access, zero trust
+- SEC EDGAR: 10-K/10-Q filings (checked automatically by enrichment pipeline — do not fabricate citations)
 - GitHub orgs with 500+ employees (check repos for infra patterns)`,
     MM: `- Wellfound (AngelList): Series B+ startups in target verticals, 200-2000 employees
 - Y Combinator late-stage companies (3+ years post-batch, 200+ employees)

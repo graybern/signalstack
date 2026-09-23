@@ -69,6 +69,7 @@ const DATA_SOURCES: { id: string; label: string; description: string; free: bool
   { id: 'google_news', label: 'Google News RSS', description: 'Fetches recent news mentions for funding rounds, launches, and partnerships', free: true },
   { id: 'hacker_news', label: 'Hacker News', description: 'Searches HN for community discussions, product launches, and sentiment', free: true },
   { id: 'tech_fingerprint', label: 'Tech Fingerprint', description: 'Detects frontend frameworks, CDNs, analytics, and infrastructure via headers', free: true },
+  { id: 'sec_edgar', label: 'SEC EDGAR Filings', description: 'Searches 10-K/10-Q filings for VPN, remote access, cybersecurity, and competitor mentions. US public companies only.', free: true },
   { id: 'web_search', label: 'Web Search API', description: 'Broader web search for press coverage, analyst reports, and market context', free: false },
   { id: 'crunchbase', label: 'Crunchbase', description: 'Funding history, investors, acquisitions, and company financials', free: false },
   { id: 'apollo', label: 'Apollo', description: 'Contact data, org charts, direct emails, and phone numbers for outreach', free: false },

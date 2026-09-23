@@ -28,6 +28,7 @@ export type DataSourceId =
   | 'google_news'
   | 'hacker_news'
   | 'tech_fingerprint'
+  | 'sec_edgar'
   // Dynamic external push sources (registered via API key ingest_source)
   | (string & {});
 
@@ -120,6 +121,23 @@ export interface CompanyEnrichment {
   ssl_org?: string;
   // Wikipedia/Wikidata
   wikipedia_summary?: string;
+  // SEC EDGAR filings
+  sec_filings?: {
+    form_type: string;
+    filing_date: string;
+    accession_number: string;
+    filing_url: string;
+    cik: string;
+    company_name_sec: string;
+    keyword_matches: {
+      keyword: string;
+      category: 'security_access' | 'infrastructure' | 'workforce' | 'compliance' | 'competitor';
+      match_count: number;
+      confidence: 'high' | 'medium';
+      excerpts: string[];
+    }[];
+    total_keyword_hits: number;
+  }[];
 }
 
 export interface EnrichmentSummary {
@@ -258,6 +276,20 @@ export function getDefaultDataSources(): DataSourceConfig[] {
       settings: {
         timeout_ms: 6000,
         scan_login_page: true,
+      },
+      status: 'active',
+    },
+    {
+      id: 'sec_edgar',
+      name: 'SEC EDGAR Filings',
+      description: 'Searches SEC 10-K/10-Q filings for ICP-relevant keywords (VPN, remote access, cybersecurity, competitors). US-listed public companies only.',
+      category: 'research',
+      requires_key: false,
+      enabled: true,
+      settings: {
+        max_filings: 2,
+        timeout_ms: 15000,
+        cache_ttl_hours: 24,
       },
       status: 'active',
     },
